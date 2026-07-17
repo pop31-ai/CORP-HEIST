@@ -1,0 +1,6 @@
+============================================================
+Language: Italiano (it)
+Template: landing_headline
+============================================================
+
+Diventa il CEO. Distruggi la corporazione. Gioca gratis.

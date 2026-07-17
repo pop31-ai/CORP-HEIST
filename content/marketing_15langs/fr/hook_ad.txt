@@ -1,0 +1,6 @@
+============================================================
+Language: Français (fr)
+Template: hook_ad
+============================================================
+
+Êtes-vous PDG ou stagiaire? Découvrez-le dans CORP HEIST — le RPG corporate où chaque formule est ouverte.

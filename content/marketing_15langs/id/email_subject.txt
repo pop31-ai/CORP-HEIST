@@ -1,0 +1,6 @@
+============================================================
+Language: Bahasa Indonesia (id)
+Template: email_subject
+============================================================
+
+🎮 Perang Korporat telah dimulai — CORP HEIST

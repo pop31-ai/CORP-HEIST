@@ -1,0 +1,14 @@
+============================================================
+Language: English (en)
+Template: social_post
+============================================================
+
+🎮CORP HEIST is out! Free corporate RPG in Python.
+
+✅ 10 heroes (Analyst → CEO)
+✅ 5 corporations with bonuses
+✅ 7 business center floors
+✅ Fair gacha (SSR 3%, pity 50)
+✅ Open source code
+
+#CorpHeist #IndieGame #Python #OpenSource #Gamedev

@@ -1,0 +1,6 @@
+============================================================
+Language: Bahasa Indonesia (id)
+Template: long_ad
+============================================================
+
+CORP HEIST — RPG gratis turn-based di Python. 10 pahlawan dari Analis hingga CEO. 5 korporasi. 7 lantai. Gacha transparan (SSR 3%). Skill tree. Pertarungan berbasis rumus. Open source di GitHub. Main gratis — github.com/pop31-ai/CORP-HEIST

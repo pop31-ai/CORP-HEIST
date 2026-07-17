@@ -1,0 +1,6 @@
+============================================================
+Language: English (en)
+Template: email_subject
+============================================================
+
+🎮 Corporate Wars have begun — CORP HEIST

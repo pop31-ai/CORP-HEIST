@@ -1,0 +1,14 @@
+============================================================
+Language: Türkçe (tr)
+Template: social_post
+============================================================
+
+🎮CORP HEIST çıktı! Ücretsiz kurumsal RPG Python ile.
+
+✅ 10 kahraman (Analist → CEO)
+✅ 5 şirket bonuslu
+✅ 7 kat iş merkezi
+✅ Adil gacha (SSR 3%, pity 50)
+✅ Açık kaynak kodu
+
+#CorpHeist #IndieGame #Python #OpenSource #Gamedev

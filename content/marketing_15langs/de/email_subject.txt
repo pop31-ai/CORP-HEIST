@@ -1,0 +1,6 @@
+============================================================
+Language: Deutsch (de)
+Template: email_subject
+============================================================
+
+🎮 Konzernkrieg hat begonnen — CORP HEIST

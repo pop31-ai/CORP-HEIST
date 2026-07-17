@@ -1,0 +1,6 @@
+============================================================
+Language: Türkçe (tr)
+Template: long_ad
+============================================================
+
+CORP HEIST — ücretsiz tur bazlı RPG. 10 kahraman Analist'ten CEO'ya. 5 şirket. 7 kat. Şeffaf gacha (SSR 3%). Yetenek ağacı. Formül bazlı dövüş. GitHub'da açık kaynak. Ücretsiz oyna — github.com/pop31-ai/CORP-HEIST

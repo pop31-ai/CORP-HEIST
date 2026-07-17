@@ -1,0 +1,6 @@
+============================================================
+Language: English (en)
+Template: landing_headline
+============================================================
+
+Become the CEO. Break the corporation. Play for free.

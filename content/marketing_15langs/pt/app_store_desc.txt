@@ -1,0 +1,6 @@
+============================================================
+Language: Português (pt)
+Template: app_store_desc
+============================================================
+
+CORP HEIST — RPG corporativo de código aberto. Evolua de estagiário a CEO. Lute em centros de negócios. Colete ações. Gerencie corporações. Gacha transparente com taxas publicadas. Fórmulas acessíveis a todos.

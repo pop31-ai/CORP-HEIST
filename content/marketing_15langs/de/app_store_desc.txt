@@ -1,0 +1,6 @@
+============================================================
+Language: Deutsch (de)
+Template: app_store_desc
+============================================================
+
+CORP HEIST — Open-Source-Konzern-RPG. Helden vom Praktikanten zum CEO. Kämpfe in Businesscentern. Sammle Aktien. Verwalte Konzerne. Faire Gacha mit veröffentlichten Raten. Formeln für jeden zugänglich.

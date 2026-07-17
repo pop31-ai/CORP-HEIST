@@ -1,0 +1,6 @@
+============================================================
+Language: Türkçe (tr)
+Template: app_store_desc
+============================================================
+
+CORP HEIST — açık kaynak kurumsal RPG. Stajyerden CEO'ya evrimleş. İş merkezlerinde savaş. Hisseleri topla. Şirketleri yönet. Yayın oranlarıyla şeffaf gacha. Formüller herkese açık.

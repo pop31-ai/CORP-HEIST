@@ -1,0 +1,6 @@
+============================================================
+Language: English (en)
+Template: app_store_desc
+============================================================
+
+CORP HEIST — corporate turn-based RPG with open source code. Level up heroes from intern to CEO. Fight in business centers. Collect stocks. Manage corporations. Transparent gacha with published rates. Balance formulas available to all.

@@ -1,0 +1,6 @@
+============================================================
+Language: Bahasa Indonesia (id)
+Template: app_store_desc
+============================================================
+
+CORP HEIST — RPG korporat open source. Evolusi dari magang ke CEO. Bertarung di pusat bisnis. Kumpulkan saham. Kelola korporasi. Gacha transparan dengan rate yang dipublikasikan. Rumus tersedia untuk semua.

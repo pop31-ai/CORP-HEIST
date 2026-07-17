@@ -1,0 +1,6 @@
+============================================================
+Language: Português (pt)
+Template: long_ad
+============================================================
+
+CORP HEIST — RPG gratuito por turnos em Python. 10 heróis do Analista ao CEO. 5 corporações. 7 andares. Gacha transparente (SSR 3%). Árvore de habilidades. Combate baseado em fórmulas. Código aberto no GitHub. Jogar grátis — github.com/pop31-ai/CORP-HEIST

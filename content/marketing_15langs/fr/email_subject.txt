@@ -1,0 +1,6 @@
+============================================================
+Language: Français (fr)
+Template: email_subject
+============================================================
+
+🎮 Les guerres corporatives ont commencé — CORP HEIST

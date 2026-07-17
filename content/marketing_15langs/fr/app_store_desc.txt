@@ -1,0 +1,6 @@
+============================================================
+Language: Français (fr)
+Template: app_store_desc
+============================================================
+
+CORP HEIST — RPG corporate open source. Évoluez de stagiaire à PDG. Combattez dans les centres d'affaires. Collectez des actions. Gérez des sociétés. Gacha équitable avec taux publiés. Formules accessibles à tous.

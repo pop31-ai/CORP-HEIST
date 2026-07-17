@@ -1,0 +1,6 @@
+============================================================
+Language: Português (pt)
+Template: hook_ad
+============================================================
+
+Você é CEO ou estagiário? Descubra no CORP HEIST — o RPG corporativo onde cada fórmula é aberta.

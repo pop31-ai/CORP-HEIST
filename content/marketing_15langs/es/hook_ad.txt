@@ -1,0 +1,6 @@
+============================================================
+Language: Español (es)
+Template: hook_ad
+============================================================
+
+¿Eres CEO o becario? Descúbrelo en CORP HEIST — el RPG corporativo donde cada fórmula es abierta.

@@ -1,0 +1,6 @@
+============================================================
+Language: Français (fr)
+Template: landing_headline
+============================================================
+
+Devenez PDG. Brisez la société. Jouez gratuitement.

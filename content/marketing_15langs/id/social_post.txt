@@ -1,0 +1,14 @@
+============================================================
+Language: Bahasa Indonesia (id)
+Template: social_post
+============================================================
+
+🎮CORP HEIST rilis! RPG korporat gratis di Python.
+
+✅ 10 pahlawan (Analis → CEO)
+✅ 5 korporasi dengan bonus
+✅ 7 lantai pusat bisnis
+✅ Gacha transparan (SSR 3%, pity 50)
+✅ Kode open source
+
+#CorpHeist #IndieGame #Python #OpenSource #Gamedev

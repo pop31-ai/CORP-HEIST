@@ -1,0 +1,6 @@
+============================================================
+Language: Español (es)
+Template: landing_headline
+============================================================
+
+Sé el CEO. Destruye la corporación. Juega gratis.
