@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>CORP HEIST — Loot Renderer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#080810;font-family:'Courier New',monospace;color:#ccc;padding:12px}
+h1{color:#FFC800;font-size:13px;letter-spacing:3px;text-align:center;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(10,1fr);gap:6px;max-width:1060px;margin:0 auto}
+.card{position:relative;width:100%;aspect-ratio:1;border:1px solid #1a1a2e;border-radius:3px;overflow:hidden;cursor:pointer}
+.card canvas{width:100%;height:100%}
+.label{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.7);padding:2px 4px;font-size:6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.controls{text-align:center;margin:10px 0}
+.controls button{background:#1a1a2e;color:#FFC800;border:1px solid #333;padding:5px 12px;cursor:pointer;font-family:inherit;font-size:10px;margin:0 4px;border-radius:3px}
+.controls button:hover{border-color:#FFC800}
+.info{text-align:center;font-size:9px;color:#444;margin-top:8px}
+</style>
+</head>
+<body>
+<h1>CORP HEIST — LOOT RENDER ENGINE</h1>
+<div class="controls">
+<button onclick="renderAll()">RENDER ALL</button>
+<button onclick="renderCategory('watches')">WATCHES</button>
+<button onclick="renderCategory('cars')">CARS</button>
+<button onclick="renderCategory('realestate')">REAL ESTATE</button>
+<button onclick="renderCategory('yachts')">YACHTS</button>
+<button onclick="renderCategory('jewelry')">JEWELRY</button>
+<button onclick="renderCategory('art')">ART</button>
+<button onclick="renderCategory('restaurants')">RESTAURANTS</button>
+<button onclick="renderCategory('fashion')">FASHION</button>
+<button onclick="renderCategory('tech')">TECH</button>
+<button onclick="renderCategory('jets')">JETS</button>
+</div>
+<div class="grid" id="grid"></div>
+<div class="info" id="info"></div>
+
+<script>
+// ============================================================
+// CORP HEIST — Loot Render Engine
+// ~1000 уникальных алгоритмов отрисовки
+// Каждый предмет = математическая прорисовка на Canvas
+// Никаких ассетов — только primitives + градиенты + свечение
+// ============================================================
+
+const PHI = 1.618033988749;
+const TAU = Math.PI * 2;
+const RARITY_COLORS = ['#888899','#00AAFF','#AA00FF','#FF3232','#FFC800','#FF00AA'];
+const RARITY_GLOW = [0, 2, 4, 6, 10, 15];
+const RARITY_NAMES = ['Common','Uncommon','Rare','Epic','Legendary','Unique'];
+
+// ====== КАТЕГОРИИ И АЛГОРИТМЫ ======
+// Каждая категория содержит массив функций отрисовки
+// Каждая функция: (ctx, cx, cy, size, seed, rarity) => void
+
+const RENDERERS = {};
+
+// --- ЧАСЫ (watch_0..watch_149) ---
+RENDERERS.watches = [];
+for(let i=0;i<150;i++){
+    RENDERERS.watches.push(function(ctx,cx,cy,s,seed,rarity){
+        const style = i % 6; // 6 стилей корпуса
+        const band = Math.floor(i/6) % 4; // 4 типа ремешка
+        const accent = (seed*7+13)%5; // цвет акцента
+        const hue = (i*23+rarity*60)%360;
+        const glow = RARITY_GLOW[rarity];
+
+        // свечение
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,s*0.2,cx,cy,s*0.8);
+            grad.addColorStop(0,`hsla(${hue},80%,60%,0.15)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        // ремешок
+        ctx.fillStyle=`hsl(${hue},20%,${15+rarity*5}%)`;
+        if(band===0){
+            // кожаный
+            roundRect(ctx,cx-s*0.12,cy-s*0.45,s*0.24,s*0.3,2);
+            roundRect(ctx,cx-s*0.12,cy+s*0.15,s*0.24,s*0.3,2);
+        }else if(band===1){
+            // металлический
+            for(let j=0;j<5;j++){
+                ctx.fillStyle=`hsl(${hue},10%,${25+j*8}%)`;
+                ctx.fillRect(cx-s*0.1,cy-s*0.4+j*s*0.06,s*0.2,s*0.05);
+                ctx.fillRect(cx-s*0.1,cy+s*0.18+j*s*0.06,s*0.2,s*0.05);
+            }
+        }else if(band===2){
+            // керамический
+            ctx.fillStyle=`hsl(${hue},30%,20%)`;
+            roundRect(ctx,cx-s*0.13,cy-s*0.45,s*0.26,s*0.3,4);
+            roundRect(ctx,cx-s*0.13,cy+s*0.15,s*0.26,s*0.3,4);
+        }else{
+            // титановый
+            ctx.fillStyle=`hsl(${hue},5%,30%)`;
+            roundRect(ctx,cx-s*0.11,cy-s*0.45,s*0.22,s*0.3,1);
+            roundRect(ctx,cx-s*0.11,cy+s*0.15,s*0.22,s*0.3,1);
+        }
+
+        // корпус
+        const bodyHue = (hue+rarity*30)%360;
+        if(style===0){
+            // круглый
+            ctx.beginPath();ctx.arc(cx,cy,s*0.25,0,TAU);
+            ctx.fillStyle=`hsl(${bodyHue},40%,${25+rarity*8}%)`;ctx.fill();
+            ctx.strokeStyle=`hsl(${bodyHue},60%,${40+rarity*10}%)`;ctx.lineWidth=1.5;ctx.stroke();
+        }else if(style===1){
+            // квадратный
+            roundRect(ctx,cx-s*0.22,cy-s*0.22,s*0.44,s*0.44,4);
+            ctx.fillStyle=`hsl(${bodyHue},35%,${22+rarity*8}%)`;ctx.fill();
+            ctx.strokeStyle=`hsl(${bodyHue},55%,${38+rarity*10}%)`;ctx.lineWidth=1.5;ctx.stroke();
+        }else if(style===2){
+            // овальный
+            ctx.beginPath();ctx.ellipse(cx,cy,s*0.28,s*0.22,0,0,TAU);
+            ctx.fillStyle=`hsl(${bodyHue},45%,${24+rarity*8}%)`;ctx.fill();
+            ctx.strokeStyle=`hsl(${bodyHue},65%,${42+rarity*10}%)`;ctx.lineWidth=1.5;ctx.stroke();
+        }else if(style===3){
+            // tonneau
+            ctx.beginPath();
+            ctx.moveTo(cx-s*0.2,cy-s*0.15);
+            ctx.quadraticCurveTo(cx-s*0.25,cy,cx-s*0.2,cy+s*0.15);
+            ctx.lineTo(cx+s*0.2,cy+s*0.15);
+            ctx.quadraticCurveTo(cx+s*0.25,cy,cx+s*0.2,cy-s*0.15);
+            ctx.closePath();
+            ctx.fillStyle=`hsl(${bodyHue},40%,${23+rarity*8}%)`;ctx.fill();
+            ctx.strokeStyle=`hsl(${bodyHue},60%,${40+rarity*10}%)`;ctx.lineWidth=1.5;ctx.stroke();
+        }else if(style===4){
+            // cushion
+            ctx.beginPath();
+            ctx.moveTo(cx-s*0.18,cy-s*0.18);
+            ctx.quadraticCurveTo(cx,cy-s*0.24,cx+s*0.18,cy-s*0.18);
+            ctx.quadraticCurveTo(cx+s*0.24,cy,cx+s*0.18,cy+s*0.18);
+            ctx.quadraticCurveTo(cx,cy+s*0.24,cx-s*0.18,cy+s*0.18);
+            ctx.quadraticCurveTo(cx-s*0.24,cy,cx-s*0.18,cy-s*0.18);
+            ctx.fillStyle=`hsl(${bodyHue},50%,${26+rarity*8}%)`;ctx.fill();
+            ctx.strokeStyle=`hsl(${bodyHue},70%,${44+rarity*10}%)`;ctx.lineWidth=1.5;ctx.stroke();
+        }else{
+            // asym
+            ctx.beginPath();
+            ctx.moveTo(cx-s*0.22,cy-s*0.1);
+            ctx.quadraticCurveTo(cx,cy-s*0.26,cx+s*0.15,cy-s*0.18);
+            ctx.lineTo(cx+s*0.22,cy+s*0.1);
+            ctx.quadraticCurveTo(cx,cy+s*0.22,cx-s*0.22,cy+s*0.15);
+            ctx.closePath();
+            ctx.fillStyle=`hsl(${bodyHue},40%,${24+rarity*8}%)`;ctx.fill();
+            ctx.strokeStyle=`hsl(${bodyHue},60%,${42+rarity*10}%)`;ctx.lineWidth=1.5;ctx.stroke();
+        }
+
+        // циферблат
+        const faceR = s*0.18;
+        ctx.beginPath();ctx.arc(cx,cy,faceR,0,TAU);
+        ctx.fillStyle=`hsl(${(hue+180)%360},15%,${8+rarity*3}%)`;ctx.fill();
+
+        // маркеры часов
+        for(let m=0;m<12;m++){
+            const a=m*TAU/12-Math.PI/2;
+            const inner=faceR*0.7, outer=faceR*0.9;
+            ctx.beginPath();
+            ctx.moveTo(cx+Math.cos(a)*inner,cy+Math.sin(a)*inner);
+            ctx.lineTo(cx+Math.cos(a)*outer,cy+Math.sin(a)*outer);
+            ctx.strokeStyle=`hsl(${hue},50%,60%)`;ctx.lineWidth=rarity>=4?1.5:0.8;ctx.stroke();
+        }
+
+        // стрелки
+        const hAngle=(seed%12)/12*TAU-Math.PI/2;
+        const mAngle=(seed%60)/60*TAU-Math.PI/2;
+        ctx.beginPath();ctx.moveTo(cx,cy);
+        ctx.lineTo(cx+Math.cos(hAngle)*faceR*0.5,cy+Math.sin(hAngle)*faceR*0.5);
+        ctx.strokeStyle=`hsl(${hue},70%,70%)`;ctx.lineWidth=1.5;ctx.stroke();
+        ctx.beginPath();ctx.moveTo(cx,cy);
+        ctx.lineTo(cx+Math.cos(mAngle)*faceR*0.7,cy+Math.sin(mAngle)*faceR*0.7);
+        ctx.strokeStyle=`hsl(${hue},60%,60%)`;ctx.lineWidth=1;ctx.stroke();
+
+        // блик
+        ctx.beginPath();ctx.arc(cx-faceR*0.3,cy-faceR*0.3,faceR*0.15,0,TAU);
+        ctx.fillStyle='rgba(255,255,255,0.15)';ctx.fill();
+    });
+}
+
+// --- АВТО (car_0..car_199) ---
+RENDERERS.cars = [];
+for(let i=0;i<200;i++){
+    RENDERERS.cars.push(function(ctx,cx,cy,s,seed,rarity){
+        const bodyStyle = i%5;
+        const colorHue=(i*17+rarity*45)%360;
+        const glow=RARITY_GLOW[rarity];
+        const scale=s*0.004;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy+4,2,cx,cy,s*0.6);
+            grad.addColorStop(0,`hsla(${colorHue},80%,50%,0.2)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy+4);ctx.scale(scale,scale);
+
+        // тень
+        ctx.fillStyle='rgba(0,0,0,0.3)';
+        ctx.beginPath();ctx.ellipse(0,35,90,8,0,0,TAU);ctx.fill();
+
+        // кузов
+        ctx.beginPath();
+        if(bodyStyle===0){
+            // спорткар
+            ctx.moveTo(-80,20);ctx.lineTo(-70,0);ctx.lineTo(-40,-15);
+            ctx.quadraticCurveTo(-20,-25,0,-25);ctx.quadraticCurveTo(30,-25,50,-10);
+            ctx.lineTo(80,0);ctx.lineTo(85,20);ctx.closePath();
+        }else if(bodyStyle===1){
+            // седан
+            ctx.moveTo(-80,15);ctx.lineTo(-75,-5);ctx.lineTo(-50,-15);
+            ctx.quadraticCurveTo(-30,-30,0,-30);ctx.quadraticCurveTo(30,-30,50,-15);
+            ctx.lineTo(75,-5);ctx.lineTo(80,15);ctx.closePath();
+        }else if(bodyStyle===2){
+            // SUV
+            ctx.moveTo(-80,10);ctx.lineTo(-75,-20);ctx.lineTo(-55,-30);
+            ctx.lineTo(50,-30);ctx.lineTo(75,-15);ctx.lineTo(80,10);ctx.closePath();
+        }else if(bodyStyle===3){
+            // хэтч
+            ctx.moveTo(-75,15);ctx.lineTo(-65,-5);ctx.lineTo(-40,-20);
+            ctx.quadraticCurveTo(-10,-35,20,-30);ctx.lineTo(55,-10);ctx.lineTo(80,5);
+            ctx.lineTo(80,15);ctx.closePath();
+        }else{
+            // купе
+            ctx.moveTo(-80,18);ctx.lineTo(-60,-5);ctx.lineTo(-30,-22);
+            ctx.quadraticCurveTo(10,-32,50,-18);ctx.lineTo(80,0);ctx.lineTo(85,18);ctx.closePath();
+        }
+
+        const bodyGrad=ctx.createLinearGradient(-80,-30,80,30);
+        bodyGrad.addColorStop(0,`hsl(${colorHue},60%,${25+rarity*8}%)`);
+        bodyGrad.addColorStop(0.5,`hsl(${colorHue},70%,${35+rarity*10}%)`);
+        bodyGrad.addColorStop(1,`hsl(${colorHue},55%,${20+rarity*6}%)`);
+        ctx.fillStyle=bodyGrad;ctx.fill();
+        ctx.strokeStyle=`hsl(${colorHue},80%,${50+rarity*8}%)`;ctx.lineWidth=1;ctx.stroke();
+
+        // лобовое стекло
+        ctx.beginPath();
+        if(bodyStyle===0){
+            ctx.moveTo(-35,-15);ctx.lineTo(-20,-25);ctx.lineTo(10,-25);ctx.lineTo(20,-15);
+        }else{
+            ctx.moveTo(-40,-15);ctx.quadraticCurveTo(-25,-32,5,-30);ctx.lineTo(25,-15);
+        }
+        ctx.closePath();
+        ctx.fillStyle=`hsl(210,30%,${30+rarity*5}%)`;ctx.fill();
+        ctx.strokeStyle=`hsl(210,40%,50%)`;ctx.lineWidth=0.5;ctx.stroke();
+
+        // фары
+        ctx.fillStyle=`hsl(50,100%,80%)`;
+        ctx.beginPath();ctx.ellipse(75,5,4,3,0,0,TAU);ctx.fill();
+        ctx.fillStyle=`hsl(0,100%,60%)`;
+        ctx.beginPath();ctx.ellipse(-75,8,3,2,0,0,TAU);ctx.fill();
+
+        // колёса
+        [-55,55].forEach(wx=>{
+            ctx.fillStyle='#111';
+            ctx.beginPath();ctx.arc(wx,22,12,0,TAU);ctx.fill();
+            ctx.fillStyle='#333';
+            ctx.beginPath();ctx.arc(wx,22,8,0,TAU);ctx.fill();
+            ctx.fillStyle=`hsl(${colorHue},30%,40%)`;
+            ctx.beginPath();ctx.arc(wx,22,4,0,TAU);ctx.fill();
+            // спицы
+            for(let sp=0;sp<5;sp++){
+                const a=sp*TAU/5;
+                ctx.beginPath();ctx.moveTo(wx+Math.cos(a)*3,22+Math.sin(a)*3);
+                ctx.lineTo(wx+Math.cos(a)*7,22+Math.sin(a)*7);
+                ctx.strokeStyle='#555';ctx.lineWidth=0.8;ctx.stroke();
+            }
+        });
+
+        // блик
+        ctx.beginPath();ctx.ellipse(-20,-15,25,3,-0.2,0,TAU);
+        ctx.fillStyle='rgba(255,255,255,0.12)';ctx.fill();
+
+        ctx.restore();
+    });
+}
+
+// --- НЕДВИЖИМОСТЬ (real_0..real_199) ---
+RENDERERS.realestate = [];
+for(let i=0;i<200;i++){
+    RENDERERS.realestate.push(function(ctx,cx,cy,s,seed,rarity){
+        const type=i%4;
+        const hue=(i*31+rarity*70)%360;
+        const glow=RARITY_GLOW[rarity];
+        const floors=3+Math.floor(i/4)%12;
+        const scale=s*0.0035;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,4,cx,cy,s*0.7);
+            grad.addColorStop(0,`hsla(${hue},60%,50%,0.18)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy+10);ctx.scale(scale,scale);
+
+        if(type===0){
+            // небоскрёб
+            const bw=50,bh=floors*18;
+            ctx.fillStyle='rgba(0,0,0,0.3)';
+            ctx.fillRect(-bw/2+4,-bh+4,bw,bh);
+            const bGrad=ctx.createLinearGradient(-bw/2,0,bw/2,0);
+            bGrad.addColorStop(0,`hsl(${hue},40%,${18+rarity*5}%)`);
+            bGrad.addColorStop(0.5,`hsl(${hue},50%,${28+rarity*7}%)`);
+            bGrad.addColorStop(1,`hsl(${hue},35%,${15+rarity*4}%)`);
+            ctx.fillStyle=bGrad;
+            ctx.fillRect(-bw/2,-bh,bw,bh);
+            ctx.strokeStyle=`hsl(${hue},60%,${35+rarity*8}%)`;ctx.lineWidth=0.8;
+            ctx.strokeRect(-bw/2,-bh,bw,bh);
+            // окна
+            for(let f=0;f<floors;f++){
+                for(let w=0;w<4;w++){
+                    const lit=((seed+f*7+w*13)%5>1);
+                    ctx.fillStyle=lit?`hsl(50,80%,${70+rarity*5}%)`:`hsl(${hue},20%,${10+rarity*3}%)`;
+                    ctx.fillRect(-bw/2+5+w*11,-bh+f*18+4,8,12);
+                }
+            }
+            // шпиль
+            ctx.fillStyle=`hsl(${hue},50%,${30+rarity*6}%)`;
+            ctx.beginPath();ctx.moveTo(-5,-bh);ctx.lineTo(0,-bh-25);ctx.lineTo(5,-bh);ctx.fill();
+        }else if(type===1){
+            // вилла
+            ctx.fillStyle='rgba(0,0,0,0.3)';
+            ctx.fillRect(-56,-46,112,50);
+            // стены
+            ctx.fillStyle=`hsl(${hue},30%,${25+rarity*6}%)`;
+            ctx.fillRect(-50,-40,100,44);
+            ctx.strokeStyle=`hsl(${hue},40%,${35+rarity*8}%)`;ctx.lineWidth=1;
+            ctx.strokeRect(-50,-40,100,44);
+            // крыша
+            ctx.beginPath();ctx.moveTo(-60,-40);ctx.lineTo(0,-65);ctx.lineTo(60,-40);ctx.closePath();
+            ctx.fillStyle=`hsl(${(hue+20)%360},50%,${20+rarity*5}%)`;ctx.fill();
+            // окна
+            [-25,25].forEach(wx=>{
+                ctx.fillStyle=`hsl(50,70%,${65+rarity*5}%)`;
+                ctx.fillRect(wx-8,-30,16,12);
+                ctx.strokeStyle=`hsl(${hue},30%,30%)`;ctx.lineWidth=0.5;
+                ctx.strokeRect(wx-8,-30,16,12);
+                ctx.beginPath();ctx.moveTo(wx,-30);ctx.lineTo(wx,-18);ctx.stroke();
+                ctx.beginPath();ctx.moveTo(wx-8,-24);ctx.lineTo(wx+8,-24);ctx.stroke();
+            });
+            // дверь
+            ctx.fillStyle=`hsl(${(hue+40)%360},40%,${18+rarity*4}%)`;
+            roundRect(ctx,-6,-10,12,14,2);ctx.fill();
+            // колонны
+            [-42,42].forEach(px=>{
+                ctx.fillStyle=`hsl(${hue},20%,${30+rarity*6}%)`;
+                ctx.fillRect(px-2,-40,4,44);
+            });
+        }else if(type===2){
+            // таунхаус
+            const bw=35,bh=70;
+            ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fillRect(-bw/2+3,-bh+3,bw,bh);
+            ctx.fillStyle=`hsl(${hue},35%,${22+rarity*5}%)`;
+            ctx.fillRect(-bw/2,-bh,bw,bh);
+            ctx.strokeStyle=`hsl(${hue},45%,${32+rarity*7}%)`;ctx.lineWidth=0.8;
+            ctx.strokeRect(-bw/2,-bh,bw,bh);
+            // крыша
+            ctx.beginPath();ctx.moveTo(-bw/2-5,-bh);ctx.lineTo(0,-bh-15);ctx.lineTo(bw/2+5,-bh);ctx.closePath();
+            ctx.fillStyle=`hsl(${(hue+15)%360},40%,${18+rarity*4}%)`;ctx.fill();
+            // 3 этажа окон
+            for(let f=0;f<3;f++){
+                for(let w=0;w<2;w++){
+                    ctx.fillStyle=`hsl(50,75%,${68+rarity*5}%)`;
+                    ctx.fillRect(-bw/2+5+w*17,-bh+8+f*20,12,10);
+                }
+            }
+            // дверь
+            ctx.fillStyle=`hsl(${(hue+30)%360},40%,${15+rarity*4}%)`;
+            roundRect(ctx,-5,-15,10,18,1);ctx.fill();
+        }else{
+            // пентхаус
+            ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fillRect(-56,-56,112,60);
+            // стекло
+            const glassGrad=ctx.createLinearGradient(-50,-50,50,0);
+            glassGrad.addColorStop(0,`hsl(${hue},50%,${20+rarity*6}%)`);
+            glassGrad.addColorStop(1,`hsl(${hue+30},40%,${28+rarity*7}%)`);
+            ctx.fillStyle=glassGrad;
+            ctx.fillRect(-50,-50,100,54);
+            ctx.strokeStyle=`hsl(${hue},70%,${45+rarity*8}%)`;ctx.lineWidth=1.2;
+            ctx.strokeRect(-50,-50,100,54);
+            // панорамные окна
+            for(let w=0;w<5;w++){
+                const wx=-42+w*20;
+                const lit=((seed+w*11)%3>0);
+                ctx.fillStyle=lit?`hsl(50,80%,${72+rarity*4}%)`:`hsl(${hue},30%,${12+rarity*3}%)`;
+                ctx.fillRect(wx,-45,14,44);
+            }
+            // терраса
+            ctx.fillStyle=`hsl(${hue},25%,${18+rarity*5}%)`;
+            ctx.fillRect(-50,4,100,6);
+            // беседка
+            ctx.fillStyle=`hsl(${hue},30%,${22+rarity*5}%)`;
+            ctx.fillRect(-15,-55,30,4);
+        }
+
+        ctx.restore();
+    });
+}
+
+// --- ЯХТЫ (yacht_0..yacht_99) ---
+RENDERERS.yachts = [];
+for(let i=0;i<100;i++){
+    RENDERERS.yachts.push(function(ctx,cx,cy,s,seed,rarity){
+        const hue=(i*37+rarity*50)%360;
+        const glow=RARITY_GLOW[rarity];
+        const scale=s*0.004;
+        const length=60+i%5*15;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,4,cx,cy,s*0.7);
+            grad.addColorStop(0,`hsla(${hue},70%,50%,0.15)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy);ctx.scale(scale,scale);
+
+        // волны под яхтой
+        for(let w=0;w<3;w++){
+            ctx.beginPath();
+            ctx.moveTo(-length-20,15+w*6);
+            for(let x=-length-20;x<=length+20;x+=4){
+                ctx.lineTo(x,15+w*6+Math.sin(x*0.08+w*2)*3);
+            }
+            ctx.strokeStyle=`hsl(210,60%,${25+w*10}%)`;ctx.lineWidth=1;ctx.stroke();
+        }
+
+        // корпус
+        ctx.beginPath();
+        ctx.moveTo(-length,5);
+        ctx.quadraticCurveTo(-length-5,15,-length+10,18);
+        ctx.lineTo(length-10,18);
+        ctx.quadraticCurveTo(length+5,10,length,0);
+        ctx.lineTo(-length,0);
+        ctx.closePath();
+        const hullGrad=ctx.createLinearGradient(0,-10,0,20);
+        hullGrad.addColorStop(0,`hsl(${hue},50%,${40+rarity*8}%)`);
+        hullGrad.addColorStop(1,`hsl(${hue},40%,${20+rarity*5}%)`);
+        ctx.fillStyle=hullGrad;ctx.fill();
+        ctx.strokeStyle=`hsl(${hue},60%,${50+rarity*8}%)`;ctx.lineWidth=0.8;ctx.stroke();
+
+        // палуба
+        ctx.fillStyle=`hsl(30,30%,${35+rarity*5}%)`;
+        ctx.fillRect(-length+15,-2,length-25,4);
+
+        // каюты (окна)
+        for(let c=0;c<Math.min(6,Math.floor(length/15));c++){
+            ctx.fillStyle=`hsl(50,80%,${70+rarity*5}%)`;
+            ctx.beginPath();ctx.arc(-length+25+c*14,1,2,0,TAU);ctx.fill();
+        }
+
+        // надстройка
+        ctx.fillStyle=`hsl(${hue},45%,${30+rarity*6}%)`;
+        ctx.fillRect(-15,-12,30,10);
+        ctx.fillStyle=`hsl(${hue},35%,${25+rarity*5}%)`;
+        ctx.fillRect(-10,-20,20,8);
+
+        // мачта
+        ctx.strokeStyle=`hsl(${hue},30%,${40+rarity*5}%)`;ctx.lineWidth=1.5;
+        ctx.beginPath();ctx.moveTo(0,-20);ctx.lineTo(0,-45);ctx.stroke();
+        // парус
+        ctx.beginPath();ctx.moveTo(0,-43);ctx.quadraticCurveTo(15,-30,8,-18);ctx.lineTo(0,-18);ctx.closePath();
+        ctx.fillStyle=`hsla(${(hue+180)%360},40%,80%,0.6)`;ctx.fill();
+
+        // блик
+        ctx.beginPath();ctx.ellipse(-20,-5,15,2,-0.1,0,TAU);
+        ctx.fillStyle='rgba(255,255,255,0.12)';ctx.fill();
+
+        ctx.restore();
+    });
+}
+
+// --- ЮВЕЛИРКА (jewelry_0..jewelry_99) ---
+RENDERERS.jewelry = [];
+for(let i=0;i<100;i++){
+    RENDERERS.jewelry.push(function(ctx,cx,cy,s,seed,rarity){
+        const type=i%4;
+        const gemHue=(i*41+rarity*60)%360;
+        const glow=RARITY_GLOW[rarity];
+        const scale=s*0.004;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,2,cx,cy,s*0.6);
+            grad.addColorStop(0,`hsla(${gemHue},90%,60%,0.25)`);
+            grad.addColorStop(0.5,`hsla(${gemHue},80%,50%,0.08)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy);ctx.scale(scale,scale);
+
+        if(type===0){
+            // кольцо
+            ctx.beginPath();ctx.arc(0,0,18,0,TAU);
+            ctx.strokeStyle=`hsl(50,70%,${50+rarity*8}%)`;ctx.lineWidth=4;ctx.stroke();
+            ctx.beginPath();ctx.arc(0,0,18,0,TAU);
+            ctx.strokeStyle=`hsl(50,80%,${60+rarity*8}%)`;ctx.lineWidth=2;ctx.stroke();
+            // камень
+            drawGem(ctx,0,-20,8,gemHue,rarity,seed);
+        }else if(type===1){
+            // серьга (x2)
+            [-14,14].forEach(ex=>{
+                ctx.strokeStyle=`hsl(50,70%,${50+rarity*8}%)`;ctx.lineWidth=1;
+                ctx.beginPath();ctx.moveTo(ex,-15);ctx.lineTo(ex,5);ctx.stroke();
+                ctx.beginPath();ctx.arc(ex,10,6,0,TAU);
+                ctx.fillStyle=`hsl(${gemHue},70%,${30+rarity*8}%)`;ctx.fill();
+                ctx.strokeStyle=`hsl(${gemHue},80%,${50+rarity*10}%)`;ctx.lineWidth=0.8;ctx.stroke();
+                // блик
+                ctx.beginPath();ctx.arc(ex-2,8,2,0,TAU);
+                ctx.fillStyle='rgba(255,255,255,0.2)';ctx.fill();
+            });
+        }else if(type===2){
+            // браслет
+            for(let b=0;b<8;b++){
+                const a=b*TAU/8;
+                const bx=Math.cos(a)*20, by=Math.sin(a)*12;
+                ctx.fillStyle=`hsl(${(gemHue+b*15)%360},60%,${35+rarity*8}%)`;
+                ctx.beginPath();ctx.arc(bx,by,4,0,TAU);ctx.fill();
+                ctx.strokeStyle=`hsl(50,70%,${55+rarity*8}%)`;ctx.lineWidth=0.8;ctx.stroke();
+            }
+            ctx.beginPath();ctx.ellipse(0,0,20,12,0,0,TAU);
+            ctx.strokeStyle=`hsl(50,60%,${45+rarity*7}%)`;ctx.lineWidth=1;ctx.stroke();
+        }else{
+            // подвеска- medallion
+            ctx.beginPath();ctx.arc(0,0,14,0,TAU);
+            ctx.fillStyle=`hsl(50,60%,${40+rarity*8}%)`;ctx.fill();
+            ctx.strokeStyle=`hsl(50,75%,${55+rarity*10}%)`;ctx.lineWidth=1.5;ctx.stroke();
+            drawGem(ctx,0,0,6,gemHue,rarity,seed);
+            // цепочка
+            ctx.beginPath();ctx.moveTo(0,-14);ctx.quadraticCurveTo(-3,-22,0,-28);
+            ctx.quadraticCurveTo(3,-22,0,-14);
+            ctx.strokeStyle=`hsl(50,60%,${50+rarity*7}%)`;ctx.lineWidth=0.8;ctx.stroke();
+        }
+
+        ctx.restore();
+    });
+}
+
+function drawGem(ctx,x,y,r,hue,rarity,seed){
+    const sides=3+seed%4;
+    const rot=seed*0.1;
+    ctx.beginPath();
+    for(let i=0;i<sides;i++){
+        const a=i*TAU/sides+rot;
+        const px=x+Math.cos(a)*r, py=y+Math.sin(a)*r;
+        if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+    }
+    ctx.closePath();
+    const gGrad=ctx.createLinearGradient(x-r,y-r,x+r,y+r);
+    gGrad.addColorStop(0,`hsl(${hue},90%,${55+rarity*7}%)`);
+    gGrad.addColorStop(0.5,`hsl(${hue},80%,${40+rarity*5}%)`);
+    gGrad.addColorStop(1,`hsl(${hue+20},85%,${50+rarity*8}%)`);
+    ctx.fillStyle=gGrad;ctx.fill();
+    ctx.strokeStyle=`hsl(${hue},100%,${70+rarity*5}%)`;ctx.lineWidth=0.5;ctx.stroke();
+    // блик
+    ctx.beginPath();ctx.arc(x-r*0.3,y-r*0.3,r*0.25,0,TAU);
+    ctx.fillStyle='rgba(255,255,255,0.3)';ctx.fill();
+}
+
+// --- ИСКУССТВО (art_0..art_99) ---
+RENDERERS.art = [];
+for(let i=0;i<100;i++){
+    RENDERERS.art.push(function(ctx,cx,cy,s,seed,rarity){
+        const style=i%5;
+        const hue=(i*29+rarity*55)%360;
+        const glow=RARITY_GLOW[rarity];
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,4,cx,cy,s*0.6);
+            grad.addColorStop(0,`hsla(${hue},70%,50%,0.2)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        // рама
+        const fw=s*0.55,fh=s*0.4;
+        ctx.fillStyle=`hsl(30,40%,${18+rarity*5}%)`;
+        ctx.fillRect(cx-fw-4,cy-fh-4,fw*2+8,fh*2+8);
+        ctx.fillStyle=`hsl(30,50%,${25+rarity*6}%)`;
+        ctx.fillRect(cx-fw-2,cy-fh-2,fw*2+4,fh*2+4);
+
+        // полотно
+        ctx.fillStyle=`hsl(${hue},15%,${90-rarity*5}%)`;
+        ctx.fillRect(cx-fw,cy-fh,fw*2,fh*2);
+
+        if(style===0){
+            // абстракция — круги
+            for(let n=0;n<5+seed%4;n++){
+                const nx=cx+(Math.sin(n*seed*0.3)*fw*0.7);
+                const ny=cy+(Math.cos(n*seed*0.7)*fh*0.6);
+                const nr=5+Math.abs(Math.sin(n*seed*0.5))*15;
+                ctx.beginPath();ctx.arc(nx,ny,nr,0,TAU);
+                ctx.fillStyle=`hsla(${(hue+n*40)%360},${50+rarity*8}%,${40+n*8}%,0.6)`;
+                ctx.fill();
+            }
+        }else if(style===1){
+            // градиент-свитч
+            for(let y2=0;y2<fh*2;y2+=3){
+                const frac=y2/(fh*2);
+                ctx.fillStyle=`hsl(${(hue+frac*120)%360},${50+rarity*8}%,${30+frac*40}%)`;
+                ctx.fillRect(cx-fw,cy-fh+y2,fw*2,3);
+            }
+        }else if(style===2){
+            // линии
+            for(let n=0;n<8+seed%5;n++){
+                const lx=cx+(Math.sin(n*1.5)*fw*0.8);
+                const ly=cy-fh+Math.random()*fh*2;
+                ctx.beginPath();ctx.moveTo(lx-fw*0.3,ly);ctx.lineTo(lx+fw*0.3,ly+fh*0.4);
+                ctx.strokeStyle=`hsla(${(hue+n*30)%360},60%,${40+n*5}%,0.7)`;
+                ctx.lineWidth=1+rarity*0.5;ctx.stroke();
+            }
+        }else if(style===3){
+            // точки
+            for(let n=0;n<20+seed%10;n++){
+                const dx=cx+(Math.sin(n*seed*0.2)*fw*0.8);
+                const dy=cy+(Math.cos(n*seed*0.3)*fh*0.7);
+                ctx.beginPath();ctx.arc(dx,dy,2+seed%3,0,TAU);
+                ctx.fillStyle=`hsl(${(hue+n*18)%360},70%,${50+n*2}%)`;
+                ctx.fill();
+            }
+        }else{
+            // спираль
+            ctx.beginPath();
+            for(let a=0;a<12;a+=0.05){
+                const r2=a*3;
+                if(r2>fw*0.8)break;
+                const px=cx+Math.cos(a+seed*0.1)*r2*0.5;
+                const py=cy+Math.sin(a+seed*0.1)*r2*0.35;
+                if(a===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+            }
+            ctx.strokeStyle=`hsl(${hue},60%,${45+rarity*8}%)`;ctx.lineWidth=1.5;ctx.stroke();
+        }
+    });
+}
+
+function rarety(r){return 40+r*10}
+
+// --- РЕСТОРАНЫ (rest_0..rest_99) ---
+RENDERERS.restaurants = [];
+for(let i=0;i<100;i++){
+    RENDERERS.restaurants.push(function(ctx,cx,cy,s,seed,rarity){
+        const type=i%3;
+        const hue=(i*23+rarity*65)%360;
+        const glow=RARITY_GLOW[rarity];
+        const scale=s*0.004;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,4,cx,cy,s*0.6);
+            grad.addColorStop(0,`hsla(${hue},60%,50%,0.18)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy+8);ctx.scale(scale,scale);
+
+        // здание
+        const bw=60+type*10;
+        ctx.fillStyle=`hsl(${hue},30%,${18+rarity*5}%)`;
+        ctx.fillRect(-bw/2,-35,bw,40);
+        ctx.strokeStyle=`hsl(${hue},40%,${30+rarity*7}%)`;ctx.lineWidth=0.8;
+        ctx.strokeRect(-bw/2,-35,bw,40);
+
+        // крыша
+        if(type===0){
+            ctx.fillStyle=`hsl(${(hue+10)%360},40%,${22+rarity*5}%)`;
+            ctx.fillRect(-bw/2-3,-40,bw+6,6);
+        }else{
+            ctx.beginPath();ctx.moveTo(-bw/2-3,-35);ctx.lineTo(0,-50);ctx.lineTo(bw/2+3,-35);ctx.closePath();
+            ctx.fillStyle=`hsl(${(hue+10)%360},45%,${20+rarity*5}%)`;ctx.fill();
+        }
+
+        // вывеска
+        ctx.fillStyle=`hsl(50,90%,${60+rarity*8}%)`;
+        ctx.font=`${7+rarity}px serif`;
+        ctx.textAlign='center';
+        const names=['RESTAURANT','BISTRO','DINING','GRILL','CAFE','LOUNGE'];
+        ctx.fillText(names[seed%6],0,-44);
+
+        // окна
+        for(let w=0;w<3;w++){
+            const wx=-bw/2+10+w*(bw/3-3);
+            const lit=seed%3!==w;
+            ctx.fillStyle=lit?`hsl(50,80%,${70+rarity*5}%)`:`hsl(${hue},20%,12%)`;
+            ctx.fillRect(wx,-28,12,12);
+        }
+
+        // дверь
+        ctx.fillStyle=`hsl(${(hue+30)%360},40%,${15+rarity*4}%)`;
+        roundRect(ctx,-5,-18,10,18,1);ctx.fill();
+
+        // терраса (stems)
+        if(type===2){
+            ctx.fillStyle=`hsl(30,30%,${25+rarity*5}%)`;
+            ctx.fillRect(-bw/2-8,2,bw+16,3);
+            for(let t2=0;t2<4;t2++){
+                ctx.fillStyle=`hsl(30,25%,${20+rarity*4}%)`;
+                ctx.fillRect(-bw/2-5+t2*(bw/3),5,2,6);
+            }
+        }
+
+        ctx.restore();
+    });
+}
+
+// --- МОДА (fashion_0..fashion_99) ---
+RENDERERS.fashion = [];
+for(let i=0;i<100;i++){
+    RENDERERS.fashion.push(function(ctx,cx,cy,s,seed,rarity){
+        const type=i%4;
+        const hue=(i*47+rarity*40)%360;
+        const glow=RARITY_GLOW[rarity];
+        const scale=s*0.004;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,2,cx,cy,s*0.5);
+            grad.addColorStop(0,`hsla(${hue},70%,55%,0.2)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy);ctx.scale(scale,scale);
+
+        if(type===0){
+            // сумка
+            ctx.fillStyle=`hsl(${hue},50%,${25+rarity*7}%)`;
+            roundRect(ctx,-18,-12,36,24,4);ctx.fill();
+            ctx.strokeStyle=`hsl(${hue},60%,${35+rarity*8}%)`;ctx.lineWidth=1;ctx.stroke();
+            // ручки
+            ctx.beginPath();ctx.arc(-8,-14,6,Math.PI,TAU);ctx.arc(8,-14,6,Math.PI,TAU);
+            ctx.strokeStyle=`hsl(${hue},40%,${30+rarity*6}%)`;ctx.lineWidth=2;ctx.stroke();
+            // застёжка
+            ctx.fillStyle=`hsl(50,70%,${55+rarity*8}%)`;
+            ctx.beginPath();ctx.arc(0,0,2.5,0,TAU);ctx.fill();
+        }else if(type===1){
+            // туфли
+            [-10,10].forEach(sx=>{
+                ctx.fillStyle=`hsl(${hue},45%,${22+rarity*6}%)`;
+                ctx.beginPath();
+                ctx.moveTo(sx-8,5);ctx.lineTo(sx-6,-8);ctx.lineTo(sx+2,-8);ctx.lineTo(sx+6,5);
+                ctx.closePath();ctx.fill();
+                ctx.strokeStyle=`hsl(${hue},55%,${32+rarity*7}%)`;ctx.lineWidth=0.8;ctx.stroke();
+                // каблук
+                ctx.fillStyle=`hsl(${hue},35%,${18+rarity*5}%)`;
+                ctx.fillRect(sx-2,5,4,6);
+            });
+        }else if(type===2){
+            // очки
+            [-9,9].forEach(lx=>{
+                ctx.beginPath();ctx.ellipse(lx,0,8,6,0,0,TAU);
+                ctx.strokeStyle=`hsl(${hue},40%,${30+rarity*6}%)`;ctx.lineWidth=1.5;ctx.stroke();
+                ctx.fillStyle=`hsla(${hue+180},50%,30%,0.3)`;ctx.fill();
+            });
+            ctx.beginPath();ctx.moveTo(-1,0);ctx.lineTo(1,0);
+            ctx.strokeStyle=`hsl(${hue},40%,35%)`;ctx.lineWidth=1;ctx.stroke();
+        }else{
+            // шляпа
+            ctx.fillStyle=`hsl(${hue},40%,${20+rarity*5}%)`;
+            ctx.beginPath();ctx.ellipse(0,5,22,5,0,0,TAU);ctx.fill();
+            roundRect(ctx,-12,-15,24,20,6);ctx.fill();
+            ctx.strokeStyle=`hsl(${hue},50%,${30+rarity*7}%)`;ctx.lineWidth=0.8;ctx.stroke();
+            // лента
+            ctx.fillStyle=`hsl(${(hue+60)%360},60%,${35+rarity*8}%)`;
+            ctx.fillRect(-12,-2,24,3);
+        }
+
+        ctx.restore();
+    });
+}
+
+// --- ТЕХНОЛОГИИ (tech_0..tech_99) ---
+RENDERERS.tech = [];
+for(let i=0;i<100;i++){
+    RENDERERS.tech.push(function(ctx,cx,cy,s,seed,rarity){
+        const type=i%5;
+        const hue=(i*53+rarity*45)%360;
+        const glow=RARITY_GLOW[rarity];
+        const scale=s*0.004;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,2,cx,cy,s*0.5);
+            grad.addColorStop(0,`hsla(${hue},80%,55%,0.22)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy);ctx.scale(scale,scale);
+
+        if(type===0){
+            // ноутбук
+            ctx.fillStyle=`hsl(${hue},30%,${20+rarity*6}%)`;
+            roundRect(ctx,-22,-12,44,24,2);ctx.fill();
+            ctx.fillStyle=`hsl(210,40%,${15+rarity*4}%)`;
+            ctx.fillRect(-18,-9,36,17);
+            // экран — код
+            for(let l=0;l<4;l++){
+                const ll=8+((seed+l*7)%12);
+                ctx.fillStyle=`hsl(${(hue+l*30)%360},60%,${40+l*8}%)`;
+                ctx.fillRect(-15,-7+l*4,ll,2);
+            }
+            ctx.fillStyle=`hsl(${hue},25%,${25+rarity*5}%)`;
+            ctx.beginPath();
+            ctx.moveTo(-25,12);ctx.lineTo(-20,18);ctx.lineTo(20,18);ctx.lineTo(25,12);
+            ctx.closePath();ctx.fill();
+        }else if(type===1){
+            // смартфон
+            ctx.fillStyle=`hsl(${hue},30%,${18+rarity*5}%)`;
+            roundRect(ctx,-10,-18,20,36,3);ctx.fill();
+            ctx.fillStyle=`hsl(220,40%,${12+rarity*3}%)`;
+            ctx.fillRect(-8,-15,16,28);
+            // UI
+            for(let u=0;u<3;u++){
+                ctx.fillStyle=`hsl(${(hue+u*40)%360},50%,${30+u*10}%)`;
+                ctx.fillRect(-6,-12+u*9,12,6);
+            }
+        }else if(type===2){
+            // VR-очки
+            ctx.fillStyle=`hsl(${hue},35%,${20+rarity*5}%)`;
+            roundRect(ctx,-20,-10,40,20,8);ctx.fill();
+            ctx.fillStyle=`hsl(250,50%,${15+rarity*4}%)`;
+            ctx.beginPath();ctx.ellipse(-8,0,7,6,0,0,TAU);ctx.fill();
+            ctx.beginPath();ctx.ellipse(8,0,7,6,0,0,TAU);ctx.fill();
+            // линзы
+            ctx.beginPath();ctx.ellipse(-8,0,5,4,0,0,TAU);
+            ctx.strokeStyle=`hsl(${hue},80%,${50+rarity*8}%)`;ctx.lineWidth=0.8;ctx.stroke();
+            ctx.beginPath();ctx.ellipse(8,0,5,4,0,0,TAU);ctx.stroke();
+        }else if(type===3){
+            // робот-андроид
+            // голова
+            ctx.fillStyle=`hsl(${hue},40%,${22+rarity*6}%)`;
+            roundRect(ctx,-10,-22,20,18,5);ctx.fill();
+            // глаза
+            ctx.fillStyle=`hsl(180,80%,${60+rarity*6}%)`;
+            ctx.beginPath();ctx.arc(-4,-15,2.5,0,TAU);ctx.fill();
+            ctx.beginPath();ctx.arc(4,-15,2.5,0,TAU);ctx.fill();
+            // тело
+            ctx.fillStyle=`hsl(${hue},35%,${20+rarity*5}%)`;
+            roundRect(ctx,-12,-4,24,22,3);ctx.fill();
+            // реактор
+            ctx.beginPath();ctx.arc(0,6,4,0,TAU);
+            ctx.fillStyle=`hsl(180,90%,${50+rarity*8}%)`;ctx.fill();
+            // антенна
+            ctx.strokeStyle=`hsl(${hue},40%,${35+rarity*6}%)`;ctx.lineWidth=1;
+            ctx.beginPath();ctx.moveTo(0,-22);ctx.lineTo(0,-28);ctx.stroke();
+            ctx.beginPath();ctx.arc(0,-28,2,0,TAU);ctx.fillStyle=`hsl(0,80%,60%)`;ctx.fill();
+        }else{
+            // квадрокоптер
+            ctx.fillStyle=`hsl(${hue},30%,${22+rarity*5}%)`;
+            roundRect(ctx,-8,-4,16,8,2);ctx.fill();
+            // пропеллеры
+            [[-16,-8],[16,-8],[-16,8],[16,8]].forEach(([px,py])=>{
+                ctx.beginPath();ctx.ellipse(px,py,10,2,seed*0.1,0,TAU);
+                ctx.fillStyle=`hsla(${hue},40%,50%,0.3)`;ctx.fill();
+                ctx.fillStyle=`hsl(${hue},25%,${18+rarity*4}%)`;
+                ctx.beginPath();ctx.arc(px,py,2,0,TAU);ctx.fill();
+            });
+            // камера
+            ctx.fillStyle=`hsl(180,70%,${45+rarity*7}%)`;
+            ctx.beginPath();ctx.arc(0,8,2.5,0,TAU);ctx.fill();
+        }
+
+        ctx.restore();
+    });
+}
+
+// --- ДЖЕТЫ (jet_0..jet_49) ---
+RENDERERS.jets = [];
+for(let i=0;i<50;i++){
+    RENDERERS.jets.push(function(ctx,cx,cy,s,seed,rarity){
+        const hue=(i*43+rarity*55)%360;
+        const glow=RARITY_GLOW[rarity];
+        const scale=s*0.0035;
+
+        if(glow>0){
+            const grad=ctx.createRadialGradient(cx,cy,4,cx,cy,s*0.7);
+            grad.addColorStop(0,`hsla(${hue},70%,55%,0.2)`);
+            grad.addColorStop(1,'transparent');
+            ctx.fillStyle=grad;ctx.fillRect(cx-s,cy-s,s*2,s*2);
+        }
+
+        ctx.save();ctx.translate(cx,cy);ctx.scale(scale,scale);
+
+        // след
+        ctx.beginPath();ctx.moveTo(-60,5);ctx.lineTo(-40,3);
+        ctx.strokeStyle=`hsla(210,50%,60%,0.2)`;ctx.lineWidth=2;ctx.stroke();
+
+        // фюзеляж
+        ctx.beginPath();
+        ctx.moveTo(-50,0);ctx.quadraticCurveTo(-30,-8,10,-6);ctx.lineTo(40,-3);
+        ctx.lineTo(45,0);ctx.lineTo(40,3);ctx.lineTo(10,6);
+        ctx.quadraticCurveTo(-30,8,-50,0);ctx.closePath();
+        const fGrad=ctx.createLinearGradient(0,-10,0,10);
+        fGrad.addColorStop(0,`hsl(${hue},50%,${40+rarity*8}%)`);
+        fGrad.addColorStop(1,`hsl(${hue},40%,${25+rarity*5}%)`);
+        ctx.fillStyle=fGrad;ctx.fill();
+        ctx.strokeStyle=`hsl(${hue},60%,${50+rarity*8}%)`;ctx.lineWidth=0.8;ctx.stroke();
+
+        // крылья
+        ctx.beginPath();
+        ctx.moveTo(-5,0);ctx.lineTo(-15,-25);ctx.lineTo(10,-20);ctx.lineTo(15,0);
+        ctx.closePath();
+        ctx.fillStyle=`hsl(${hue},45%,${30+rarity*6}%)`;ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-5,0);ctx.lineTo(-15,25);ctx.lineTo(10,20);ctx.lineTo(15,0);
+        ctx.closePath();ctx.fill();
+
+        // киль
+        ctx.beginPath();ctx.moveTo(35,0);ctx.lineTo(42,-12);ctx.lineTo(48,0);
+        ctx.fillStyle=`hsl(${hue},40%,${28+rarity*5}%)`;ctx.fill();
+
+        // иллюминаторы
+        for(let w=0;w<4;w++){
+            ctx.fillStyle=`hsl(50,80%,${70+rarity*5}%)`;
+            ctx.beginPath();ctx.arc(-20+w*12,-4,1.5,0,TAU);ctx.fill();
+        }
+
+        // блик
+        ctx.beginPath();ctx.ellipse(-10,-5,20,1.5,-0.05,0,TAU);
+        ctx.fillStyle='rgba(255,255,255,0.15)';ctx.fill();
+
+        ctx.restore();
+    });
+}
+
+
+// ====== УТИЛИТЫ ======
+
+function roundRect(ctx,x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+    ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    ctx.lineTo(x+r,y+h);ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+    ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);
+    ctx.closePath();
+}
+
+// ====== МАППИНГ: loot_code -> категория + индекс ======
+function getLootRenderer(code,rarity){
+    const cats=Object.keys(RENDERERS);
+    const catIdx=code%cats.length;
+    const cat=cats[catIdx];
+    const renderers=RENDERERS[cat];
+    const idx=(Math.floor(code/cats.length))%renderers.length;
+    return {cat,idx,renderer:renderers[idx],name:cat+'_'+idx};
+}
+
+// ====== РЕНДЕР ======
+function renderCard(canvas,code,rarity,label){
+    const ctx=canvas.getContext('2d');
+    const w=canvas.width,h=canvas.height;
+    const cx=w/2,cy=h/2-8;
+    const s=Math.min(w,h)*0.45;
+
+    // BG
+    ctx.fillStyle='#0a0a12';ctx.fillRect(0,0,w,h);
+
+    // vignette
+    const vg=ctx.createRadialGradient(cx,cy,s*0.3,cx,cy,s);
+    vg.addColorStop(0,'transparent');vg.addColorStop(1,'rgba(0,0,0,0.4)');
+    ctx.fillStyle=vg;ctx.fillRect(0,0,w,h);
+
+    const {renderer,name}=getLootRenderer(code,rarity);
+    renderer(ctx,cx,cy,s,code,rarity);
+
+    // label
+    ctx.fillStyle='rgba(0,0,0,0.6)';
+    ctx.fillRect(0,h-16,w,16);
+    ctx.fillStyle=RARITY_COLORS[rarity];
+    ctx.font='7px "Courier New",monospace';
+    ctx.textAlign='center';
+    ctx.fillText((label||name)+' ['+RARITY_NAMES[rarity]+']',cx,h-5);
+}
+
+function renderAll(){
+    const grid=document.getElementById('grid');
+    grid.innerHTML='';
+    const codes=[];
+    // по 10 из каждой категории
+    const cats=Object.keys(RENDERERS);
+    cats.forEach(cat=>{
+        const len=RENDERERS[cat].length;
+        for(let i=0;i<10;i++){
+            codes.push({code:Math.floor(Math.random()*65535),rarity:Math.floor(Math.random()*6),name:cat+'_'+Math.floor(Math.random()*len)});
+        }
+    });
+    codes.forEach(({code,rarity,name})=>{
+        const div=document.createElement('div');div.className='card';
+        const cv=document.createElement('canvas');cv.width=100;cv.height=100;
+        div.appendChild(cv);
+        const lb=document.createElement('div');lb.className='label';
+        lb.textContent=name;lb.style.color=RARITY_COLORS[rarity];
+        div.appendChild(lb);
+        grid.appendChild(div);
+        renderCard(cv,code,rarity,name);
+    });
+    document.getElementById('info').textContent=codes.length+' items rendered | '+Object.keys(RENDERERS).length+' categories | '+cats.map(c=>c+':'+RENDERERS[c].length).join(' | ');
+}
+
+function renderCategory(cat){
+    const grid=document.getElementById('grid');
+    grid.innerHTML='';
+    const renderers=RENDERERS[cat];
+    if(!renderers)return;
+    const count=Math.min(renderers.length,40);
+    const step=Math.max(1,Math.floor(renderers.length/count));
+    for(let i=0;i<count;i++){
+        const idx=i*step;
+        const code=idx*Object.keys(RENDERERS).length+Object.keys(RENDERERS).indexOf(cat);
+        const rarity=Math.min(5,Math.floor(idx/20));
+        const div=document.createElement('div');div.className='card';
+        const cv=document.createElement('canvas');cv.width=100;cv.height=100;
+        div.appendChild(cv);
+        const lb=document.createElement('div');lb.className='label';
+        lb.textContent=cat+'_'+idx;lb.style.color=RARITY_COLORS[rarity];
+        div.appendChild(lb);
+        grid.appendChild(div);
+        renderCard(cv,code,rarity,cat+'_'+idx);
+    }
+    document.getElementById('info').textContent=count+' items from '+cat+' | '+renderers.length+' total in category';
+}
+
+// START
+renderAll();
+</script>
+</body>
+</html>
