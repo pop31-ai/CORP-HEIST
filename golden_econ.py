@@ -521,6 +521,132 @@ def claim_quest(state, uid, slot, now=None):
 
 
 # ============================================================
+# ACHIEVEMENTS / BADGES (phi-thresholded milestones)
+# ============================================================
+
+# id, name, description, check(char)->bool, reward_gold (phi-scaled)
+ACHIEVEMENTS = [
+    ("first_loot",  "First Blood",     "Own at least 1 loot item",
+        lambda c: len(c.get("loot", [])) >= 1,                       int(1000 * PHI**1)),
+    ("collector",   "Collector",       "Own 13 loot items (Fib)",
+        lambda c: len(c.get("loot", [])) >= 13,                      int(1000 * PHI**3)),
+    ("hoarder",     "Golden Hoarder",  "Own 55 loot items (Fib)",
+        lambda c: len(c.get("loot", [])) >= 55,                      int(1000 * PHI**5)),
+    ("rising",      "Rising Star",     "Reach level 8",
+        lambda c: c.get("level", 1) >= 8,                            int(1000 * PHI**2)),
+    ("executive",   "Executive",       "Reach level 21 (phi tier)",
+        lambda c: c.get("level", 1) >= 21,                           int(1000 * PHI**4)),
+    ("magnate",     "Magnate",         "Net worth over 1,000,000",
+        lambda c: c.get("net_worth", 0) >= 1_000_000,                int(1000 * PHI**6)),
+    ("tycoon",      "Golden Tycoon",   "Net worth over 100,000,000",
+        lambda c: c.get("net_worth", 0) >= 100_000_000,              int(1000 * PHI**8)),
+    ("ascended",    "Ascended",        "Prestige at least once",
+        lambda c: c.get("prestige", 0) >= 1,                         int(1000 * PHI**5)),
+    ("transcend",   "Transcendent",    "Prestige 5 times",
+        lambda c: c.get("prestige", 0) >= 5,                         int(1000 * PHI**7)),
+    ("streaker",    "Devoted",         "13-day login streak (Fib)",
+        lambda c: c.get("streak_days", 0) >= 13,                     int(1000 * PHI**4)),
+    ("topfloor",    "Top Floor",       "Reach the Apex Atrium (floor 12)",
+        lambda c: c.get("floor", 0) >= 11,                           int(1000 * PHI**5)),
+    ("artifact",    "Artifact Bearer", "Own a Golden Artifact",
+        lambda c: any(l.get("rarity", 0) >= 5 or l.get("cat") == 10 for l in c.get("loot", [])),
+                                                                     int(1000 * PHI**6)),
+]
+
+def evaluate_achievements(char):
+    """Return list of achievement states for a char (unlocked flag + reward)."""
+    out = []
+    for aid, name, desc, check, reward in ACHIEVEMENTS:
+        try:
+            done = bool(check(char))
+        except Exception:
+            done = False
+        out.append({"id": aid, "name": name, "desc": desc,
+                    "unlocked": done, "reward_gold": reward})
+    return out
+
+def claim_achievements(state, uid):
+    """Grant gold for newly-unlocked achievements (once each).
+    Tracks claimed ids in char['ach_claimed']."""
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    claimed = me.setdefault("ach_claimed", [])
+    total = 0
+    newly = []
+    for a in evaluate_achievements(me):
+        if a["unlocked"] and a["id"] not in claimed:
+            claimed.append(a["id"])
+            total += a["reward_gold"]
+            newly.append({"id": a["id"], "name": a["name"],
+                          "reward_gold": a["reward_gold"]})
+    if total:
+        me["gold"] = me.get("gold", 0) + total
+        state.mark_dirty(uid)
+    return {"granted_gold": total, "newly_unlocked": newly,
+            "achievements": evaluate_achievements(me),
+            "note": "Rewards are in-game gold only."}
+
+
+# ============================================================
+# REFERRAL SYSTEM (invite a friend -> phi bonus, in-game gold only)
+# ============================================================
+
+REFERRAL_BONUS = int(1000 * PHI ** 4)   # bonus to referrer per accepted invite
+
+def referral_code(uid):
+    """Deterministic short code for a user id (base36-ish)."""
+    n = (uid * 2654435761) & 0xFFFFFF
+    alpha = "ACDEFGHJKLMNPQRSTUVWXYZ23456789"
+    s = ""
+    for _ in range(5):
+        s = alpha[n % len(alpha)] + s
+        n //= len(alpha)
+    return "PHI-" + s
+
+def _code_to_uid_map(state):
+    return {referral_code(u): u for u in state.chars.keys()}
+
+def accept_referral(state, uid, code):
+    """New player redeems a referral code. Both sides get in-game gold.
+    Guards: cannot self-refer, cannot redeem twice."""
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    if me.get("referred_by"):
+        return {"error": "already redeemed a code"}
+    ref_uid = _code_to_uid_map(state).get(str(code).strip().upper())
+    if ref_uid is None:
+        return {"error": "invalid code"}
+    if ref_uid == uid:
+        return {"error": "cannot refer yourself"}
+    # newcomer bonus (phi-scaled, slightly smaller than referrer's)
+    newbie_bonus = int(REFERRAL_BONUS / PHI)
+    me["referred_by"] = ref_uid
+    me["gold"] = me.get("gold", 0) + newbie_bonus
+    referrer = state.chars.get(ref_uid)
+    if referrer is not None:
+        referrer["gold"] = referrer.get("gold", 0) + REFERRAL_BONUS
+        referrer["referrals"] = referrer.get("referrals", 0) + 1
+        state.mark_dirty(ref_uid)
+    state.mark_dirty(uid)
+    return {"accepted": True, "referrer": ref_uid,
+            "your_bonus": newbie_bonus, "referrer_bonus": REFERRAL_BONUS,
+            "gold": me["gold"], "note": "In-game gold only. No real money."}
+
+def referral_status(state, uid):
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    return {"code": referral_code(uid),
+            "referrals": me.get("referrals", 0),
+            "earned_gold": me.get("referrals", 0) * REFERRAL_BONUS,
+            "referred_by": me.get("referred_by"),
+            "bonus_per_invite": REFERRAL_BONUS,
+            "note": "Invite friends for in-game gold. No real-money reward."}
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 
@@ -569,4 +695,11 @@ if __name__ == "__main__":
     print("daily_quests:", daily_quests(1000)["quests"][0])
     print("claim_quest:", claim_quest(st, 1000, 0))
     print("claim_again:", claim_quest(st, 1000, 0))
+    st.chars[1000]["loot"] = [{"rarity": 5}]
+    ach = evaluate_achievements(st.chars[1000])
+    print("achievements unlocked:", sum(1 for a in ach if a["unlocked"]), "/", len(ach))
+    print("claim_ach:", claim_achievements(st, 1000)["granted_gold"])
+    print("ref code 1000:", referral_code(1000))
+    print("accept_ref:", accept_referral(st, 1001, referral_code(1000)))
+    print("ref_status:", referral_status(st, 1000)["referrals"])
     print("OK")

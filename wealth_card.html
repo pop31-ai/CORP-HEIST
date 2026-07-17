@@ -42,6 +42,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-snap" style="border-color:#00FF8C;color:#00FF8C">📷 SNAPSHOT</button>
 <button id="btn-tourney" style="border-color:#FF9B00;color:#FF9B00">🏆 TOURNAMENT</button>
 <button id="btn-customize" style="border-color:#B14BFF;color:#B14BFF">🎨 CUSTOMIZE</button>
+<button id="btn-achieve" style="border-color:#FFC800;color:#FFC800">🏅 BADGES</button>
+<button id="btn-referral" style="border-color:#00E5FF;color:#00E5FF">👥 INVITE</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -1299,6 +1301,31 @@ function drawStockChart(x,y,w,h,t){
     X.restore();X.globalAlpha=1;
 }
 
+// ====== BADGE SHELF (unlocked achievement medals, phi-fractal) ======
+function drawBadge(cx,cy,r,seed,t,col){
+    const golden=2.399963, sides=3+(seed%4);
+    X.save();X.translate(cx,cy);X.rotate(t*0.3+seed);
+    let rr=r;
+    for(let l=0;l<3;l++){
+        X.globalAlpha=0.9-l*0.2;X.strokeStyle=col;X.lineWidth=1.1-l*0.25;
+        X.beginPath();
+        for(let s=0;s<=sides;s++){const a=s*TAU/sides+l*golden;s===0?X.moveTo(Math.cos(a)*rr,Math.sin(a)*rr):X.lineTo(Math.cos(a)*rr,Math.sin(a)*rr);}
+        X.stroke();rr/=PHI;
+    }
+    X.globalAlpha=1;X.fillStyle=col;X.shadowColor=col;X.shadowBlur=6;
+    X.beginPath();X.arc(0,0,r*0.22,0,TAU);X.fill();X.restore();X.globalAlpha=1;
+}
+function drawBadges(x,y,t){
+    if(!BADGES||!BADGES.length)return;
+    X.fillStyle=THEME.accent;X.font='6px monospace';X.textAlign='left';X.globalAlpha=0.8;
+    X.fillText('BADGES '+BADGES.length,x,y-8);X.globalAlpha=1;
+    const step=17, per=8;
+    for(let i=0;i<Math.min(BADGES.length,per*2);i++){
+        const cx=x+8+(i%per)*step, cy=y+ Math.floor(i/per)*step +2;
+        drawBadge(cx,cy,6,i+3,t,i%2?THEME.aura:THEME.accent);
+    }
+}
+
 // ====== QR CODE (scan to open this player's live card) ======
 let _qrCache={url:null,mat:null};
 function drawQR(x,y,box,t){
@@ -1410,6 +1437,37 @@ function drawGoldRain(t,tier){
         }
     }
     X.restore();X.globalAlpha=1;
+}
+
+// ====== MONEY WATERFALL (burst transition on panel open) ======
+const WFALL={coins:[],active:0};
+function triggerWaterfall(){
+    WFALL.active=1;
+    for(let i=0;i<60;i++){
+        WFALL.coins.push({x:Math.random()*W, y:-Math.random()*H*0.6,
+            v:3+Math.random()*5, sz:2+Math.random()*3.5,
+            spin:Math.random()*TAU, vs:(Math.random()-0.5)*0.4,
+            col:['#FFC800','#FFE24B','#FF9B00'][Math.floor(Math.random()*3)]});
+    }
+    SND.trade();
+}
+function drawWaterfall(){
+    if(!WFALL.coins.length){WFALL.active=Math.max(0,WFALL.active-0.02);return;}
+    WFALL.active=Math.max(0,WFALL.active-0.006);
+    X.save();
+    for(let i=WFALL.coins.length-1;i>=0;i--){
+        const c=WFALL.coins[i];
+        c.y+=c.v; c.v+=0.12; c.spin+=c.vs;
+        if(c.y>H+10){WFALL.coins.splice(i,1);continue;}
+        const wob=Math.abs(Math.cos(c.spin));
+        X.globalAlpha=0.85;
+        X.fillStyle=c.col;X.shadowColor=c.col;X.shadowBlur=6;
+        X.beginPath();X.ellipse(c.x,c.y,c.sz,c.sz*wob+0.5,0,0,TAU);X.fill();
+        // shine slit
+        X.globalAlpha=0.5;X.strokeStyle='#fff8';X.lineWidth=0.5;
+        X.beginPath();X.moveTo(c.x,c.y-c.sz*0.4);X.lineTo(c.x,c.y+c.sz*0.4);X.stroke();
+    }
+    X.restore();X.globalAlpha=1;X.shadowBlur=0;
 }
 
 // ====== LIVE TRADE TICKER (scrolling marquee) ======
@@ -1637,6 +1695,9 @@ function render(){
     // === QR CODE (scan to open live card) ===
     drawQR(9, 250, 52, t);
 
+    // === BADGE SHELF (unlocked achievements) ===
+    drawBadges(75, 260, t);
+
     // === CENTER: stocks as waves ===
     const sx=170,sy=50,sw=350,sh=200;
     X.strokeStyle='#1a1a2e';X.lineWidth=0.5;X.strokeRect(sx,sy,sw,sh);
@@ -1801,6 +1862,9 @@ function render(){
     X.fillStyle='#222';X.font='7px monospace';
     X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-3);
 
+    // === MONEY WATERFALL (panel-open transition) ===
+    drawWaterfall();
+
     // === PHI-FIREWORKS (tier / floor promotion celebration) ===
     drawFireworks(t);
 
@@ -1894,7 +1958,16 @@ async function loadPlayer(uid){
         P.floor=(d.floor!=null?d.floor:0);
         P.rank=d.rank_percent;frame=0;
         loadRaidViz(uid);
+        loadBadges(uid);
     }catch(e){}
+}
+// Unlocked achievement badges for the on-card shelf
+let BADGES=[];
+async function loadBadges(uid){
+    try{
+        const r=await fetch(API+'/api/achievements/'+uid);const d=await r.json();
+        BADGES=(d.achievements||[]).filter(a=>a.unlocked);
+    }catch(e){BADGES=[];}
 }
 
 // Live raid-boss state for the on-card animated Titan
@@ -1955,6 +2028,7 @@ async function showBoard(){
 function _applyPanel(html,ttl){
     const el=document.getElementById('overlay');
     el.style.borderColor=THEME.accent;el.style.color=THEME.accent;
+    triggerWaterfall();
     const paint=()=>{
         el.innerHTML=html;
         el.style.display='block';
@@ -2001,6 +2075,10 @@ document.getElementById('btn-quests').onclick=showQuests;
 document.getElementById('btn-finale').onclick=openFinale;
 document.getElementById('btn-tour').onclick=openTour;
 {const bt=document.getElementById('btn-tourney');if(bt)bt.onclick=openTourney;}
+{const ba=document.getElementById('btn-achieve');if(ba)ba.onclick=showAchievements;}
+{const br=document.getElementById('btn-referral');if(br)br.onclick=showReferral;}
+// auto-fill referral code from ?ref= in URL
+(function(){try{const rp=new URLSearchParams(location.search).get('ref');if(rp){setTimeout(()=>{showReferral();setTimeout(()=>{const el=document.getElementById('ref-in');if(el)el.value=rp;},400);},800);}}catch(e){}})();
 // customization panel
 (function(){
     const panel=document.getElementById('custom-panel');
@@ -2157,6 +2235,56 @@ async function claimQuest(slot){
     }catch(e){showOverlay('Quest','offline');}
 }
 
+async function showAchievements(){
+    try{
+        const r=await fetch(API+'/api/achievements/'+_uid());const d=await r.json();
+        const items=d.achievements.map(a=>
+            '<div style="margin:5px 0;opacity:'+(a.unlocked?'1':'0.45')+'"><span style="font-size:13px">'+(a.unlocked?'🏅':'🔒')+'</span> '+
+            '<b style="color:'+(a.unlocked?'#FFC800':'#888')+'">'+a.name+'</b> '+
+            '<span style="color:#FFC800;font-size:9px">+'+fmt(a.reward_gold)+'g</span>'+
+            '<div style="color:#666;font-size:8px;margin-left:20px">'+a.desc+'</div></div>').join('');
+        const unlocked=d.achievements.filter(a=>a.unlocked).length;
+        openPanel('<b>🏅 ACHIEVEMENTS ('+unlocked+'/'+d.achievements.length+')</b>'+items+
+            '<button onclick="claimAchievements()" style="margin-top:6px;background:#1a1a2e;color:#FFC800;border:1px solid #FFC800;padding:3px 10px;font-family:monospace;font-size:9px;cursor:pointer">CLAIM ALL GOLD</button>'+
+            '<pre style="color:#555;font-size:8px">'+d.note+'</pre>',12000);
+    }catch(e){showOverlay('Badges','offline');}
+}
+async function claimAchievements(){
+    try{
+        const r=await fetch(API+'/pulse/achievements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error){showOverlay('Badges',d.error);return;}
+        if(d.granted_gold>0){SND.promo();for(let i=0;i<4;i++)setTimeout(launchFirework,i*120);}
+        showOverlay('BADGES CLAIMED','+'+fmt(d.granted_gold)+'g\n'+
+            (d.newly_unlocked.map(a=>'🏅 '+a.name).join('\n')||'nothing new'));
+        loadPlayer(_uid());
+    }catch(e){showOverlay('Badges','offline');}
+}
+async function showReferral(){
+    try{
+        const r=await fetch(API+'/api/referral/'+_uid());const d=await r.json();
+        const link=location.origin+'/card/'+_uid()+'?ref='+d.code;
+        openPanel('<b>👥 INVITE FRIENDS</b>'+
+            '<div style="margin:8px 0">Your code: <b style="color:#00E5FF;font-size:14px">'+d.code+'</b></div>'+
+            '<div style="color:#888;font-size:9px">Invited: '+d.referrals+'  ·  earned '+fmt(d.earned_gold)+'g</div>'+
+            '<div style="color:#888;font-size:9px;margin-top:2px">Bonus per invite: +'+fmt(d.bonus_per_invite)+'g (both sides)</div>'+
+            '<div style="margin:10px 0"><input id="ref-in" placeholder="enter a friend\'s code" style="background:#12131f;color:#ccc;border:1px solid #333;padding:3px 6px;font-family:monospace;font-size:10px;width:150px"> '+
+            '<button onclick="redeemReferral()" style="background:#1a1a2e;color:#00E5FF;border:1px solid #00E5FF;padding:3px 8px;font-family:monospace;font-size:9px;cursor:pointer">REDEEM</button></div>'+
+            '<pre style="color:#555;font-size:8px">'+d.note+'</pre>',14000);
+    }catch(e){showOverlay('Invite','offline');}
+}
+async function redeemReferral(){
+    const el=document.getElementById('ref-in');const code=el?el.value.trim():'';
+    if(!code)return;
+    try{
+        const r=await fetch(API+'/pulse/referral',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),code:code})});
+        const d=await r.json();
+        if(d.error){showOverlay('Invite',d.error);return;}
+        SND.promo();
+        showOverlay('REFERRAL ACCEPTED','+'+fmt(d.your_bonus)+'g for you\nreferrer gets +'+fmt(d.referrer_bonus)+'g');
+        loadPlayer(_uid());
+    }catch(e){showOverlay('Invite','offline');}
+}
 async function showSeason(){
     try{
         const r=await fetch(API+'/api/season');const d=await r.json();

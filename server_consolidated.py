@@ -41,6 +41,8 @@ from golden_econ import (
     PASSIVE_NODES, passive_bonus, unlock_cost,
     Prestige, Raid, prestige_requirement, prestige_multiplier,
     daily_quests, claim_quest,
+    evaluate_achievements, claim_achievements,
+    referral_code, referral_status, accept_referral,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -593,6 +595,58 @@ async def pulse_quest(request):
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
 
+
+async def handle_achievements(request):
+    """GET achievement states for a player (?uid= or /api/achievements/{uid})."""
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "not found"}, status=404)
+    result = {"achievements": evaluate_achievements(c),
+              "note": "Rewards are in-game gold only."}
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_achievements(request):
+    """Pulse: claim gold for newly-unlocked achievements."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = claim_achievements(STATE, uid)
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+async def handle_referral(request):
+    """GET a player's referral code + stats."""
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    if uid not in STATE.chars:
+        return web.json_response({"error": "not found"}, status=404)
+    result = referral_status(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_referral(request):
+    """Pulse: redeem a referral code (both sides get in-game gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    code = d.get("code", "")
+    result = accept_referral(STATE, uid, code)
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    ref = result.get("referrer")
+    if ref is not None:
+        STATE.save_char(ref)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -772,6 +826,10 @@ def make_unified_app():
     app.router.add_get("/api/prestige", handle_prestige)
     app.router.add_get("/api/raid", handle_raid)
     app.router.add_get("/api/quests", handle_quests)
+    app.router.add_get("/api/achievements", handle_achievements)
+    app.router.add_get("/api/achievements/{uid}", handle_achievements)
+    app.router.add_get("/api/referral", handle_referral)
+    app.router.add_get("/api/referral/{uid}", handle_referral)
     app.router.add_post("/pulse/trade", pulse_trade)
     app.router.add_post("/pulse/gacha", pulse_gacha)
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
@@ -782,6 +840,8 @@ def make_unified_app():
     app.router.add_post("/pulse/prestige", pulse_prestige)
     app.router.add_post("/pulse/raid", pulse_raid)
     app.router.add_post("/pulse/quest", pulse_quest)
+    app.router.add_post("/pulse/achievements", pulse_achievements)
+    app.router.add_post("/pulse/referral", pulse_referral)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
