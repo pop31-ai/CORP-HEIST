@@ -408,21 +408,20 @@ async def pulse_buy_gold(request):
     return web.json_response({"ok": True, "gold": c["gold"], "paid_usd": p["usd"],
                               "paid_rub": p["rub"], "received": p["gold"]})
 
-async def pulse_money_back(request):
-    """Pulse: refund per 14-ФЗ (system decides eligibility)."""
+async def pulse_support(request):
+    """Pulse: support request. Donations are non-refundable; operator
+    pays taxes on collected funds. System may compensate in-game gold
+    at its sole discretion, never real money."""
     d = await request.json()
     uid = d.get("uid", 1000)
     c = STATE.chars.get(uid)
-    if not c or c["gold"] < 1000:
-        return web.json_response({"error": "not eligible"})
-    refund = int(c["gold"] * 0.15)
-    c["gold"] -= refund
+    if not c:
+        return web.json_response({"error": "no char"})
+    note = ("Donations are charitable and non-refundable. "
+            "Operator pays applicable taxes. System may review at discretion.")
     STATE.track(sent=30)
-    STATE.mark_dirty(uid)
-    STATE.save_char(uid)
-    return web.json_response({"ok": True, "refund": refund, "gold": c["gold"],
-                              "compliance": "14-ФЗ"})
-
+    return web.json_response({"ok": True, "gold": c["gold"],
+                              "note": note, "real_money_back": False})
 
 # ============================================================
 # DASHBOARD HTML

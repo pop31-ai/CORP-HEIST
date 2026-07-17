@@ -26,7 +26,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button onclick="exportPNG()">EXPORT PNG</button>
 <button onclick="donateLoot()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
 <button onclick="buyGold()" style="border-color:#00AAFF;color:#00AAFF">BUY GOLD</button>
-<button onclick="moneyBack()" style="border-color:#00FF8C;color:#00FF8C">MONEY BACK</button>
+<button onclick="supportRequest()" style="border-color:#00FF8C;color:#00FF8C">SUPPORT</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
@@ -267,22 +267,73 @@ function tradeStock(){const s=P.stocks[Math.floor(Math.random()*P.stocks.length)
 // ====== RENDER ======
 function fmt(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return ''+n;}
 
+// --- Golden section helpers (phi = 1.618...) ---
+
+// Golden rectangle subdivided into squares with quarter-circle arcs
+function drawGoldenRect(x,y,w,h,depth,col,alpha){
+    if(depth<=0||w<6||h<6)return;
+    X.save();
+    X.globalAlpha=alpha;
+    X.strokeStyle=col;X.lineWidth=0.5;
+    X.strokeRect(x,y,w,h);
+    // square on the shorter side
+    if(w>=h){
+        const s=h;
+        X.beginPath();X.arc(x+s,y+s,s,Math.PI,1.5*Math.PI);X.stroke(); // top-right arc
+        drawGoldenRect(x+s,y,w-s,h,depth-1,col,alpha*0.85);
+    }else{
+        const s=w;
+        X.beginPath();X.arc(x+s,y+s,s,1.5*Math.PI,2*Math.PI);X.stroke(); // bottom-right arc
+        drawGoldenRect(x,y+s,w,h-s,depth-1,col,alpha*0.85);
+    }
+    X.restore();
+}
+
+// True logarithmic golden spiral: r = a * phi^(theta * 2/pi)
+function drawGoldenSpiral(cx,cy,maxR,turns,t,col){
+    const a=maxR/Math.pow(PHI,turns*2); // scale so it fits maxR
+    X.save();
+    X.globalAlpha=0.22;
+    X.strokeStyle=col;X.lineWidth=1.2;
+    X.beginPath();
+    const steps=400;
+    for(let i=0;i<=steps;i++){
+        const th=(i/steps)*turns*TAU + t*0.15;
+        const r=a*Math.pow(PHI, th/(TAU/2));
+        if(r>maxR*1.6)break;
+        const px=cx+r*Math.cos(th), py=cy+r*Math.sin(th);
+        i===0?X.moveTo(px,py):X.lineTo(px,py);
+    }
+    X.stroke();
+    X.restore();
+}
+
+// Background tinted with golden-section guide lines
+function drawGoldenBg(t,tc){
+    // golden ratio vertical guide at W/phi
+    const gx=W/PHI, gy=H/PHI;
+    X.save();
+    X.globalAlpha=0.04;X.strokeStyle='#FFC800';X.lineWidth=0.5;
+    X.beginPath();X.moveTo(gx,0);X.lineTo(gx,H);X.stroke();
+    X.beginPath();X.moveTo(0,gy);X.lineTo(W,gy);X.stroke();
+    X.restore();
+    // faint golden rectangles in corners
+    drawGoldenRect(8, 8, W*0.32, W*0.32/PHI, 5, tc, 0.05);
+    drawGoldenRect(W-W*0.32-8, H-W*0.32/PHI-8, W*0.32, W*0.32/PHI, 5, tc, 0.05);
+}
+
 function render(){
     const t=frame*0.018;frame++;
     X.fillStyle='#0a0a12';X.fillRect(0,0,W,H);
 
-    // grid (batched)
-    X.globalAlpha=0.06;X.strokeStyle='#1a1a2e';X.lineWidth=0.5;X.beginPath();
-    for(let i=0;i<W;i+=30){X.moveTo(i,0);X.lineTo(i,H);}
-    for(let i=0;i<H;i+=30){X.moveTo(0,i);X.lineTo(W,i);}
-    X.stroke();X.globalAlpha=1;
-
     const nw=P.netWorth;const tier=Math.min(5,Math.floor(Math.log10(Math.max(1,nw))/1.5));
     const tc=RCOL[tier];
 
-    // === LEFT: golden spiral ===
-    X.globalAlpha=0.1;
-    X.beginPath();for(let i=0;i<200;i++){const a=i*0.12+t;const r=Math.min(W,H)*0.42*Math.pow(PHI,i/50-4);if(r>Math.min(W,H)*0.42)break;i===0?X.moveTo(80+r*Math.cos(a),250+r*Math.sin(a)):X.lineTo(80+r*Math.cos(a),250+r*Math.sin(a));}X.strokeStyle=tc;X.lineWidth=1.5;X.stroke();X.globalAlpha=1;
+    // === GOLDEN SECTION BACKGROUND ===
+    drawGoldenBg(t,tc);
+
+    // === LEFT: true golden spiral ===
+    drawGoldenSpiral(90, 250, Math.min(W,H)*0.38, 3.2, t, tc);
 
     // === CENTER: stocks as waves ===
     const sx=170,sy=50,sw=350,sh=200;
@@ -332,14 +383,6 @@ function render(){
             fn(X,cx,cy-2,cellW*0.42,l.code,l.rarity);
             X.restore();
         }
-
-        // qty
-        if(l.qty>1){X.fillStyle=rarityColor;X.font='bold 7px monospace';X.textAlign='right';X.fillText('x'+l.qty,cx+cellW/2-4,cy+cellH/2-4);}
-    }
-
-        // glow border (maintenance = dimmed)
-        X.strokeStyle=isMaint?'#33333340':rarityColor+'60';X.lineWidth=0.5;
-        X.strokeRect(cx-cellW/2+2,cy-cellW/2+2,cellW-4,cellH-4);
 
         // qty
         if(l.qty>1){X.fillStyle=rarityColor;X.font='bold 7px monospace';X.textAlign='right';X.fillText('x'+l.qty,cx+cellW/2-4,cy+cellH/2-4);}
@@ -452,12 +495,9 @@ function buyGold(){
     if(P.history.length)P.history.push(P.history[P.history.length-1]+pick.gold*0.3);
 }
 
-// money back: refund per 14-ФЗ, system decides eligibility and amount
-function moneyBack(){
-    if(P.gold<1000)return;
-    const refund=Math.floor(P.gold*0.15);
-    P.gold-=refund;
-    if(P.history.length)P.history.push(P.history[P.history.length-1]-refund*0.2);
+// support: request to system (donations are non-refundable; taxes apply to operator)
+function supportRequest(){
+    alert('Donations are charitable and non-refundable.\nOperator pays applicable taxes on collected funds.\nSystem may review requests at its sole discretion.');
 }
 
 // ====== API BRIDGE (protocol -> canvas) ======
