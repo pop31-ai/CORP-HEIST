@@ -1,0 +1,15 @@
+[Unit]
+Description=CORP HEIST Consolidated Server
+After=network.target
+
+[Service]
+Type=simple
+User=user1
+WorkingDirectory=/home/user1/CORP-HEIST
+ExecStart=/usr/bin/python3 /home/user1/CORP-HEIST/server_consolidated.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

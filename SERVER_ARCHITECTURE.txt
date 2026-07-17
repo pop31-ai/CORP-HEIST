@@ -166,7 +166,11 @@
 
   Opens:
     http://localhost:9000        (dashboard)
-    http://localhost:8080-8109   (30 wealth cards)
+    http://localhost:8200-8229   (30 wealth cards)
+
+  NOTE: Port 8080 is RESERVED for conference/telephony (Node.js
+  server in conference/). CORP HEIST cards use 8200-8229 to avoid
+  conflict. Both run on same VM.
 
 7. SCALING (if needed)
 =======================

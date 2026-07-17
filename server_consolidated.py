@@ -42,7 +42,7 @@ log = logging.getLogger("consolidated")
 # ============================================================
 
 CMD_PORT   = 9000
-CARD_PORTS = list(range(8080, 8110))  # 30 ports
+CARD_PORTS = list(range(8200, 8230))  # 30 ports (8080 reserved for conference/telephony)
 NUM_CHARS  = 500
 MARKET_TICK_SEC = 3
 HEALTH_CHECK_SEC = 30

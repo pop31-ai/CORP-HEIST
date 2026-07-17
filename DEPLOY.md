@@ -40,18 +40,21 @@ DEPLOY (step by step):
      python3 server_consolidated.py &
 
   8. Verify:
-     curl http://localhost:9000
-     curl http://localhost:8080
-     curl http://localhost:8080/api/chars
+      curl http://localhost:9000
+      curl http://localhost:8200
+      curl http://localhost:8200/api/chars
 
   9. Open ports (firewall):
-     ufw allow 9000/tcp
-     ufw allow 8080:8109/tcp
-     ufw enable
+      ufw allow 9000/tcp
+      ufw allow 8200:8229/tcp
+      ufw enable
 
   10. Access:
-      Dashboard: http://YOUR_IP:9000
-      Cards:     http://YOUR_IP:8080-8109
+       Dashboard: http://YOUR_IP:9000
+       Cards:     http://YOUR_IP:8200-8229
+
+  NOTE: Port 8080 is used by conference/telephony server.
+  CORP HEIST cards use 8200-8229 to avoid conflict.
 
   11. Set up auto-restart (systemd):
       See SYSTEMD section below
@@ -117,10 +120,12 @@ ROLLBACK:
 PORTS SUMMARY:
 
   9000     Command Center (dashboard)
-  8080     Wealth Card #1
-  8081     Wealth Card #2
+  8200     Wealth Card #1
+  8201     Wealth Card #2
   ...
-  8109     Wealth Card #30
+  8229     Wealth Card #30
+
+  8080     RESERVED: conference/telephony (Node.js, separate service)
 
   Total: 31 TCP ports
 
