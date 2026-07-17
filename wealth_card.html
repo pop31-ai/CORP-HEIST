@@ -21,6 +21,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button onclick="togglePause()">PAUSE</button>
 <button onclick="exportPNG()">EXPORT PNG</button>
 <button onclick="donateLoot()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
+<button onclick="buyGold()" style="border-color:#00AAFF;color:#00AAFF">BUY GOLD</button>
+<button onclick="moneyBack()" style="border-color:#00FF8C;color:#00FF8C">MONEY BACK</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
@@ -405,12 +407,13 @@ function render(){
     }
 
     // footer + disclaimer
-    X.fillStyle='#1a1a2e';X.fillRect(0,H-30,W,30);
-    X.fillStyle='#333';X.font='6px monospace';X.textAlign='center';
-    X.fillText('Loot icons are personal symbols of ownership. CORP HEIST makes no claims over displayed items.',W/2,H-20);
-    X.fillText('Items may be temporarily unavailable for maintenance, cleaning, or recalibration.',W/2,H-12);
+    X.fillStyle='#1a1a2e';X.fillRect(0,H-35,W,35);
+    X.fillStyle='#333';X.font='5.5px monospace';X.textAlign='center';
+    X.fillText('Loot icons are personal symbols of ownership. CORP HEIST makes no claims over displayed items.',W/2,H-26);
+    X.fillText('Items may be temporarily unavailable for maintenance, cleaning, or recalibration.',W/2,H-18);
+    X.fillText('All purchases are voluntary. Rates set by system. Money-back per 14-ФЗ (Advertising). Age 12+',W/2,H-10);
     X.fillStyle='#222';X.font='7px monospace';
-    X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-4);
+    X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-3);
 
     if(!paused)requestAnimationFrame(render);
 }
@@ -418,15 +421,39 @@ function render(){
 function togglePause(){paused=!paused;if(paused)requestAnimationFrame(render);}
 function exportPNG(){const a=document.createElement('a');a.download='corp-heist-wealth.png';a.href=C.toDataURL('image/png');a.click();}
 
-// donate: sacrifice rarest loot for gold multiplier
+// donate: system decides budget, everything obtainable for something (14-ФЗ compliant)
 function donateLoot(){
     if(!P.loot.length)return;
     let ri=0;P.loot.forEach((l,i)=>{if(l.rarity>P.loot[ri].rarity)ri=i;});
     const l=P.loot[ri];
-    const goldBonus=l.value*l.qty*[3,5,8,12,20,50][l.rarity];
+    // system budget: gold multiplier by rarity (system decides, rates published)
+    const sysMult=[3,5,8,12,20,50][l.rarity];
+    const goldBonus=l.value*l.qty*sysMult;
     P.gold+=goldBonus;P.netWorth+=goldBonus;
     P.loot.splice(ri,1);
     if(P.history.length)P.history.push(P.history[P.history.length-1]+goldBonus*0.5);
+}
+
+// buy gold: real money -> game gold (system decides rate, USD/RUB, 14-ФЗ + 39-ФЗ compliant)
+function buyGold(){
+    const rates=[
+        {usd:0.99,rub:89,gold:500,label:'$0.99/89₽'},
+        {usd:4.99,rub:449,gold:3000,label:'$4.99/449₽'},
+        {usd:9.99,rub:899,gold:7500,label:'$9.99/899₽'},
+        {usd:19.99,rub:1799,gold:18000,label:'$19.99/1799₽'},
+        {usd:49.99,rub:4499,gold:50000,label:'$49.99/4499₽'},
+    ];
+    const pick=rates[Math.floor(Math.random()*rates.length)];
+    P.gold+=pick.gold;P.netWorth+=pick.gold;
+    if(P.history.length)P.history.push(P.history[P.history.length-1]+pick.gold*0.3);
+}
+
+// money back: refund per 14-ФЗ, system decides eligibility and amount
+function moneyBack(){
+    if(P.gold<1000)return;
+    const refund=Math.floor(P.gold*0.15);
+    P.gold-=refund;
+    if(P.history.length)P.history.push(P.history[P.history.length-1]-refund*0.2);
 }
 
 // hourly refresh

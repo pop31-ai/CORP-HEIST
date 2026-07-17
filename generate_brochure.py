@@ -704,6 +704,13 @@ disclaimer_lines = [
         "152-ФЗ (Personal Data) | 149-ФЗ (Information)",
         "Age rating: 12+ | Rating: 0+",
     ]),
+    ("MONETIZATION", GOLD, [
+        "Donate: system decides budget, rates published",
+        "Everything obtainable for something",
+        "Buy Gold: USD + RUB, system sets rate",
+        "Money-Back: per 14-ФЗ, system decides eligibility",
+        "No pay-to-win: all items cosmetic/symbolic",
+    ]),
 ]
 
 y = H - 100
