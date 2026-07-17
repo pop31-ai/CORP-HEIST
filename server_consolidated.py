@@ -80,6 +80,8 @@ class SharedState:
         self.bytes_recv = 0
         self.start_time = time.time()
         self._dirty = set()  # uids pending save
+        self.chat = {}       # corp_id -> list[{uid,name,corp,text,ts}]  (ring buffer)
+        self._chat_seq = 0   # monotonic id for chat messages
 
     def _load_market(self):
         path = os.path.join(DATA_DIR, "market.json")
@@ -692,6 +694,133 @@ async def pulse_worldboss(request):
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
 
+
+# ---- CORP CHAT (pulse-poll live messages, per corp) ----
+CHAT_MAX = 60          # ring buffer per corp
+CHAT_TEXT_MAX = 140
+
+def _corp_name(corp_id):
+    return CORPS[corp_id % len(CORPS)]
+
+async def handle_chat(request):
+    """GET recent corp messages (?corp= or ?uid=, ?since=)."""
+    corp = request.query.get("corp")
+    if corp is None:
+        uid = int(request.query.get("uid", 1000))
+        c = STATE.chars.get(uid)
+        corp = (c["corp_id"] if c else 0)
+    corp = int(corp) % len(CORPS)
+    since = int(request.query.get("since", 0))
+    msgs = [m for m in STATE.chat.get(corp, []) if m["id"] > since]
+    result = {"corp": corp, "corp_name": _corp_name(corp),
+              "messages": msgs[-CHAT_MAX:],
+              "last_id": (STATE.chat.get(corp, [{"id": 0}])[-1]["id"]
+                          if STATE.chat.get(corp) else 0)}
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_chat(request):
+    """Pulse: post a message to the player's corp chat."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    text = str(d.get("text", "")).strip()[:CHAT_TEXT_MAX]
+    if not text:
+        return web.json_response({"error": "empty message"}, status=400)
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"}, status=404)
+    corp = c["corp_id"] % len(CORPS)
+    STATE._chat_seq += 1
+    msg = {"id": STATE._chat_seq, "uid": uid, "name": f"Player_{uid}",
+           "corp": corp, "text": text, "ts": int(time.time())}
+    buf = STATE.chat.setdefault(corp, [])
+    buf.append(msg)
+    if len(buf) > CHAT_MAX:
+        del buf[:-CHAT_MAX]
+    STATE.track(recv=len(text))
+    return web.json_response({"ok": True, "message": msg})
+
+
+# ---- CRAFTING (combine 3 same-rarity items -> 1 higher-rarity, phi value) ----
+async def pulse_craft(request):
+    """Pulse: fuse 3 items of the same rarity into 1 of the next rarity.
+    New value follows a phi curve. In-game items only."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    c = STATE.chars.get(uid)
+    if not c or not c.get("loot"):
+        return web.json_response({"error": "no loot"}, status=400)
+    rarity = d.get("rarity")
+    loot = c["loot"]
+    # if no rarity given, pick the lowest rarity with >=3 items
+    from collections import Counter
+    counts = Counter(l["rarity"] for l in loot)
+    if rarity is None:
+        avail = [r for r in sorted(counts) if counts[r] >= 3 and r < 5]
+        if not avail:
+            return web.json_response({"error": "need 3 items of the same rarity (below Unique)"}, status=400)
+        rarity = avail[0]
+    rarity = int(rarity)
+    if rarity >= 5:
+        return web.json_response({"error": "cannot upgrade Unique"}, status=400)
+    same = [l for l in loot if l["rarity"] == rarity]
+    if len(same) < 3:
+        return web.json_response({"error": "need 3 items of that rarity"}, status=400)
+    # consume 3, subtract their value from net worth
+    consumed = same[:3]
+    consumed_val = sum(x.get("value", 0) * x.get("qty", 1) for x in consumed)
+    for x in consumed:
+        loot.remove(x)
+    new_rarity = rarity + 1
+    base = [10, 50, 250, 1500, 10000, 50000][new_rarity]
+    new_value = int(base * PHI)   # phi bonus over the base of the new tier
+    new_item = {"code": random.randint(0, 65535), "rarity": new_rarity,
+                "qty": 1, "value": new_value, "crafted": True}
+    loot.append(new_item)
+    c["net_worth"] = c.get("net_worth", 0) - consumed_val + new_value
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(new_item).encode()))
+    return web.json_response({"ok": True, "consumed_rarity": rarity,
+                              "new_item": new_item, "new_rarity": new_rarity,
+                              "net_worth": c["net_worth"],
+                              "note": "Crafting uses in-game items only."})
+
+
+# ---- LIVE ORDER BOOK (phi-spread bids/asks around each stock price) ----
+def _order_book(stock, depth=6):
+    price = stock["price"]
+    # phi-spaced levels; spread widens by phi each level
+    bids, asks = [], []
+    tick = max(0.01, price * 0.001)
+    for i in range(depth):
+        off = tick * (PHI ** i)
+        size_b = int(1000 * (PHI ** (depth - i)) % 100000) + 10
+        size_a = int(1500 * (PHI ** (depth - i)) % 100000) + 10
+        bids.append({"price": round(price - off, 2), "size": size_b})
+        asks.append({"price": round(price + off, 2), "size": size_a})
+    best_bid = bids[0]["price"]
+    best_ask = asks[0]["price"]
+    return {"name": stock["name"], "price": price, "delta": stock.get("delta", 0),
+            "best_bid": best_bid, "best_ask": best_ask,
+            "spread": round(best_ask - best_bid, 2),
+            "bids": bids, "asks": asks}
+
+async def handle_orderbook(request):
+    """GET a phi-spread order book for a symbol (?sym= or first stock)."""
+    STATE.tick_market()
+    sym = request.query.get("sym")
+    stock = None
+    if sym:
+        stock = next((s for s in STATE.stocks if s["name"] == sym.upper()), None)
+    if not stock:
+        stock = STATE.stocks[0]
+    result = _order_book(stock)
+    result["symbols"] = [s["name"] for s in STATE.stocks[:12]]
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -878,6 +1007,8 @@ def make_unified_app():
     app.router.add_get("/api/chest", handle_chest)
     app.router.add_get("/api/chest/{uid}", handle_chest)
     app.router.add_get("/api/worldboss", handle_worldboss)
+    app.router.add_get("/api/chat", handle_chat)
+    app.router.add_get("/api/orderbook", handle_orderbook)
     app.router.add_post("/pulse/trade", pulse_trade)
     app.router.add_post("/pulse/gacha", pulse_gacha)
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
@@ -892,6 +1023,8 @@ def make_unified_app():
     app.router.add_post("/pulse/referral", pulse_referral)
     app.router.add_post("/pulse/chest", pulse_chest)
     app.router.add_post("/pulse/worldboss", pulse_worldboss)
+    app.router.add_post("/pulse/chat", pulse_chat)
+    app.router.add_post("/pulse/craft", pulse_craft)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

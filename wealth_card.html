@@ -47,6 +47,9 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-chest" style="border-color:#FFC800;color:#FFC800">🎁 DAILY CHEST</button>
 <button id="btn-worldboss" style="border-color:#FF4B4B;color:#FF4B4B">🌍 WORLD BOSS</button>
 <button id="btn-worldmap" style="border-color:#00E5FF;color:#00E5FF">🏙 WORLD MAP</button>
+<button id="btn-chat" style="border-color:#00FF8C;color:#00FF8C">💬 CORP CHAT</button>
+<button id="btn-craft" style="border-color:#B14BFF;color:#B14BFF">⚗ CRAFT</button>
+<button id="btn-orderbook" style="border-color:#FFC800;color:#FFC800">📖 ORDER BOOK</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -62,6 +65,17 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
   <div style="margin-top:10px;display:flex;gap:6px">
     <button id="cu-save" style="background:#B14BFF;color:#05060c;border:none;padding:5px 12px;border-radius:3px;cursor:pointer;font-family:inherit">SAVE</button>
     <button id="cu-close" style="background:#1a1a2e;color:#ccc;border:1px solid #333;padding:5px 12px;border-radius:3px;cursor:pointer;font-family:inherit">CLOSE</button>
+  </div>
+</div>
+<div id="chat-panel" style="display:none;position:fixed;top:60px;right:16px;width:280px;background:#0a0b16;border:1px solid #00FF8C;border-radius:6px;padding:10px;z-index:50;font-size:11px;color:#ccc;box-shadow:0 0 24px #00FF8C33">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <b id="chat-title" style="color:#00FF8C">💬 CORP CHAT</b>
+    <button id="chat-close" style="background:none;color:#888;border:none;cursor:pointer;font-size:14px">×</button>
+  </div>
+  <div id="chat-log" style="height:220px;overflow-y:auto;background:#05060c;border:1px solid #1a1a2e;border-radius:3px;padding:6px;font-size:10px;line-height:1.4"></div>
+  <div style="display:flex;gap:4px;margin-top:6px">
+    <input id="chat-in" maxlength="140" placeholder="message your corp..." style="flex:1;background:#12131f;color:#ccc;border:1px solid #333;padding:4px 6px;font-family:monospace;font-size:10px">
+    <button id="chat-send" style="background:#1a1a2e;color:#00FF8C;border:1px solid #00FF8C;padding:4px 10px;cursor:pointer;font-family:monospace;font-size:10px">SEND</button>
   </div>
 </div>
 <style>
@@ -2317,6 +2331,12 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bc=document.getElementById('btn-chest');if(bc)bc.onclick=openChestScreen;}
 {const bw=document.getElementById('btn-worldboss');if(bw)bw.onclick=openWorldBoss;}
 {const bm=document.getElementById('btn-worldmap');if(bm)bm.onclick=openWorldMap;}
+{const bch=document.getElementById('btn-chat');if(bch)bch.onclick=openChat;}
+{const bcr=document.getElementById('btn-craft');if(bcr)bcr.onclick=doCraft;}
+{const bob=document.getElementById('btn-orderbook');if(bob)bob.onclick=()=>showOrderBook();}
+{const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
+{const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
+{const ci=document.getElementById('chat-in');if(ci)ci.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});}
 // auto-fill referral code from ?ref= in URL
 (function(){try{const rp=new URLSearchParams(location.search).get('ref');if(rp){setTimeout(()=>{showReferral();setTimeout(()=>{const el=document.getElementById('ref-in');if(el)el.value=rp;},400);},800);}}catch(e){}})();
 // customization panel
@@ -2534,6 +2554,81 @@ async function redeemReferral(){
         showOverlay('REFERRAL ACCEPTED','+'+fmt(d.your_bonus)+'g for you\nreferrer gets +'+fmt(d.referrer_bonus)+'g');
         loadPlayer(_uid());
     }catch(e){showOverlay('Invite','offline');}
+}
+// ---- CORP CHAT (live pulse-poll) ----
+const CHAT={open:false,lastId:0,timer:null,corpName:''};
+function openChat(){
+    const p=document.getElementById('chat-panel');if(!p)return;
+    CHAT.open=true;CHAT.lastId=0;p.style.display='block';
+    document.getElementById('chat-log').innerHTML='<div style="color:#555">connecting...</div>';
+    pollChat();
+    if(CHAT.timer)clearInterval(CHAT.timer);
+    CHAT.timer=setInterval(pollChat,2500);
+}
+function closeChat(){CHAT.open=false;const p=document.getElementById('chat-panel');if(p)p.style.display='none';if(CHAT.timer){clearInterval(CHAT.timer);CHAT.timer=null;}}
+async function pollChat(){
+    if(!CHAT.open)return;
+    try{
+        const r=await fetch(API+'/api/chat?uid='+_uid()+'&since='+CHAT.lastId);
+        const d=await r.json();
+        CHAT.corpName=d.corp_name;
+        document.getElementById('chat-title').textContent='💬 '+d.corp_name+' CHAT';
+        const log=document.getElementById('chat-log');
+        if(CHAT.lastId===0)log.innerHTML='';
+        if(d.messages&&d.messages.length){
+            for(const m of d.messages){
+                const div=document.createElement('div');
+                const mine=(String(m.uid)===String(_uid()));
+                div.innerHTML='<span style="color:'+(mine?'#FFC800':'#00FF8C')+'">'+m.name+'</span>'+
+                    ' <span style="color:#ccc">'+m.text.replace(/</g,'&lt;')+'</span>';
+                log.appendChild(div);
+            }
+            CHAT.lastId=d.last_id;
+            log.scrollTop=log.scrollHeight;
+        }else if(CHAT.lastId===0){log.innerHTML='<div style="color:#555">no messages yet — say hi!</div>';}
+    }catch(e){}
+}
+async function sendChat(){
+    const el=document.getElementById('chat-in');const text=el?el.value.trim():'';
+    if(!text)return;el.value='';
+    try{
+        await fetch(API+'/pulse/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),text:text})});
+        SND.click();pollChat();
+    }catch(e){}
+}
+// ---- CRAFT (fuse 3 same-rarity items) ----
+async function doCraft(){
+    try{
+        const r=await fetch(API+'/pulse/craft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error){showOverlay('⚗ CRAFT',d.error);return;}
+        SND.promo();triggerWaterfall();
+        const RN=['Common','Uncommon','Rare','Epic','Legendary','Unique'];
+        showOverlay('⚗ CRAFT SUCCESS','3× '+RN[d.consumed_rarity]+'  →  1× '+RN[d.new_rarity]+
+            '\nnew value $'+fmt(d.new_item.value)+'\nnet worth $'+fmt(d.net_worth));
+        loadPlayer(_uid());loadBadges(_uid());
+    }catch(e){showOverlay('Craft','offline');}
+}
+// ---- ORDER BOOK (phi-spread) ----
+let _obSym=null;
+async function showOrderBook(sym){
+    try{
+        const q=sym?('?sym='+sym):'';
+        const r=await fetch(API+'/api/orderbook'+q);const d=await r.json();
+        _obSym=d.name;
+        const row=(o,col)=>'<tr><td style="color:'+col+'">'+o.price.toFixed(2)+'</td><td style="color:#888;text-align:right">'+fmt(o.size)+'</td></tr>';
+        const asks=d.asks.slice().reverse().map(o=>row(o,'#FF3B3B')).join('');
+        const bids=d.bids.map(o=>row(o,'#00FF8C')).join('');
+        const syms=d.symbols.map(s=>'<button onclick="showOrderBook(\''+s+'\')" style="background:'+(s===d.name?'#FFC800':'#1a1a2e')+';color:'+(s===d.name?'#05060c':'#FFC800')+';border:1px solid #FFC800;font-size:8px;padding:1px 4px;margin:1px;cursor:pointer;font-family:monospace">'+s+'</button>').join('');
+        openPanel('<b>📖 ORDER BOOK · '+d.name+'</b>'+
+            '<div style="margin:4px 0">'+syms+'</div>'+
+            '<div style="color:#888;font-size:9px">mid $'+d.price.toFixed(2)+'  ·  spread $'+d.spread.toFixed(2)+'  ·  φ-tiered</div>'+
+            '<table style="width:100%;font-size:10px;font-family:monospace;margin-top:4px">'+
+            '<tr><td style="color:#555">PRICE</td><td style="color:#555;text-align:right">SIZE</td></tr>'+asks+
+            '<tr><td colspan="2" style="border-top:1px solid #333;color:#FFC800;padding:2px 0">'+
+            'bid '+d.best_bid.toFixed(2)+' / ask '+d.best_ask.toFixed(2)+'</td></tr>'+
+            bids+'</table>',12000);
+    }catch(e){showOverlay('Order Book','offline');}
 }
 async function showSeason(){
     try{
