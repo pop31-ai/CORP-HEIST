@@ -108,6 +108,12 @@ function setTheme(idx,instant){
     THEME_TO=Object.assign({},CORP_THEMES[idx]);
     THEME_T=0;
 }
+// day/night phi-cycle: smooth 0..1 (deep night -> bright day), period ~ phi minutes
+function dayNightK(t){
+    // cosine cycle; period scaled by phi so it feels organic
+    const period=TAU*PHI*22;   // ~ few minutes at 60fps
+    return 0.5+0.5*Math.sin(t/PHI/6 - Math.PI/2);
+}
 function tickTheme(){
     if(THEME_T>=1)return;
     THEME_T=Math.min(1,THEME_T+0.035);
@@ -594,6 +600,57 @@ function drawVictory(){
     if(t>=dur)VICTORY.active=false;
 }
 
+// ====== ASCEND: rank-up aura explosion ======
+const ASCENDFX={active:false,t:0,rank:0,mult:0,particles:[]};
+function triggerAscend(rank,mult){
+    ASCENDFX.active=true;ASCENDFX.t=0;ASCENDFX.rank=rank;ASCENDFX.mult=mult;ASCENDFX.particles=[];
+    const golden=2.399963;
+    for(let i=0;i<100;i++){
+        const a=i*golden, sp=1.2+Math.random()*4;
+        ASCENDFX.particles.push({a:a,r:10,sp:sp,life:1,
+            col:Math.random()<0.5?'#FF6BD6':THEME.aura, sz:1+Math.random()*2.4});
+    }
+}
+function drawAscend(){
+    if(!ASCENDFX.active)return;
+    ASCENDFX.t+=0.016;const t=ASCENDFX.t, cx=W/2, cy=H/2, dur=2.6;
+    const k=Math.min(1,t/dur);
+    // radial pink/gold flash
+    X.save();
+    const flash=Math.max(0,0.5-t*0.6);
+    if(flash>0){X.globalAlpha=flash;X.fillStyle='#FF6BD6';X.fillRect(0,0,W,H);}
+    X.restore();
+    // expanding aura shockwave rings (golden-spaced)
+    X.save();
+    for(let rg=0;rg<5;rg++){
+        const rt=t-rg*0.12;if(rt<0)continue;
+        const rr=rt*320/Math.pow(PHI,rg*0.15);
+        X.globalAlpha=Math.max(0,0.55-rt*0.22);
+        X.strokeStyle=rg%2?'#FF6BD6':THEME.aura;X.lineWidth=2.4-rg*0.35;
+        X.beginPath();X.arc(cx,cy,rr,0,TAU);X.stroke();
+    }
+    X.restore();
+    // golden-angle particle burst
+    for(const p of ASCENDFX.particles){
+        p.r+=p.sp;p.sp*=0.97;p.life-=0.008;if(p.life<=0)continue;
+        const px=cx+Math.cos(p.a)*p.r, py=cy+Math.sin(p.a)*p.r;
+        X.globalAlpha=Math.max(0,p.life);X.fillStyle=p.col;
+        X.beginPath();X.arc(px,py,p.sz*p.life+0.4,0,TAU);X.fill();
+    }
+    X.globalAlpha=1;
+    // rising rank banner
+    X.save();
+    X.globalAlpha=Math.min(1,k<0.8?1:(1-(k-0.8)/0.2));
+    X.textAlign='center';X.shadowColor='#FF6BD6';X.shadowBlur=24;
+    const pop=Math.min(1,t*3);
+    X.fillStyle='#FF6BD6';X.font='bold '+(28*pop)+'px monospace';
+    X.fillText('ASCENDED',cx,cy-6-t*12);
+    X.shadowColor=THEME.aura;X.shadowBlur=14;X.fillStyle=THEME.aura;X.font='bold 16px monospace';
+    X.fillText('PRESTIGE '+ASCENDFX.rank+'  ·  ×'+ASCENDFX.mult,cx,cy+20-t*12);
+    X.restore();X.globalAlpha=1;
+    if(t>=dur)ASCENDFX.active=false;
+}
+
 // ====== SEASON FINALE: top-3 podium screen ======
 const FINALE={active:false,t:0,data:null,confetti:[]};
 async function openFinale(){
@@ -716,6 +773,51 @@ function drawPrestigeAura(t){
     X.globalAlpha=1;
 }
 
+// ====== LIVE TRADE TICKER (scrolling marquee) ======
+let TICKER_X=0;
+function drawTicker(t){
+    const ty=H-48, th=13;
+    X.fillStyle='#05060c';X.fillRect(0,ty,W,th);
+    X.strokeStyle=THEME.accent+'40';X.lineWidth=0.5;
+    X.beginPath();X.moveTo(0,ty);X.lineTo(W,ty);X.stroke();
+    X.beginPath();X.moveTo(0,ty+th);X.lineTo(W,ty+th);X.stroke();
+
+    // build ticker segments from portfolio + a synthetic tape
+    const segs=[];
+    (P.stocks||[]).forEach(s=>segs.push({sym:s.name,price:s.price,delta:s.delta}));
+    const tape=['φDUEL','RAID','ASCEND','GUILD','SEASON','GOLD','AUREATE','NOVA','PULSAR'];
+    tape.forEach((sym,i)=>segs.push({sym:sym,price:100*Math.pow(PHI,(i%4)),delta:Math.sin(t+i)*3}));
+    if(!segs.length)return;
+
+    TICKER_X-=1.1; // scroll speed
+    const spacing=150;
+    const totalW=segs.length*spacing;
+    if(TICKER_X<=-totalW)TICKER_X+=totalW;
+
+    X.save();
+    X.beginPath();X.rect(0,ty,W,th);X.clip();
+    X.font='8px monospace';X.textAlign='left';X.textBaseline='middle';
+    // draw two passes so it wraps seamlessly
+    for(let pass=0;pass<Math.ceil(W/totalW)+2;pass++){
+        for(let i=0;i<segs.length;i++){
+            const s=segs[i];
+            const x=TICKER_X + pass*totalW + i*spacing + 8;
+            if(x>W||x<-spacing)continue;
+            const up=s.delta>=0;
+            X.fillStyle=THEME.accent;X.fillText(s.sym,x,ty+th/2);
+            const symW=s.sym.length*4.8+6;
+            X.fillStyle='#aaa';X.fillText('$'+(s.price).toFixed(1),x+symW,ty+th/2);
+            X.fillStyle=up?'#00FF8C':'#FF4B4B';
+            X.fillText((up?'▲':'▼')+Math.abs(s.delta).toFixed(1)+'%',x+symW+42,ty+th/2);
+        }
+    }
+    X.restore();
+    X.textBaseline='alphabetic';
+    // "LIVE" badge
+    X.fillStyle='#FF4B4B';X.globalAlpha=0.6+0.4*Math.sin(t*4);
+    X.beginPath();X.arc(6,ty+th/2,2,0,TAU);X.fill();X.globalAlpha=1;
+}
+
 // ====== CORP EMBLEM (phi-fractal logo, seeded by corp index) ======
 // Nested phi-scaled polygons rotating by the golden angle; sides & petals
 // derive from the corp index so every corp gets a distinct mark.
@@ -830,11 +932,42 @@ function drawGoldenSpiralLayered(cx,cy,maxR,turns,t,col){
 function render(){
     const t=frame*0.018;frame++;
     tickTheme();
-    // corp-themed background with subtle centered vignette
-    X.fillStyle=THEME.bg;X.fillRect(0,0,W,H);
+    // day/night phi-cycle: shift bg brightness + a sky gradient overhead
+    const dn=dayNightK(t);   // 0 night .. 1 day
+    // corp-themed background, brightened toward "day"
+    X.fillStyle=lerpHex(THEME.bg, lerpHex(THEME.bg, THEME.accent, 0.14), dn);
+    X.fillRect(0,0,W,H);
+    // sky gradient: cool/dark at night, warm accent glow by day (top-down)
+    const sky=X.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0, THEME.accent + (dn>0.5?'22':'0c'));
+    sky.addColorStop(0.5,'#00000000');
+    sky.addColorStop(1, dn<0.4?'#0006':'#00000000');
+    X.fillStyle=sky;X.fillRect(0,0,W,H);
+    // drifting stars at night / faint sun-motes by day
+    X.save();
+    const motes=40;
+    for(let i=0;i<motes;i++){
+        const mx=(i*137.5 + t*(6+ (i%5)))%W;
+        const my=(i*61.8)%(H*0.55);
+        const tw=0.5+0.5*Math.sin(t*2+i);
+        X.globalAlpha=(dn<0.5? (1-dn*1.6)*tw*0.6 : dn*tw*0.25);
+        X.fillStyle=dn<0.5?'#cfe0ff':THEME.accent;
+        X.beginPath();X.arc(mx,my,dn<0.5?0.8:1.1,0,TAU);X.fill();
+    }
+    X.restore();X.globalAlpha=1;
+    // centered vignette
     const vg=X.createRadialGradient(W/2,H/2,60,W/2,H/2,Math.max(W,H)*0.75);
-    vg.addColorStop(0,THEME.accent+'10');vg.addColorStop(1,'#00000000');
+    vg.addColorStop(0,THEME.accent+(dn>0.5?'18':'10'));vg.addColorStop(1,'#00000000');
     X.fillStyle=vg;X.fillRect(0,0,W,H);
+    // sun/moon marker riding a phi-arc across the top
+    const cyc=(t/PHI/6)%TAU;
+    const smx=W*0.5 + Math.cos(cyc-Math.PI/2)*W*0.42;
+    const smy=H*0.30 - Math.sin(cyc-Math.PI/2)*H*0.20;
+    X.save();X.globalAlpha=0.5;
+    if(dn>0.5){X.fillStyle='#FFDA6B';X.shadowColor='#FFDA6B';X.shadowBlur=18;X.beginPath();X.arc(smx,smy,7,0,TAU);X.fill();}
+    else{X.fillStyle='#cfe0ff';X.shadowColor='#8fb0ff';X.shadowBlur=10;X.beginPath();X.arc(smx,smy,5,0,TAU);X.fill();
+         X.globalCompositeOperation='destination-out';X.beginPath();X.arc(smx+2.5,smy-2,5,0,TAU);X.fill();X.globalCompositeOperation='source-over';}
+    X.restore();X.globalAlpha=1;
 
     const nw=P.netWorth;const tier=Math.min(5,Math.floor(Math.log10(Math.max(1,nw))/1.5));
     // accent = corp theme; keep tier color available for rarity-driven bits
@@ -1004,6 +1137,9 @@ function render(){
         X.fillStyle='#444';X.fillText('φ-fractal Titan · corp coop',tX,by+200);
     }
 
+    // === LIVE TRADE TICKER (scrolling marquee above footer) ===
+    drawTicker(t);
+
     // footer + disclaimer
     X.fillStyle='#1a1a2e';X.fillRect(0,H-35,W,35);
     X.fillStyle='#333';X.font='5.5px monospace';X.textAlign='center';
@@ -1015,6 +1151,9 @@ function render(){
 
     // === VICTORY OVERLAY (full-screen phi loot-burst) ===
     drawVictory();
+
+    // === ASCEND rank-up aura explosion ===
+    drawAscend();
 
     // === SEASON FINALE (full-screen podium) ===
     drawFinale();
@@ -1232,7 +1371,8 @@ async function doAscend(){
         const r=await fetch(API+'/pulse/prestige',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
         const d=await r.json();
         if(d.error){showOverlay('Ascend',d.error);return;}
-        showOverlay('ASCENDED','prestige rank '+d.prestige+'  (x'+d.new_mult+')\n'+d.note);
+        triggerAscend(d.prestige,d.new_mult);
+        hideOverlay();
         loadPlayer(_uid());
     }catch(e){showOverlay('Ascend','offline');}
 }
