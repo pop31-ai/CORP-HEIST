@@ -46,24 +46,39 @@ CARD_PORTS = list(range(8080, 8110))  # 30 ports
 NUM_CHARS  = 500
 MARKET_TICK_SEC = 3
 HEALTH_CHECK_SEC = 30
+SAVE_INTERVAL_SEC = 30
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+CHARS_DIR = os.path.join(DATA_DIR, "chars")
 
 
 # ============================================================
-# SHARED STATE (single process memory)
+# FILE-BASED STORAGE (JSON per user, no DB server)
 # ============================================================
 
 class SharedState:
-    """All data lives here. No IPC, no replication."""
+    """All data lives as JSON files. No DB, no SQLite, no server."""
 
     def __init__(self):
-        self.stocks = self._init_stocks()
+        os.makedirs(CHARS_DIR, exist_ok=True)
+        self.stocks = self._load_market()
         self.chars = {}
         self.request_count = 0
         self.bytes_sent = 0
         self.bytes_recv = 0
         self.start_time = time.time()
-        self.port_users = defaultdict(int)  # port -> active users
-        self._lock = asyncio.Lock()
+        self._dirty = set()  # uids pending save
+
+    def _load_market(self):
+        path = os.path.join(DATA_DIR, "market.json")
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return json.load(f)
+        return self._init_stocks()
+
+    def _save_market(self):
+        path = os.path.join(DATA_DIR, "market.json")
+        with open(path, "w") as f:
+            json.dump(self.stocks, f)
 
     def _init_stocks(self):
         names = ["ALPHA","BETA","GAMMA","DELTA","OMEGA","SIGMA","THETA",
@@ -80,9 +95,55 @@ class SharedState:
             s["price"] = round(max(0.01, s["price"] + change), 2)
             s["volume"] = max(100, s["volume"] + random.randint(-5000, 5000))
 
+    # --- CHAR FILE I/O ---
+
+    def _char_path(self, uid):
+        return os.path.join(CHARS_DIR, f"{uid}.json")
+
+    def load_char(self, uid):
+        path = self._char_path(uid)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r") as f:
+            return json.load(f)
+
+    def save_char(self, uid):
+        c = self.chars.get(uid)
+        if not c:
+            return
+        path = self._char_path(uid)
+        with open(path, "w") as f:
+            json.dump(c, f, indent=None)
+        self._dirty.discard(uid)
+
+    def save_all(self):
+        """Save all dirty chars to disk."""
+        for uid in list(self._dirty):
+            self.save_char(uid)
+        self._save_market()
+
+    def load_all_chars(self):
+        """Load all char files from disk."""
+        loaded = 0
+        for fname in os.listdir(CHARS_DIR):
+            if fname.endswith(".json"):
+                uid = int(fname[:-5])
+                self.chars[uid] = self.load_char(uid)
+                loaded += 1
+        return loaded
+
+    def mark_dirty(self, uid):
+        self._dirty.add(uid)
+
+    # --- INIT (generate if no files) ---
+
     def init_chars(self, n=500):
-        CORPS = ["MERIDIAN","APEX","NOVA","VERTEX","PULSAR",
-                 "CIPHER","HELIX","TITAN","ATLAS","ZENITH"]
+        loaded = self.load_all_chars()
+        if loaded > 0:
+            log.info(f"loaded {loaded} chars from files")
+            return
+        log.info(f"generating {n} demo chars...")
+        CORPS = ["MERIDIAN","APEX","NOVA","VERTEX","PULSAR"]
         RAR_W = [7000,2000,700,250,40,10]
         for i in range(n):
             uid = 1000 + i
@@ -118,6 +179,9 @@ class SharedState:
                 "passives":[random.randint(0,10) for _ in range(12)],
                 "history":hist,"stocks":stocks,"loot":loot,
             }
+            self.mark_dirty(uid)
+        self.save_all()
+        log.info(f"saved {n} chars to {CHARS_DIR}")
 
     def track(self, sent=0, recv=0):
         self.request_count += 1
@@ -126,12 +190,14 @@ class SharedState:
 
     def stats(self):
         uptime = time.time() - self.start_time
+        files = len([f for f in os.listdir(CHARS_DIR) if f.endswith(".json")])
         return {
             "uptime_sec": round(uptime),
             "requests": self.request_count,
             "bytes_sent": self.bytes_sent,
             "bytes_recv": self.bytes_recv,
-            "chars": len(self.chars),
+            "chars": files,
+            "dirty": len(self._dirty),
             "stocks": len(self.stocks),
             "traffic_saved_pct": round(87 + random.random()*3, 1),
         }
@@ -238,6 +304,8 @@ async def pulse_trade(request):
         c["gold"] += int(cost)
         c["net_worth"] += int(cost)
     STATE.track(sent=50)
+    STATE.mark_dirty(uid)
+    STATE.save_char(uid)
     return web.json_response({"ok": True, "gold": c["gold"], "side": side,
                               "stock": stock_name, "amount": amount,
                               "price": ms["price"]})
@@ -269,6 +337,8 @@ async def pulse_gacha(request):
         rarity = 0  # Common 33%
     hero_id = random.randint(0, 9)
     STATE.track(sent=20)
+    STATE.mark_dirty(uid)
+    STATE.save_char(uid)
     return web.json_response({"ok": True, "hero_id": hero_id,
                               "rarity": rarity, "pity": c["gacha_pity"]})
 
@@ -290,6 +360,8 @@ async def pulse_loot_sell(request):
     gold = item["value"] * qty
     c["gold"] += gold
     STATE.track(sent=30)
+    STATE.mark_dirty(uid)
+    STATE.save_char(uid)
     return web.json_response({"ok": True, "gold": c["gold"], "earned": gold})
 
 async def pulse_donate(request):
@@ -306,6 +378,8 @@ async def pulse_donate(request):
     c["gold"] += gold
     c["loot"].pop(ri)
     STATE.track(sent=30)
+    STATE.mark_dirty(uid)
+    STATE.save_char(uid)
     return web.json_response({"ok": True, "gold": c["gold"], "donated_rarity": item["rarity"],
                               "multiplier": mult, "earned": gold})
 
@@ -328,6 +402,8 @@ async def pulse_buy_gold(request):
     c["gold"] += p["gold"]
     c["net_worth"] += p["gold"]
     STATE.track(sent=30)
+    STATE.mark_dirty(uid)
+    STATE.save_char(uid)
     return web.json_response({"ok": True, "gold": c["gold"], "paid_usd": p["usd"],
                               "paid_rub": p["rub"], "received": p["gold"]})
 
@@ -341,6 +417,8 @@ async def pulse_money_back(request):
     refund = int(c["gold"] * 0.15)
     c["gold"] -= refund
     STATE.track(sent=30)
+    STATE.mark_dirty(uid)
+    STATE.save_char(uid)
     return web.json_response({"ok": True, "refund": refund, "gold": c["gold"],
                               "compliance": "14-ФЗ"})
 
@@ -447,8 +525,16 @@ async def market_loop():
 async def health_loop():
     while True:
         s = STATE.stats()
-        log.info(f"health: req={s['requests']} sent={s['bytes_sent']}B chars={s['chars']} uptime={s['uptime_sec']}s")
+        log.info(f"health: req={s['requests']} sent={s['bytes_sent']}B chars={s['chars']} dirty={s['dirty']} uptime={s['uptime_sec']}s")
         await asyncio.sleep(HEALTH_CHECK_SEC)
+
+async def autosave_loop():
+    """Save dirty chars to disk every N seconds."""
+    while True:
+        await asyncio.sleep(SAVE_INTERVAL_SEC)
+        if STATE._dirty:
+            STATE.save_all()
+            log.info(f"autosave: {len(STATE._dirty)} chars saved")
 
 
 # ============================================================
@@ -492,6 +578,7 @@ async def main():
     loop = asyncio.get_event_loop()
     loop.create_task(market_loop())
     loop.create_task(health_loop())
+    loop.create_task(autosave_loop())
 
     # dashboard
     await run_port(make_dashboard_app(), CMD_PORT)
