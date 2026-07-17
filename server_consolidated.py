@@ -43,6 +43,7 @@ from golden_econ import (
     daily_quests, claim_quest,
     evaluate_achievements, claim_achievements,
     referral_code, referral_status, accept_referral,
+    chest_status, open_chest, WorldBoss,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -227,6 +228,7 @@ GUILDS = GuildSystem(STATE)
 ARENA = Arena(STATE)
 PRESTIGE = Prestige(STATE)
 RAID = Raid(STATE)
+WORLDBOSS = WorldBoss(STATE)
 
 
 # ============================================================
@@ -647,6 +649,49 @@ async def pulse_referral(request):
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
 
+
+async def handle_chest(request):
+    """GET daily chest status for a player."""
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    result = chest_status(STATE, uid)
+    if "error" in result:
+        return web.json_response(result, status=404)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_chest(request):
+    """Pulse: open today's golden chest (in-game gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = open_chest(STATE, uid)
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+async def handle_worldboss(request):
+    """GET the global world-boss status (shared HP)."""
+    result = WORLDBOSS.status()
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_worldboss(request):
+    """Pulse: strike the global world boss."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = WORLDBOSS.strike(uid)
+    if "error" in result and "boss_hp" not in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -830,6 +875,9 @@ def make_unified_app():
     app.router.add_get("/api/achievements/{uid}", handle_achievements)
     app.router.add_get("/api/referral", handle_referral)
     app.router.add_get("/api/referral/{uid}", handle_referral)
+    app.router.add_get("/api/chest", handle_chest)
+    app.router.add_get("/api/chest/{uid}", handle_chest)
+    app.router.add_get("/api/worldboss", handle_worldboss)
     app.router.add_post("/pulse/trade", pulse_trade)
     app.router.add_post("/pulse/gacha", pulse_gacha)
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
@@ -842,6 +890,8 @@ def make_unified_app():
     app.router.add_post("/pulse/quest", pulse_quest)
     app.router.add_post("/pulse/achievements", pulse_achievements)
     app.router.add_post("/pulse/referral", pulse_referral)
+    app.router.add_post("/pulse/chest", pulse_chest)
+    app.router.add_post("/pulse/worldboss", pulse_worldboss)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

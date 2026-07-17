@@ -44,6 +44,9 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-customize" style="border-color:#B14BFF;color:#B14BFF">🎨 CUSTOMIZE</button>
 <button id="btn-achieve" style="border-color:#FFC800;color:#FFC800">🏅 BADGES</button>
 <button id="btn-referral" style="border-color:#00E5FF;color:#00E5FF">👥 INVITE</button>
+<button id="btn-chest" style="border-color:#FFC800;color:#FFC800">🎁 DAILY CHEST</button>
+<button id="btn-worldboss" style="border-color:#FF4B4B;color:#FF4B4B">🌍 WORLD BOSS</button>
+<button id="btn-worldmap" style="border-color:#00E5FF;color:#00E5FF">🏙 WORLD MAP</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -892,6 +895,231 @@ function drawFinale(){
     X.fillText(d.note,cx,H-24);
     X.fillStyle='#FFC800';X.globalAlpha=0.6+0.4*Math.sin(t*3);
     X.fillText('▸ click / tap anywhere to close ◂',cx,H-10);X.globalAlpha=1;
+}
+
+// ====== WORLD MAP (7 corp towers, live net-worth heights) ======
+const WMAP={active:false,t:0,corps:[],polling:false};
+const WMAP_COLORS=['#00E5FF','#FF7A00','#B14BFF','#00FF8C','#FF4B7A','#FFC800','#FFE24B'];
+async function openWorldMap(){WMAP.active=true;WMAP.t=0;await refreshWorldMap();}
+async function refreshWorldMap(){
+    try{const d=await (await fetch(API+'/api/guilds')).json();WMAP.corps=d||[];}catch(e){}
+}
+function drawWorldMap(){
+    if(!WMAP.active)return;
+    WMAP.t+=0.016;const t=WMAP.t;const k=Math.min(1,t/0.4);
+    if(frame%180===0 && !WMAP.polling){WMAP.polling=true;refreshWorldMap().finally(()=>{WMAP.polling=false;});}
+    // dusk sky gradient
+    X.save();
+    const sky=X.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0,'#0a0f1e');sky.addColorStop(0.6,'#1a1030');sky.addColorStop(1,'#050609');
+    X.globalAlpha=0.97*k;X.fillStyle=sky;X.fillRect(0,0,W,H);X.restore();
+    // stars
+    X.globalAlpha=0.5*k;X.fillStyle='#fff';
+    for(let i=0;i<40;i++){const sx=(i*137.5)%W,sy=(i*53.7)%(H*0.4);
+        if((Math.sin(t*2+i)+1)>1.2)X.fillRect(sx,sy,1,1);}
+    X.globalAlpha=1;
+    X.textAlign='center';X.fillStyle='#00E5FF';X.font='bold 22px monospace';
+    X.shadowColor='#00E5FF';X.shadowBlur=14*k;X.fillText('CORP SKYLINE',W/2,H*0.1);X.shadowBlur=0;
+    const corps=WMAP.corps;
+    if(!corps.length){X.fillStyle='#888';X.font='11px monospace';X.fillText('loading...',W/2,H/2);return;}
+    const n=corps.length;
+    const maxNet=Math.max(...corps.map(c=>c.net||1));
+    const groundY=H*0.88, towerW=(W-80)/n*0.62, gap=(W-80)/n;
+    for(let i=0;i<n;i++){
+        const c=corps[i];const col=WMAP_COLORS[i%WMAP_COLORS.length];
+        const rel=Math.log10(Math.max(10,c.net))/Math.log10(Math.max(100,maxNet));
+        // height grows on a phi curve of relative wealth
+        const th=(H*0.5)*Math.pow(rel,1/PHI)*Math.min(1,(t-i*0.08)*2);
+        if(th<=1)continue;
+        const tx=40+gap*i+(gap-towerW)/2;
+        const ty=groundY-th;
+        // tower body
+        X.fillStyle='#0c0e18';X.fillRect(tx,ty,towerW,th);
+        X.strokeStyle=col;X.lineWidth=1.2;X.strokeRect(tx,ty,towerW,th);
+        // lit windows (live flicker)
+        const rows=Math.floor(th/9),cols=Math.max(2,Math.floor(towerW/7));
+        for(let r=0;r<rows;r++)for(let cc=0;cc<cols;cc++){
+            const seed=(i*31+r*7+cc*3);
+            const lit=(Math.sin(t*1.5+seed)+1)/2 > 0.45;
+            X.globalAlpha=lit?(0.5+0.4*Math.sin(t*3+seed)):0.06;
+            X.fillStyle=lit?col:'#111';
+            X.fillRect(tx+3+cc*(towerW-6)/cols, ty+4+r*9, (towerW-6)/cols-1.5, 5);
+        }
+        X.globalAlpha=1;
+        // rooftop beacon
+        X.fillStyle=col;X.shadowColor=col;X.shadowBlur=8+4*Math.sin(t*4+i);
+        X.beginPath();X.arc(tx+towerW/2,ty-3,2.5,0,TAU);X.fill();X.shadowBlur=0;
+        // rank crown on tallest
+        if(c.rank===1){X.fillStyle='#FFC800';X.font='12px monospace';X.fillText('👑',tx+towerW/2,ty-10);}
+        // labels
+        X.save();X.translate(tx+towerW/2,groundY+12);
+        X.fillStyle=col;X.font='bold 8px monospace';X.textAlign='center';
+        X.fillText(c.name,0,0);
+        X.fillStyle='#888';X.font='7px monospace';
+        X.fillText('$'+fmt(c.net),0,10);
+        X.fillStyle='#555';X.fillText('#'+c.rank+' · '+(c.members||0)+'👤',0,19);
+        X.restore();
+    }
+    // ground line
+    X.strokeStyle='#00E5FF44';X.lineWidth=1;X.beginPath();X.moveTo(0,groundY);X.lineTo(W,groundY);X.stroke();
+    X.fillStyle='#00E5FF';X.globalAlpha=0.5;X.font='9px monospace';X.textAlign='center';
+    X.fillText('▸ live corp net worth · click / ESC to close ◂',W/2,H-8);X.globalAlpha=1;
+}
+
+// ====== DAILY GOLDEN CHEST (fullscreen open animation) ======
+const CHEST={active:false,t:0,reward:0,streak:0,opened:false,coins:[],done:false};
+async function openChestScreen(){
+    try{
+        const s=await (await fetch(API+'/api/chest/'+_uid())).json();
+        CHEST.active=true;CHEST.t=0;CHEST.opened=false;CHEST.done=false;CHEST.coins=[];
+        CHEST.reward=s.reward_preview||0;CHEST.streak=s.chest_streak||0;
+        CHEST.available=!!s.available;CHEST.secs=s.seconds_left||0;
+    }catch(e){showOverlay('Chest','offline');}
+}
+async function doOpenChest(){
+    if(!CHEST.available||CHEST.opened)return;
+    CHEST.opened=true;
+    try{
+        const r=await fetch(API+'/pulse/chest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error){showOverlay('Chest',d.error);CHEST.active=false;return;}
+        CHEST.reward=d.reward_gold;CHEST.streak=d.chest_streak;
+        SND.victory();
+        // burst of coins from the chest
+        for(let i=0;i<70;i++){const a=-Math.PI/2+(Math.random()-0.5)*2.2,sp=3+Math.random()*7;
+            CHEST.coins.push({x:W/2,y:H*0.55,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,sz:2+Math.random()*3});}
+        CHEST.done=true;
+        loadPlayer(_uid());loadBadges(_uid());
+    }catch(e){showOverlay('Chest','offline');}
+}
+function drawChest(){
+    if(!CHEST.active)return;
+    CHEST.t+=0.016;const t=CHEST.t;const k=Math.min(1,t/0.4);
+    X.save();X.globalAlpha=0.95*k;X.fillStyle='#04050a';X.fillRect(0,0,W,H);X.restore();
+    const g=X.createRadialGradient(W/2,H*0.5,20,W/2,H*0.5,W*0.5);
+    g.addColorStop(0,'#FFC80022');g.addColorStop(1,'#00000000');
+    X.globalAlpha=k;X.fillStyle=g;X.fillRect(0,0,W,H);X.globalAlpha=1;
+    X.textAlign='center';X.fillStyle='#FFC800';X.font='bold 22px monospace';
+    X.shadowColor='#FFC800';X.shadowBlur=16*k;X.fillText('DAILY GOLDEN CHEST',W/2,H*0.18);X.shadowBlur=0;
+    // chest body (phi-proportioned)
+    const cw=140,ch=cw/PHI, cx=W/2-cw/2, cy=H*0.5-ch/2;
+    const shake=CHEST.opened&&!CHEST.done?Math.sin(t*40)*2:0;
+    X.save();X.translate(shake,0);
+    X.fillStyle='#5a3a10';X.strokeStyle='#FFC800';X.lineWidth=3;
+    X.fillRect(cx,cy,cw,ch);X.strokeRect(cx,cy,cw,ch);
+    // lid
+    const lidOpen=CHEST.done?Math.min(1,(t-(CHEST._doneT||(CHEST._doneT=t)))*3):0;
+    X.save();X.translate(cx,cy);X.rotate(-lidOpen*1.1);
+    X.fillStyle='#6b4512';X.strokeStyle='#FFE24B';X.lineWidth=3;
+    X.fillRect(0,-ch*0.35,cw,ch*0.35);X.strokeRect(0,-ch*0.35,cw,ch*0.35);
+    X.restore();
+    // lock / phi emblem
+    X.fillStyle='#FFC800';X.beginPath();X.arc(cx+cw/2,cy+ch*0.4,10,0,TAU);X.fill();
+    X.fillStyle='#5a3a10';X.font='bold 12px monospace';X.fillText('φ',cx+cw/2,cy+ch*0.4+4);
+    X.restore();
+    // inner glow when opening
+    if(CHEST.done){X.globalAlpha=Math.max(0,1-(t-(CHEST._doneT||t)));
+        X.fillStyle='#FFF6C0';X.fillRect(cx,cy-ch*0.1,cw,ch*0.4);X.globalAlpha=1;}
+    // coins
+    for(let i=CHEST.coins.length-1;i>=0;i--){const c=CHEST.coins[i];c.x+=c.vx;c.y+=c.vy;c.vy+=0.22;c.life-=0.012;
+        if(c.life<=0){CHEST.coins.splice(i,1);continue;}
+        X.globalAlpha=Math.max(0,c.life);X.fillStyle='#FFC800';X.shadowColor='#FFC800';X.shadowBlur=6;
+        X.beginPath();X.arc(c.x,c.y,c.sz,0,TAU);X.fill();}
+    X.shadowBlur=0;X.globalAlpha=1;
+    // text state
+    X.fillStyle='#ccc';X.font='11px monospace';X.textAlign='center';
+    if(CHEST.done){
+        X.fillStyle='#FFC800';X.font='bold 16px monospace';
+        X.fillText('+'+fmt(CHEST.reward)+' GOLD',W/2,H*0.78);
+        X.fillStyle='#888';X.font='10px monospace';X.fillText('chest streak '+CHEST.streak+' 🔥',W/2,H*0.78+20);
+    }else if(CHEST.available){
+        X.fillStyle='#FFE24B';X.globalAlpha=0.6+0.4*Math.sin(t*4);
+        X.fillText('▸ click the chest to OPEN (+'+fmt(CHEST.reward)+'g) ◂',W/2,H*0.78);X.globalAlpha=1;
+    }else{
+        const hrs=Math.floor(CHEST.secs/3600),mins=Math.floor((CHEST.secs%3600)/60);
+        X.fillStyle='#888';X.fillText('already opened · next in '+hrs+'h '+mins+'m',W/2,H*0.78);
+    }
+    X.fillStyle='#FFC800';X.globalAlpha=0.5;X.font='9px monospace';
+    X.fillText(CHEST.done?'▸ click to close ◂':'',W/2,H-10);X.globalAlpha=1;
+    // click zone handled in canvas click listener
+}
+
+// ====== WORLD BOSS (fullscreen, shared global HP) ======
+const WBOSS={active:false,t:0,data:null,flash:0,hits:[],polling:false};
+async function openWorldBoss(){
+    WBOSS.active=true;WBOSS.t=0;WBOSS.hits=[];
+    await refreshWorldBoss();
+}
+async function refreshWorldBoss(){
+    try{WBOSS.data=await (await fetch(API+'/api/worldboss')).json();}catch(e){}
+}
+async function strikeWorldBoss(){
+    try{
+        const r=await fetch(API+'/pulse/worldboss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error&&d.boss_hp===undefined){showOverlay('World Boss',d.error);return;}
+        WBOSS.flash=1;SND.duelHit();
+        for(let s=0;s<20;s++){const a=Math.random()*TAU,sp=1+Math.random()*4;
+            WBOSS.hits.push({x:W/2,y:H*0.42,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1});}
+        if(d.defeated){SND.victory();for(let i=0;i<10;i++)setTimeout(launchFirework,i*80);
+            showOverlay('WORLD BOSS DOWN','your reward +'+fmt(d.my_reward||0)+'g');loadPlayer(_uid());}
+        await refreshWorldBoss();
+    }catch(e){}
+}
+function drawWorldBoss(){
+    if(!WBOSS.active)return;
+    WBOSS.t+=0.016;const t=WBOSS.t;const k=Math.min(1,t/0.4);
+    if(frame%120===0 && !WBOSS.polling){WBOSS.polling=true;refreshWorldBoss().finally(()=>{WBOSS.polling=false;});}
+    WBOSS.flash=Math.max(0,WBOSS.flash-0.04);
+    X.save();X.globalAlpha=0.95*k;X.fillStyle='#0a0406';X.fillRect(0,0,W,H);X.restore();
+    const d=WBOSS.data;
+    X.textAlign='center';X.fillStyle='#FF4B4B';X.font='bold 22px monospace';
+    X.shadowColor='#FF4B4B';X.shadowBlur=16*k;X.fillText('WORLD BOSS',W/2,H*0.12);X.shadowBlur=0;
+    if(!d){X.fillStyle='#888';X.font='11px monospace';X.fillText('loading...',W/2,H/2);X.globalAlpha=1;return;}
+    X.fillStyle='#FFC800';X.font='14px monospace';X.fillText(d.boss,W/2,H*0.12+22);
+    // giant phi-fractal beast at center
+    const cx=W/2,cy=H*0.42,r=Math.min(W,H)*0.2*(1+WBOSS.flash*0.05);
+    const golden=2.399963;
+    X.save();X.translate(cx,cy);X.rotate(t*0.15);
+    for(let l=0;l<6;l++){
+        X.globalAlpha=0.85-l*0.12;X.strokeStyle=WBOSS.flash>0.3?'#fff':(l%2?'#FF4B4B':'#FF9B00');
+        X.lineWidth=2.4-l*0.3;const sides=3+l;
+        X.beginPath();
+        for(let s=0;s<=sides;s++){const a=s*TAU/sides+l*golden+t*(0.3+l*0.05);
+            const rr=r/(Math.pow(PHI,l*0.5))*(1+0.05*Math.sin(a*3+t));
+            s===0?X.moveTo(Math.cos(a)*rr,Math.sin(a)*rr):X.lineTo(Math.cos(a)*rr,Math.sin(a)*rr);}
+        X.stroke();X.rotate(golden*0.4);
+    }
+    // golden-angle limbs
+    X.globalAlpha=0.6;X.strokeStyle='#FF9B00';X.lineWidth=2;
+    for(let i=0;i<8;i++){const a=i*golden+t*0.2;X.beginPath();X.moveTo(0,0);
+        X.lineTo(Math.cos(a)*r*1.3,Math.sin(a)*r*1.3);X.stroke();}
+    X.globalAlpha=1;X.fillStyle='#FF4B4B';X.shadowColor='#FF4B4B';X.shadowBlur=16;
+    X.beginPath();X.arc(0,0,r*0.14,0,TAU);X.fill();X.restore();X.shadowBlur=0;
+    // shared HP bar
+    const bw=W*0.7,bx=W/2-bw/2,byy=H*0.68,bh=22;
+    const pct=Math.max(0,d.pct)/100;
+    X.fillStyle='#1a0a0a';X.fillRect(bx,byy,bw,bh);
+    const hg=X.createLinearGradient(bx,0,bx+bw,0);hg.addColorStop(0,'#FF9B00');hg.addColorStop(1,'#FF4B4B');
+    X.fillStyle=hg;X.fillRect(bx,byy,bw*pct,bh);
+    // phi tick marks
+    X.strokeStyle='#000';X.globalAlpha=0.4;X.lineWidth=1;
+    for(let i=1;i<8;i++){const tx=bx+bw*(1-1/Math.pow(PHI,i));X.beginPath();X.moveTo(tx,byy);X.lineTo(tx,byy+bh);X.stroke();}
+    X.globalAlpha=1;X.strokeStyle='#FF4B4B';X.lineWidth=1.5;X.strokeRect(bx,byy,bw,bh);
+    X.fillStyle='#fff';X.font='bold 11px monospace';X.textAlign='center';
+    X.fillText(fmt(d.hp)+' / '+fmt(d.max_hp)+'  ('+d.pct.toFixed(3)+'%)',W/2,byy+bh+14);
+    X.fillStyle='#888';X.font='9px monospace';
+    X.fillText(d.participants+' fighters  ·  pool '+fmt(d.loot_pool)+'g  ·  shared by everyone',W/2,byy+bh+28);
+    // hit particles
+    for(let i=WBOSS.hits.length-1;i>=0;i--){const s=WBOSS.hits[i];s.x+=s.vx;s.y+=s.vy;s.vy+=0.06;s.life-=0.03;
+        if(s.life<=0){WBOSS.hits.splice(i,1);continue;}
+        X.globalAlpha=s.life;X.fillStyle='#FFC800';X.beginPath();X.arc(s.x,s.y,2,0,TAU);X.fill();}
+    X.globalAlpha=1;
+    // strike prompt
+    X.fillStyle='#FF4B4B';X.globalAlpha=0.6+0.4*Math.sin(t*4);X.font='bold 13px monospace';
+    X.fillText(d.defeated?'☠ DEFEATED ☠':'▸ click the boss to STRIKE ◂',W/2,H*0.58);X.globalAlpha=1;
+    X.fillStyle='#888';X.globalAlpha=0.5;X.font='9px monospace';
+    X.fillText('▸ press ESC or double-click to close ◂',W/2,H-8);X.globalAlpha=1;
 }
 
 // ====== PVP DUEL REPLAY (two cards side-by-side, phi-blow exchange) ======
@@ -1886,6 +2114,15 @@ function render(){
     // === PHI TOURNAMENT (full-screen 8-fighter bracket) ===
     drawTourney();
 
+    // === DAILY GOLDEN CHEST (full-screen) ===
+    drawChest();
+
+    // === WORLD BOSS (full-screen shared HP) ===
+    drawWorldBoss();
+
+    // === WORLD MAP (full-screen corp skyline) ===
+    drawWorldMap();
+
     if(!paused)requestAnimationFrame(render);
 }
 
@@ -2077,6 +2314,9 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bt=document.getElementById('btn-tourney');if(bt)bt.onclick=openTourney;}
 {const ba=document.getElementById('btn-achieve');if(ba)ba.onclick=showAchievements;}
 {const br=document.getElementById('btn-referral');if(br)br.onclick=showReferral;}
+{const bc=document.getElementById('btn-chest');if(bc)bc.onclick=openChestScreen;}
+{const bw=document.getElementById('btn-worldboss');if(bw)bw.onclick=openWorldBoss;}
+{const bm=document.getElementById('btn-worldmap');if(bm)bm.onclick=openWorldMap;}
 // auto-fill referral code from ?ref= in URL
 (function(){try{const rp=new URLSearchParams(location.search).get('ref');if(rp){setTimeout(()=>{showReferral();setTimeout(()=>{const el=document.getElementById('ref-in');if(el)el.value=rp;},400);},800);}}catch(e){}})();
 // customization panel
@@ -2117,7 +2357,17 @@ if(btnSnap)btnSnap.onclick=()=>{
     }catch(e){showOverlay('Snapshot','export failed');}
 };
 // close full-screen overlays on click/tap anywhere on the canvas
-C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;if(TOUR.active)TOUR.active=false;if(DUEL.active&&DUEL.done)DUEL.active=false;if(TOURNEY.active)TOURNEY.active=false;});
+C.addEventListener('click',()=>{
+    if(FINALE.active)FINALE.active=false;
+    if(TOUR.active)TOUR.active=false;
+    if(DUEL.active&&DUEL.done)DUEL.active=false;
+    if(TOURNEY.active)TOURNEY.active=false;
+    if(CHEST.active){ if(CHEST.done){CHEST.active=false;} else if(CHEST.available){doOpenChest();} else {CHEST.active=false;} return; }
+    if(WBOSS.active){ if(WBOSS.data&&WBOSS.data.defeated){WBOSS.active=false;} else {strikeWorldBoss();} return; }
+    if(WMAP.active){ WMAP.active=false; return; }
+});
+// ESC closes fullscreen boss/chest/map
+window.addEventListener('keydown',e=>{if(e.key==='Escape'){WBOSS.active=false;CHEST.active=false;WMAP.active=false;}});
 
 // ====== INTERACTIVE MOUSE TILT / ZOOM (CSS 3D on the canvas) ======
 let TILT_ZOOM=1, TILT_RX=0, TILT_RY=0;
@@ -2144,7 +2394,7 @@ C.addEventListener('wheel',e=>{
     applyCardTransform();
 },{passive:false});
 // double-click to reset view
-C.addEventListener('dblclick',()=>{TILT_ZOOM=1;TILT_RX=0;TILT_RY=0;C.classList.remove('tilting');applyCardTransform();});
+C.addEventListener('dblclick',()=>{if(WBOSS.active){WBOSS.active=false;return;}if(CHEST.active){CHEST.active=false;return;}TILT_ZOOM=1;TILT_RX=0;TILT_RY=0;C.classList.remove('tilting');applyCardTransform();});
 function _uid(){return _urlUid&&_urlUid!=='local'?_urlUid:1000;}
 function hpBarHTML(pct){
     pct=Math.max(0,Math.min(100,pct));

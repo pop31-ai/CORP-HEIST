@@ -647,6 +647,149 @@ def referral_status(state, uid):
 
 
 # ============================================================
+# DAILY GOLDEN CHEST (phi-timer, streak-scaled reward)
+# ============================================================
+
+CHEST_BASE = int(1000 * PHI ** 3)   # base daily gold
+
+def chest_status(state, uid, now=None):
+    """Report whether today's chest is available + next reward preview."""
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    now = now or int(time.time())
+    day = now // (24 * 3600)
+    last = me.get("chest_day", -1)
+    available = (day != last)
+    # streak grows while claimed on consecutive days
+    streak = me.get("chest_streak", 0)
+    preview_streak = streak + 1 if available else streak
+    reward = int(CHEST_BASE * (PHI ** min(preview_streak, 8) / PHI))
+    secs_left = 0 if available else ((last + 1) * 24 * 3600 - now)
+    return {
+        "available": available,
+        "chest_streak": streak,
+        "reward_preview": reward,
+        "seconds_left": max(0, secs_left),
+        "note": "Daily chest gives in-game gold only.",
+    }
+
+def open_chest(state, uid, now=None):
+    """Open the daily chest -> in-game gold, phi-scaled by chest streak."""
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    now = now or int(time.time())
+    day = now // (24 * 3600)
+    last = me.get("chest_day", -1)
+    if day == last:
+        return {"error": "already opened today", **chest_status(state, uid, now)}
+    # consecutive-day streak
+    if last == day - 1:
+        me["chest_streak"] = me.get("chest_streak", 0) + 1
+    else:
+        me["chest_streak"] = 1
+    streak = me["chest_streak"]
+    reward = int(CHEST_BASE * (PHI ** min(streak, 8) / PHI))
+    me["chest_day"] = day
+    me["gold"] = me.get("gold", 0) + reward
+    state.mark_dirty(uid)
+    return {"opened": True, "reward_gold": reward, "chest_streak": streak,
+            "gold": me["gold"], "note": "In-game gold only."}
+
+
+# ============================================================
+# WORLD BOSS (single global boss, shared HP for everyone)
+# ============================================================
+
+WORLD_BOSS_NAMES = ["Aurum Leviathan", "The Gilded Devourer", "Phi Colossus",
+                    "Midas Wyrm", "Sovereign of Debt", "The Golden Maw"]
+WORLD_BOSS_BASE_HP = 50_000_000
+
+class WorldBoss:
+    """One global boss shared by all players. State on state.world_boss.
+    Rolls a new boss each phi-week; loot pool shared by phi-shares."""
+
+    def __init__(self, state):
+        self.state = state
+        if not hasattr(state, "world_boss"):
+            state.world_boss = None
+
+    def _boss(self):
+        season, week = current_season()
+        wb = self.state.world_boss
+        # scale HP up each week; new boss identity per season-week
+        max_hp = int(WORLD_BOSS_BASE_HP * (PHI ** (week / PHI)))
+        if not wb or wb.get("season_week") != [season, week]:
+            idx = (season * 7 + week) % len(WORLD_BOSS_NAMES)
+            wb = {
+                "name": WORLD_BOSS_NAMES[idx],
+                "max_hp": max_hp,
+                "hp": max_hp,
+                "season_week": [season, week],
+                "contributions": {},     # uid -> total damage
+                "loot_pool": int(1_000_000 * (PHI ** (week / PHI))),
+            }
+            self.state.world_boss = wb
+        return wb
+
+    def status(self):
+        wb = self._boss()
+        top = sorted(wb["contributions"].items(), key=lambda kv: -kv[1])[:10]
+        return {
+            "boss": wb["name"],
+            "hp": wb["hp"],
+            "max_hp": wb["max_hp"],
+            "pct": round(100 * wb["hp"] / wb["max_hp"], 4),
+            "defeated": wb["hp"] <= 0,
+            "loot_pool": wb["loot_pool"],
+            "participants": len(wb["contributions"]),
+            "top_contributors": [{"user_id": int(u), "damage": d}
+                                 for u, d in top],
+            "season_week": wb["season_week"],
+            "note": "Shared world boss. Rewards are in-game gold only.",
+        }
+
+    def strike(self, uid):
+        me = self.state.chars.get(uid)
+        if not me:
+            return {"error": "no char"}
+        wb = self._boss()
+        if wb["hp"] <= 0:
+            return {"error": "world boss already defeated", **self.status()}
+        mults = passive_bonus(me.get("passives", [0] * 12))
+        pres = prestige_multiplier(me.get("prestige", 0))
+        base = hero_power(100 + me.get("level", 1) * 10,
+                          me.get("hero_levels", [1] * 12)[me.get("hero_id", 0) % 12])
+        dmg = int(base * mults.get("power_mult", 1.0) * pres *
+                  random.uniform(1 / PHI, PHI))
+        wb["hp"] = max(0, wb["hp"] - dmg)
+        key = str(uid)
+        wb["contributions"][key] = wb["contributions"].get(key, 0) + dmg
+        result = {"damage": dmg, "boss_hp": wb["hp"], "boss_max": wb["max_hp"],
+                  "boss": wb["name"],
+                  "pct": round(100 * wb["hp"] / wb["max_hp"], 4)}
+        if wb["hp"] <= 0:
+            # distribute loot pool by phi-weighted contribution shares
+            result["defeated"] = True
+            ranked = sorted(wb["contributions"].items(), key=lambda kv: -kv[1])
+            pool = wb["loot_pool"]
+            payouts = {}
+            for rank, (u, _d) in enumerate(ranked):
+                share = int(pool * (PHI - 1) / (PHI ** rank))
+                payouts[u] = share
+                cu = int(u)
+                ch = self.state.chars.get(cu)
+                if ch is not None:
+                    ch["gold"] = ch.get("gold", 0) + share
+                    self.state.mark_dirty(cu)
+            result["my_reward"] = payouts.get(key, 0)
+            result["payouts_count"] = len(payouts)
+        self.state.mark_dirty(uid)
+        return result
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 
@@ -702,4 +845,12 @@ if __name__ == "__main__":
     print("ref code 1000:", referral_code(1000))
     print("accept_ref:", accept_referral(st, 1001, referral_code(1000)))
     print("ref_status:", referral_status(st, 1000)["referrals"])
+    print("chest_status:", chest_status(st, 1000)["available"], chest_status(st, 1000)["reward_preview"])
+    print("open_chest:", open_chest(st, 1000)["reward_gold"])
+    print("open_again:", open_chest(st, 1000).get("error"))
+    wb = WorldBoss(st)
+    print("world boss:", wb.status()["boss"], wb.status()["pct"])
+    for _ in range(3):
+        s = wb.strike(1000)
+    print("wb strike:", {k: s[k] for k in ("damage", "boss_hp")})
     print("OK")
