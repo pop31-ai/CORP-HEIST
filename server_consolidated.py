@@ -6,7 +6,8 @@ All 30 instances + dashboard + market in ONE process.
 Shared memory, zero IPC.
 
 Run: python server_consolidated.py
-Ports: 9000 (dashboard) + 8080-8109 (30 cards) = 31 ports, 1 process
+  Ports: 9000 (single port: dashboard + 30 cards + API), 1 process
+  Note: 8080 reserved for conference/telephony (separate Node.js service)
 
 TRANSPORT MODEL:
   Pulse   — one-shot request/response (trade, gacha, sell, donate)
@@ -479,12 +480,13 @@ CONSOLIDATED: all 30 instances + dashboard in 1 process, shared memory, zero int
 </div>
 
 <script>
-const PORTS=[];for(let i=8080;i<=8109;i++)PORTS.push(i);
+const NODES=[];for(let i=1;i<=30;i++)NODES.push(i);
 const grid=document.getElementById('grid');
-PORTS.forEach(p=>{
+NODES.forEach(n=>{
+    const uid=1000+(n-1);
     const a=document.createElement('a');
-    a.className='node';a.href='http://'+location.hostname+':'+p;a.target='_blank';
-    a.innerHTML='<div class="port">'+p+'</div><div class="st">ONLINE</div>';
+    a.className='node';a.href='/card/'+n+'?uid='+uid;a.target='_blank';
+    a.innerHTML='<div class="port">#' + n + '</div><div class="st">ONLINE</div>';
     grid.appendChild(a);
 });
 
@@ -563,11 +565,40 @@ def make_card_app():
     app.router.add_post("/pulse/money-back", pulse_money_back)
     return app
 
+async def handle_card_route(request):
+    """Serve wealth card HTML, selecting a player via ?uid= or /card/<n>."""
+    uid = request.match_info.get("n", request.query.get("uid", "local"))
+    # inject selected uid into HTML via query param passthrough
+    resp = web.FileResponse(CARD_HTML_PATH)
+    return resp
+
 def make_dashboard_app():
     app = web.Application()
     app.router.add_get("/", handle_dashboard)
     app.router.add_get("/api/market", handle_market)
     app.router.add_get("/api/stats", handle_stats)
+    return app
+
+def make_unified_app():
+    """Single-port app: dashboard + 30 cards + API on one port (9000)."""
+    app = web.Application()
+    # dashboard
+    app.router.add_get("/", handle_dashboard)
+    app.router.add_get("/api/market", handle_market)
+    app.router.add_get("/api/stats", handle_stats)
+    # wealth card (selected player)
+    app.router.add_get("/card", handle_card_route)
+    app.router.add_get("/card/{n}", handle_card_route)
+    # char API + pulse (shared)
+    app.router.add_get("/api/char/{uid}", handle_char)
+    app.router.add_get("/api/chars", handle_list)
+    app.router.add_get("/api/proto/{uid}", handle_proto)
+    app.router.add_post("/pulse/trade", pulse_trade)
+    app.router.add_post("/pulse/gacha", pulse_gacha)
+    app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
+    app.router.add_post("/pulse/donate", pulse_donate)
+    app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
+    app.router.add_post("/pulse/money-back", pulse_money_back)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
@@ -580,17 +611,11 @@ async def main():
     loop.create_task(health_loop())
     loop.create_task(autosave_loop())
 
-    # dashboard
-    await run_port(make_dashboard_app(), CMD_PORT)
-    log.info(f"dashboard: http://localhost:{CMD_PORT}")
-
-    # 30 card instances
-    for port in CARD_PORTS:
-        await run_port(make_card_app(), port)
-
-    log.info(f"30 instances: ports {CARD_PORTS[0]}-{CARD_PORTS[-1]}")
-    log.info(f"TOTAL: 31 ports, 1 process, 0 IPC")
-    log.info(f"open: {CMD_PORT},{CARD_PORTS[0]}-{CARD_PORTS[-1]} TCP")
+    # single port: dashboard + 30 cards + API all on CMD_PORT (9000)
+    await run_port(make_unified_app(), CMD_PORT)
+    log.info(f"server: http://localhost:{CMD_PORT}")
+    log.info(f"dashboard: /  cards: /card/<1-30>  api: /api/*  pulse: /pulse/*")
+    log.info(f"NOTE: port 8080 reserved for conference/telephony")
 
     await asyncio.Event().wait()
 

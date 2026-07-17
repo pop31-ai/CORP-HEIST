@@ -508,7 +508,12 @@ setInterval(()=>{
 
 // try fetch player list on load
 refreshPlayers();
-newPortfolio();
+
+// auto-load player from ?uid= in URL (used by /card/N links)
+const _urlUid = new URLSearchParams(location.search).get('uid');
+if(_urlUid){ loadPlayer(_urlUid); }
+else { newPortfolio(); }
+
 render();
 </script>
 </body>
