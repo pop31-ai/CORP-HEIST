@@ -300,7 +300,7 @@ class PacketParser:
             r["source"] = src
 
         elif mtype == MsgType.CHAIN_OFFER:
-            code, rar, clen, price, ttl = struct.unpack("<HBBiH", p[:8])
+            code, rar, clen, price, ttl = struct.unpack("<HBBiH", p[:10])
             r["code"] = code
             r["rarity"] = rar
             r["chain_len"] = clen

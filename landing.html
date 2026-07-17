@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CORP HEIST — Corporate Hero Battler</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#080810;color:#ccc;font-family:'Courier New',monospace;overflow-x:hidden}
+.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(255,200,0,0.08),transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:pulse 4s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.1)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:translateY(0)}}
+@keyframes glow{0%,100%{text-shadow:0 0 10px rgba(255,200,0,0.3)}50%{text-shadow:0 0 25px rgba(255,200,0,0.6)}}
+h1{font-size:48px;color:#FFC800;letter-spacing:8px;animation:glow 3s ease-in-out infinite;position:relative;z-index:1}
+.sub{font-size:14px;color:#555;margin-top:12px;letter-spacing:4px;animation:fadeUp 1s 0.3s both;position:relative;z-index:1}
+.cta{margin-top:40px;display:flex;gap:12px;animation:fadeUp 1s 0.6s both;position:relative;z-index:1}
+.cta a{background:#1a1a2e;color:#FFC800;border:1px solid #333;padding:12px 24px;text-decoration:none;font-family:inherit;font-size:12px;border-radius:4px;transition:all 0.3s}
+.cta a:hover{border-color:#FFC800;box-shadow:0 0 15px rgba(255,200,0,0.2)}
+.cta a.primary{background:#FFC800;color:#080810;font-weight:bold}
+.cta a.primary:hover{box-shadow:0 0 25px rgba(255,200,0,0.4)}
+
+.section{padding:80px 40px;max-width:1000px;margin:0 auto}
+.section h2{color:#FFC800;font-size:20px;letter-spacing:4px;margin-bottom:30px;text-align:center}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.card{background:#0d0d18;border:1px solid #1a1a2e;border-radius:6px;padding:24px;text-align:center;transition:border-color 0.3s}
+.card:hover{border-color:#FFC800}
+.card .icon{font-size:32px;margin-bottom:12px}
+.card h3{color:#FFC800;font-size:14px;margin-bottom:8px}
+.card p{color:#666;font-size:10px;line-height:1.6}
+
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:40px}
+.stat{background:#0d0d18;border:1px solid #1a1a2e;border-radius:6px;padding:20px;text-align:center}
+.stat .num{color:#FFC800;font-size:28px;font-weight:bold}
+.stat .label{color:#555;font-size:9px;margin-top:4px;letter-spacing:2px}
+
+.heroes{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:20px}
+.hero-card{background:#0d0d18;border:1px solid #1a1a2e;border-radius:4px;padding:16px 8px;text-align:center}
+.hero-card .rarity{font-size:8px;letter-spacing:2px;margin-bottom:6px}
+.hero-card .name{color:#fff;font-size:11px;font-weight:bold}
+.hero-card .role{color:#555;font-size:9px;margin-top:4px}
+
+.rssr{color:#FF3232}.rss{color:#FF8800}.rsa{color:#FFC800}.rsb{color:#888}
+
+.footer{text-align:center;padding:40px;border-top:1px solid #1a1a2e}
+.footer p{color:#333;font-size:8px;line-height:1.8}
+.footer a{color:#555;text-decoration:none}
+
+.compliance{background:#0d0d18;border:1px solid #1a1a2e;border-radius:6px;padding:20px;margin-top:40px;text-align:center}
+.compliance h3{color:#555;font-size:10px;letter-spacing:2px;margin-bottom:8px}
+.compliance p{color:#444;font-size:8px;line-height:1.6}
+
+canvas.viz{border:1px solid #1a1a2e;border-radius:4px;margin:20px auto;display:block}
+</style>
+</head>
+<body>
+
+<div class="hero">
+<canvas id="bg-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0.3"></canvas>
+<h1>CORP HEIST</h1>
+<div class="sub">CORPORATE HERO BATTLER</div>
+<div class="sub" style="font-size:10px;color:#444;margin-top:6px">БИНАРНЫЙ ПРОТОКОЛ | 1200 АЛГОРИТМОВ | ZERO ASSETS</div>
+<div class="cta">
+<a href="#features" class="primary">FEATURES</a>
+<a href="#heroes">HEROES</a>
+<a href="#protocol">PROTOCOL</a>
+<a href="https://github.com/pop31-ai/CORP-HEIST" target="_blank">GITHUB</a>
+</div>
+</div>
+
+<div class="section" id="features">
+<h2>FEATURES</h2>
+<div class="cards">
+<div class="card">
+<div class="icon" style="color:#FFC800">/</div>
+<h3>STOCK MARKET</h3>
+<p>10,000 tradeable stocks with real-time price simulation. Loot drops from trades through 8 intermediary types.</p>
+</div>
+<div class="card">
+<div class="icon" style="color:#FF3232">*</div>
+<h3>GACHA SYSTEM</h3>
+<p>Transparent rates: SSR 3% | S 7% | A 20% | B 70%. Pity guaranteed every 50 rolls.</p>
+</div>
+<div class="card">
+<div class="icon" style="color:#00FF8C">$</div>
+<h3>WEALTH CARDS</h3>
+<p>Dynamic portfolio visualization with Canvas rendering. 1200 math algorithms, zero image assets.</p>
+</div>
+<div class="card">
+<div class="icon" style="color:#00AAFF">#</div>
+<h3>BINARY PROTOCOL</h3>
+<p>3-114 bytes per message. Player->Character->System. Zero P2P traffic. 87-90% smaller than JSON.</p>
+</div>
+<div class="card">
+<div class="icon" style="color:#FF8800">^</div>
+<h3>PASSIVE SKILLS</h3>
+<p>12-slot skill tree per hero. Upgrade abilities through gameplay. No pay-to-win.</p>
+</div>
+<div class="card">
+<div class="icon" style="color:#888">~</div>
+<h3>LOOT CHAINS</h3>
+<p>MarketMaker->Broker->Forge->Auction. Each intermediary takes 2-20% fee. DarkPool for best prices.</p>
+</div>
+</div>
+
+<div class="stats">
+<div class="stat"><div class="num">1200</div><div class="label">RENDER ALGORITHMS</div></div>
+<div class="stat"><div class="num">65535</div><div class="label">LOOT ITEMS</div></div>
+<div class="stat"><div class="num">10</div><div class="label">HEROES</div></div>
+<div class="stat"><div class="num">3-114</div><div class="label">BYTES/MSG</div></div>
+</div>
+</div>
+
+<div class="section" id="heroes">
+<h2>HERO ROSTER</h2>
+<div class="heroes">
+<div class="hero-card"><div class="rarity rssr">SSR</div><div class="name">DataMiner</div><div class="role">Analyst</div></div>
+<div class="hero-card"><div class="rarity rss">S</div><div class="name">Arbitrage</div><div class="role">Strategist</div></div>
+<div class="hero-card"><div class="rarity rss">S</div><div class="name">Insider</div><div class="role">Dealer</div></div>
+<div class="hero-card"><div class="rarity rsa">A</div><div class="name">Quant</div><div class="role">Mathematician</div></div>
+<div class="hero-card"><div class="rarity rsa">A</div><div class="name">Hacker</div><div class="role">Infiltrator</div></div>
+<div class="hero-card"><div class="rarity rsa">A</div><div class="name">Lobbyist</div><div class="role">Negotiator</div></div>
+<div class="hero-card"><div class="rarity rsb">B</div><div class="name">Intern</div><div class="role">Recruit</div></div>
+<div class="hero-card"><div class="rarity rsb">B</div><div class="name">Clerk</div><div class="role">Admin</div></div>
+<div class="hero-card"><div class="rarity rsb">B</div><div class="name">Auditor</div><div class="role">Compliance</div></div>
+<div class="hero-card"><div class="rarity rsb">B</div><div class="name">Agent</div><div class="role">Field Ops</div></div>
+</div>
+</div>
+
+<div class="section" id="protocol">
+<h2>PROTOCOL</h2>
+<canvas id="proto-canvas" class="viz" width="800" height="200"></canvas>
+<div class="cards" style="grid-template-columns:repeat(2,1fr)">
+<div class="card">
+<h3>PLAYER -> CHARACTER -> SYSTEM</h3>
+<p>Zero P2P traffic. Social interaction only informational (leaderboards, wealth cards). All game logic server-side.</p>
+</div>
+<div class="card">
+<h3>LOOT RENDER ENGINE</h3>
+<p>1200 math algorithms across 10 categories: watches, cars, real estate, yachts, jewelry, art, restaurants, fashion, tech, jets.</p>
+</div>
+</div>
+</div>
+
+<div class="compliance">
+<h3>COMPLIANCE</h3>
+<p>14-ФЗ (Advertising) | 39-ФЗ (Securities) | 152-ФЗ (Personal Data) | 149-ФЗ (Information)<br>
+Age rating: 12+ | Rating: 0+ | Donate: system decides rates | Money-Back: per 14-ФЗ<br>
+All loot icons are personal symbols of ownership. CORP HEIST makes no claims over displayed items.</p>
+</div>
+
+<div class="footer">
+<p>
+<a href="https://github.com/pop31-ai/CORP-HEIST" target="_blank">github.com/pop31-ai/CORP-HEIST</a><br>
+Python 3.12+ | Pygame 2.6+ | License: MIT<br>
+CORP HEIST &copy; 2026 | All rights reserved
+</p>
+</div>
+
+<script>
+// hero bg animation: golden grid lines
+const cv=document.getElementById('bg-canvas');
+const cx=cv.getContext('2d');
+function resize(){cv.width=window.innerWidth;cv.height=window.innerHeight}
+resize();window.addEventListener('resize',resize);
+
+let t=0;
+function drawBg(){
+    t+=0.005;
+    cx.clearRect(0,0,cv.width,cv.height);
+    cx.strokeStyle='rgba(255,200,0,0.04)';cx.lineWidth=0.5;
+    // vertical
+    for(let x=0;x<cv.width;x+=40){
+        cx.beginPath();cx.moveTo(x,0);
+        for(let y=0;y<cv.height;y+=10){
+            cx.lineTo(x+Math.sin(y*0.01+t+x*0.005)*5,y);
+        }
+        cx.stroke();
+    }
+    // horizontal
+    for(let y=0;y<cv.height;y+=40){
+        cx.beginPath();cx.moveTo(0,y);
+        for(let x=0;x<cv.width;x+=10){
+            cx.lineTo(x,y+Math.cos(x*0.01+t+y*0.005)*5);
+        }
+        cx.stroke();
+    }
+    requestAnimationFrame(drawBg);
+}
+drawBg();
+
+// protocol visualization
+const pv=document.getElementById('proto-canvas');
+const px=pv.getContext('2d');
+const PW=800,PH=200;
+let pt=0;
+
+function drawProto(){
+    pt+=0.02;
+    px.fillStyle='#0a0a12';px.fillRect(0,0,PW,PH);
+
+    // message sizes
+    const msgs=[
+        {name:'LOGIN',size:3,color:'#00FF8C'},
+        {name:'CHAR_SYNC',size:68,color:'#FFC800'},
+        {name:'STOCK_TRADE',size:12,color:'#00AAFF'},
+        {name:'LOOT_DROP',size:8,color:'#FF3232'},
+        {name:'GACHA_ROLL',size:6,color:'#FF8800'},
+        {name:'PASSIVE_UP',size:5,color:'#FF3232'},
+        {name:'CHAT',size:114,color:'#555'},
+        {name:'HEARTBEAT',size:3,color:'#333'},
+    ];
+
+    msgs.forEach((m,i)=>{
+        const x=40+i*95;
+        const h=m.size*2;
+        const y=PH-30-h;
+        // bar
+        const alpha=0.3+Math.sin(pt+i*0.5)*0.15;
+        px.fillStyle=m.color;px.globalAlpha=alpha;
+        px.fillRect(x,y,60,h);
+        px.globalAlpha=1;
+        // label
+        px.fillStyle=m.color;px.font='7px monospace';px.textAlign='center';
+        px.fillText(m.name,x+30,PH-16);
+        px.fillStyle='#555';
+        px.fillText(m.size+'B',x+30,y-4);
+    });
+
+    // title
+    px.fillStyle='#333';px.font='8px monospace';px.textAlign='left';
+    px.fillText('BINARY PROTOCOL v2 | MESSAGE SIZES (BYTES)',10,14);
+
+    requestAnimationFrame(drawProto);
+}
+drawProto();
+</script>
+</body>
+</html>
