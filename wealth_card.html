@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>CORP HEIST — Wealth Card</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a12;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:'Courier New',monospace;color:#ccc}
+h1{color:#FFC800;margin-bottom:8px;font-size:14px;letter-spacing:4px}
+canvas{border:1px solid #1a1a2e;border-radius:4px}
+.controls{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+button{background:#1a1a2e;color:#FFC800;border:1px solid #333;padding:6px 14px;cursor:pointer;font-family:inherit;font-size:11px;border-radius:3px}
+button:hover{background:#2a2a3e;border-color:#FFC800}
+.info{margin-top:8px;font-size:10px;color:#555}
+</style>
+</head>
+<body>
+<h1>CORP HEIST — WEALTH CARD</h1>
+<canvas id="c" width="640" height="400"></canvas>
+<div class="controls">
+<button onclick="randomPortfolio()">NEW PORTFOLIO</button>
+<button onclick="addLoot()">DROP LOOT</button>
+<button onclick="togglePause()">PAUSE</button>
+<button onclick="exportCard()">EXPORT PNG</button>
+</div>
+<div class="info">Canvas 640x400 | Pure math | No assets | ~5KB data</div>
+
+<script>
+// ============================================================
+// CORP HEIST — Dynamic Personalized Wealth Card Renderer
+// Все визуальные элементы генерируются из данных портфеля + лута
+// Математика: золотое сечение, фракталы, волны, частицы
+// ============================================================
+
+const C = document.getElementById('c');
+const X = C.getContext('2d');
+const W = C.width, H = C.height;
+let paused = false;
+let frame = 0;
+
+// ====== ПОРТФЕЛЬ ДАННЫЕ ======
+const RARITY_COLORS = ['#888899','#00AAFF','#AA00FF','#FF3232','#FFC800','#FF00AA'];
+const RARITY_NAMES = ['Common','Uncommon','Rare','Epic','Legendary','Unique'];
+const RARITY_VALUE = [10,50,250,1500,10000,50000];
+const STOCK_NAMES = ['AAPL','GOOGL','MSFT','TSLA','NVDA','JPM','META','AMZN','V','MA',
+                     'NFLX','CRM','PYPL','COIN','PLTR','SQ','ABNB','SPOT','RIVN','SNOW'];
+
+let portfolio = {
+    name: 'ANONYMOUS',
+    level: 1,
+    gold: 1000,
+    netWorth: 1000,
+    stocks: [],
+    loot: [],
+    history: [],
+    prestige: 0,
+    streakDays: 0,
+    rank: 50,
+};
+
+// ====== ГЕНЕРАЦИЯ ПОРТФЕЛЯ ======
+function randomPortfolio() {
+    const n = Math.floor(Math.random()*8)+2;
+    const stocks = [];
+    for(let i=0;i<n;i++){
+        stocks.push({
+            name: STOCK_NAMES[Math.floor(Math.random()*STOCK_NAMES.length)],
+            price: Math.random()*300+10,
+            held: Math.floor(Math.random()*200)+1,
+            delta: (Math.random()-0.5)*10,
+            vol: Math.floor(Math.random()*10000),
+        });
+    }
+    const loot = [];
+    const nl = Math.floor(Math.random()*12)+3;
+    for(let i=0;i<nl;i++){
+        const r = rollRarity();
+        loot.push({
+            code: Math.floor(Math.random()*65535),
+            rarity: r,
+            qty: Math.floor(Math.random()*5)+1,
+            value: RARITY_VALUE[r],
+        });
+    }
+    let nw = 0;
+    stocks.forEach(s=>{nw+=s.price*s.held});
+    loot.forEach(l=>{nw+=l.value*l.qty});
+
+    portfolio = {
+        name: ['WOLF','SHARK','EAGLE','COBRA','TIGER','PANTHER'][Math.floor(Math.random()*6)],
+        level: Math.floor(Math.random()*50)+1,
+        gold: Math.floor(Math.random()*500000),
+        netWorth: nw,
+        stocks, loot,
+        history: genHistory(nw),
+        prestige: Math.floor(Math.random()*10),
+        streakDays: Math.floor(Math.random()*90),
+        rank: Math.floor(Math.random()*100)+1,
+    };
+    frame = 0;
+}
+
+function rollRarity(){
+    const r=Math.random()*10000;
+    if(r<10)return 5;if(r<50)return 4;if(r<300)return 3;if(r<1000)return 2;if(r<3000)return 1;return 0;
+}
+
+function genHistory(nw){
+    const h=[];
+    let v=nw*0.1;
+    for(let i=0;i<120;i++){
+        v+=v*0.02*(Math.random()-0.48);
+        h.push(v);
+    }
+    return h;
+}
+
+function addLoot(){
+    const r=rollRarity();
+    const v=RARITY_VALUE[r];
+    portfolio.loot.push({
+        code: Math.floor(Math.random()*65535),
+        rarity:r, qty:1, value:v,
+    });
+    portfolio.netWorth+=v;
+    portfolio.gold+=v;
+    if(portfolio.history.length>0){
+        portfolio.history.push(portfolio.history[portfolio.history.length-1]+v*0.3);
+    }
+}
+
+// ====== МАТЕМАТИЧЕСКИЕ ПРИМИТИВЫ ======
+
+function goldenSpiral(cx,cy,maxR,t,rot){
+    const pts=[];
+    const phi=1.618033988749;
+    for(let i=0;i<200;i++){
+        const a=i*0.1+t+rot;
+        const r=maxR*Math.pow(phi,i/50-4);
+        if(r>maxR)break;
+        pts.push({x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)});
+    }
+    return pts;
+}
+
+function fractalTree(x,y,len,angle,depth,maxD,pts){
+    if(depth>maxD||len<2)return;
+    const ex=x+len*Math.cos(angle);
+    const ey=y+len*Math.sin(angle);
+    pts.push({x1:x,y1:y,x2:ex,y2:ey,depth});
+    fractalTree(ex,ey,len*0.68,angle-0.4,depth+1,maxD,pts);
+    fractalTree(ex,ey,len*0.68,angle+0.4,depth+1,maxD,pts);
+}
+
+function wavePath(x0,y0,x1,y1,amp,freq,t,pts){
+    const dx=x1-x0,dy=y1-y0;
+    const len=Math.sqrt(dx*dx+dy*dy);
+    const nx=-dy/len,ny=dx/len;
+    for(let i=0;i<=len;i+=2){
+        const frac=i/len;
+        const px=x0+dx*frac;
+        const py=y0+dy*frac;
+        const w=Math.sin(frac*freq+t)*amp*(1-Math.abs(frac-0.5)*2);
+        pts.push({x:px+nx*w,y:py+ny*w});
+    }
+}
+
+function drawPoly(pts,color, lineWidth){
+    if(pts.length<2)return;
+    X.beginPath();
+    X.moveTo(pts[0].x,pts[0].y);
+    for(let i=1;i<pts.length;i++) X.lineTo(pts[i].x,pts[i].y);
+    X.strokeStyle=color;
+    X.lineWidth=lineWidth||1;
+    X.stroke();
+}
+
+function drawLine(x1,y1,x2,y2,color,w){
+    X.beginPath();X.moveTo(x1,y1);X.lineTo(x2,y2);
+    X.strokeStyle=color;X.lineWidth=w||1;X.stroke();
+}
+
+function drawCircle(cx,cy,r,color,fill){
+    X.beginPath();X.arc(cx,cy,r,0,Math.PI*2);
+    if(fill){X.fillStyle=color;X.fill();}
+    else{X.strokeStyle=color;X.lineWidth=1;X.stroke();}
+}
+
+function drawText(txt,x,y,color,size,align){
+    X.fillStyle=color;X.font=size+'px "Courier New",monospace';
+    X.textAlign=align||'left';X.fillText(txt,x,y);
+}
+
+// ====== ОТРИСОВКА ======
+
+function render(){
+    const t=frame*0.02;
+    frame++;
+
+    // BG
+    X.fillStyle='#0a0a12';
+    X.fillRect(0,0,W,H);
+
+    // grid lines
+    X.globalAlpha=0.08;
+    for(let i=0;i<W;i+=40){drawLine(i,0,i,H,'#1a1a2e',0.5);}
+    for(let i=0;i<H;i+=40){drawLine(0,i,W,i,'#1a1a2e',0.5);}
+    X.globalAlpha=1;
+
+    const nw=portfolio.netWorth;
+    const tier=Math.min(5,Math.floor(Math.log10(Math.max(1,nw))/1.5));
+    const tierColor=RARITY_COLORS[tier];
+
+    // === ФОН: золотая спираль от центра ===
+    const spiralPts=goldenSpiral(W/2,H/2,Math.min(W,H)*0.45,t,portfolio.prestige*0.5);
+    X.globalAlpha=0.12;
+    drawPoly(spiralPts,tierColor,1.5);
+    X.globalAlpha=1;
+
+    // === ФОН: фрактальное дерево (слева) ===
+    const treePts=[];
+    const treeDepth=Math.min(8,3+Math.floor(portfolio.stocks.length/3));
+    fractalTree(80,H-60,35+portfolio.stocks.length*3,-Math.PI/2+Math.sin(t*0.3)*0.05,0,treeDepth,treePts);
+    X.globalAlpha=0.15;
+    treePts.forEach(p=>{
+        const alpha=1-p.depth/(treeDepth+1);
+        drawLine(p.x1,p.y1,p.x2,p.y2,tierColor,1);
+    });
+    X.globalAlpha=1;
+
+    // === АКЦИИ: волны цен ===
+    const stockArea={x:160,y:80,w:320,h:180};
+    // рамка
+    X.strokeStyle='#1a1a2e';X.lineWidth=1;
+    X.strokeRect(stockArea.x,stockArea.y,stockArea.w,stockArea.h);
+
+    portfolio.stocks.forEach((s,idx)=>{
+        const yBase=stockArea.y+20+idx*(stockArea.h-30)/Math.max(1,portfolio.stocks.length);
+        const pts=[];
+        const amp=3+Math.abs(s.delta)*2;
+        const freq=10+s.held/20;
+        wavePath(stockArea.x,yBase,stockArea.x+stockArea.w,yBase,amp,freq,t+idx*0.7,pts);
+        const color=s.delta>=0?'#00FF8C':'#FF3232';
+        X.globalAlpha=0.6;
+        drawPoly(pts,color,1.2);
+        X.globalAlpha=1;
+        // label
+        drawText(s.name,stockArea.x+4,yBase-4,'#555',8);
+        drawText('$'+s.price.toFixed(1),stockArea.x+stockArea.w-4,yBase-4,color,8,'right');
+    });
+
+    // заголовок
+    drawText('PORTFOLIO',stockArea.x+stockArea.w/2,stockArea.y-6,'#555',9,'center');
+    drawText(portfolio.stocks.length+' stocks',stockArea.x+stockArea.w-4,stockArea.y-6,'#333',8,'right');
+
+    // === ЛУТ: частицы по редкости ===
+    const lootX=510,lootY=80,lootW=120,lootH=300;
+    X.strokeStyle='#1a1a2e';X.strokeRect(lootX,lootY,lootW,lootH);
+    drawText('LOOT',lootX+lootW/2,lootY-6,'#555',9,'center');
+    drawText(portfolio.loot.length+' items',lootX+lootW-4,lootY-6,'#333',8,'right');
+
+    portfolio.loot.forEach((l,idx)=>{
+        const ry=lootY+12+idx*24;
+        if(ry>lootY+lootH-12)return;
+        const color=RARITY_COLORS[l.rarity];
+        const pulse=1+0.3*Math.sin(t*2+l.code*0.01);
+
+        // частица
+        const px=lootX+20+15*Math.sin(t*1.5+l.code*0.03);
+        const py=ry+5*Math.cos(t*1.2+l.code*0.05);
+        drawCircle(px,py,2+ pulse,color,true);
+
+        // код
+        drawText('0x'+l.code.toString(16).toUpperCase().padStart(4,'0'),lootX+10,ry+4,'#777',7);
+        // qty
+        drawText('x'+l.qty,lootX+lootW-8,ry+4,color,7,'right');
+    });
+
+    // === НИЖНЯЯ ПАНЕЛЬ: статы ===
+    const barY=300,barH=90;
+    X.fillStyle='#0d0d18';
+    X.fillRect(0,barY,W,barH);
+    drawLine(0,barY,W,barY,'#1a1a2e',1);
+
+    // net worth - золотая спираль мини
+    const nwPts=goldenSpiral(80,barY+45,25,t*0.5,0);
+    X.globalAlpha=0.3;
+    drawPoly(nwPts,'#FFC800',1);
+    X.globalAlpha=1;
+    drawText('NET WORTH',30,barY+15,'#FFC800',9);
+    drawText('$'+formatNum(portfolio.netWorth),30,barY+32,'#FFC800',16);
+    drawText('RANK #'+portfolio.rank,30,barY+50,'#555',8);
+
+    // gold
+    drawText('GOLD',200,barY+15,'#FFD700',9);
+    drawText('$'+formatNum(portfolio.gold),200,barY+32,'#FFD700',14);
+
+    // level + prestige
+    drawText('LVL '+portfolio.level+' | P'+portfolio.prestige,200,barY+50,'#555',8);
+    drawText('STREAK '+portfolio.streakDays+'d',200,barY+65,'#333',8);
+
+    // history chart
+    const chartX=340,chartW=280,chartH=50;
+    const hist=portfolio.history;
+    if(hist.length>1){
+        const minV=Math.min(...hist)*0.9;
+        const maxV=Math.max(...hist)*1.1;
+        const range=maxV-minV||1;
+        X.beginPath();
+        hist.forEach((v,i)=>{
+            const cx=chartX+i*(chartW/hist.length);
+            const cy=barY+barH-10-((v-minV)/range)*chartH;
+            if(i===0)X.moveTo(cx,cy);else X.lineTo(cx,cy);
+        });
+        X.strokeStyle=tierColor;X.lineWidth=1.5;X.stroke();
+        // fill under
+        X.lineTo(chartX+chartW,barY+barH-10);
+        X.lineTo(chartX,barY+barH-10);
+        X.closePath();
+        X.fillStyle=tierColor+'15';
+        X.fill();
+    }
+    drawText('WEALTH GROWTH',chartX,barY+15,'#555',8);
+    drawText(portfolio.name+' ('+RARITY_NAMES[tier]+')',chartX+chartW,barY+15,tierColor,9,'right');
+
+    // footer
+    drawText('CORP HEIST',W/2,H-8,'#222',8,'center);
+
+    if(!paused)requestAnimationFrame(render);
+}
+
+function formatNum(n){
+    if(n>=1e6)return (n/1e6).toFixed(1)+'M';
+    if(n>=1e3)return (n/1e3).toFixed(1)+'K';
+    return n.toString();
+}
+
+function togglePause(){paused=!paused;if(paused)requestAnimationFrame(render);}
+
+function exportCard(){
+    const link=document.createElement('a');
+    link.download='corp-heist-wealth.png';
+    link.href=C.toDataURL('image/png');
+    link.click();
+}
+
+// ====== START ======
+randomPortfolio();
+render();
+</script>
+</body>
+</html>
