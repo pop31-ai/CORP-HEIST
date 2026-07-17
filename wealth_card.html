@@ -27,9 +27,13 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button onclick="donateLoot()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
 <button onclick="buyGold()" style="border-color:#00AAFF;color:#00AAFF">BUY GOLD</button>
 <button onclick="supportRequest()" style="border-color:#00FF8C;color:#00FF8C">SUPPORT</button>
+<button id="btn-duel" style="border-color:#FFC800;color:#FFC800">⚔ PHI-DUEL</button>
+<button id="btn-guilds" style="border-color:#FFC800;color:#FFC800">CORP GUILDS</button>
+<button id="btn-board" style="border-color:#FFC800;color:#FFC800">LEADERBOARD</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
+<div id="overlay" style="display:none;position:fixed;top:50px;left:50%;transform:translateX(-50%);background:#0a0a12ee;border:1px solid #FFC800;color:#FFC800;padding:14px 18px;font-family:monospace;font-size:11px;border-radius:6px;white-space:pre;max-width:90%;z-index:10"></div>
 <div class="info" id="info"></div>
 
 <script>
@@ -64,6 +68,30 @@ R.restaurants=[];for(let i=0;i<100;i++)R.restaurants.push(drawRestaurant);
 R.fashion=[];for(let i=0;i<100;i++)R.fashion.push(drawFashion);
 R.tech=[];for(let i=0;i<100;i++)R.tech.push(drawTech);
 R.jets=[];for(let i=0;i<50;i++)R.jets.push(drawJet);
+R.artifacts=[];for(let i=0;i<120;i++)R.artifacts.push(drawGoldenArtifact);
+
+// index 10 = golden artifact (matches server cat:10)
+function drawGoldenArtifact(ctx,x,y,s,code,rarity,seed){
+    seed=seed||(code*0.013);
+    ctx.save();ctx.translate(x,y);
+    const gold='hsl(48,100%,'+(60+rarity*4)+'%)';
+    const goldD='hsl(45,90%,'+(38+rarity*3)+'%)';
+    // phi fractal: recursive golden-rect subdiv with arcs
+    function phiRect(px,py,pw,ph,depth){
+        if(depth<=0||pw<2||ph<2)return;
+        ctx.strokeStyle=depth%2?gold:goldD;ctx.lineWidth=0.6+depth*0.15;
+        ctx.strokeRect(px,py,pw,ph);
+        if(pw>=ph){const q=ph;ctx.beginPath();ctx.arc(px+q,py+q,q,Math.PI,1.5*Math.PI);ctx.stroke();phiRect(px+q,py,pw-q,ph,depth-1);}
+        else{const q=pw;ctx.beginPath();ctx.arc(px+q,py+q,q,1.5*Math.PI,TAU);ctx.stroke();phiRect(px,py+q,pw,ph-q,depth-1);}
+    }
+    const sz=s*0.8;
+    phiRect(-sz/2,-sz/2,sz,sz/PHI,5);
+    // central glow dot
+    const g=ctx.createRadialGradient(0,0,0,0,0,sz*0.3);
+    g.addColorStop(0,'rgba(255,215,0,0.8)');g.addColorStop(1,'rgba(255,215,0,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,sz*0.3,0,TAU);ctx.fill();
+    ctx.restore();
+}
 
 const CATS=Object.keys(R);
 const TOTAL=CATS.reduce((s,c)=>s+R[c].length,0);
@@ -421,6 +449,12 @@ function render(){
         if(isMaint){
             X.fillStyle='#333';X.font='8px monospace';X.textAlign='center';
             X.fillText('MAINT.',cx,cy+2);
+        }else if(l.cat===10){
+            const {fn}=getRenderer(l.code);
+            X.save();
+            X.beginPath();X.rect(cx-cellW/2+2,cy-cellH/2+2,cellW-4,cellH-4);X.clip();
+            fn(X,cx,cy-2,cellW*0.42,l.code,l.rarity,l.phi_seed);
+            X.restore();
         }else{
             const {fn}=getRenderer(l.code);
             X.save();
@@ -477,26 +511,35 @@ function render(){
     // chain visualization (loot flow)
     X.fillStyle='#333';X.font='7px monospace';X.textAlign='left';
     X.fillText('LOOT CHAIN FLOW',20,by+100);
+    // animated loot chain flowing along a golden spiral into GOLD
     const chainY=by+115;
+    const ccx=120, ccy=chainY;
     const cnames=['MarketMaker','Broker','Forge','Auction','Arbitrage','DarkPool','DataMiner','InsureFund'];
-    // mini chain: stock -> drop -> intermediary -> gold
-    for(let i=0;i<Math.min(5,P.loot.length);i++){
+    const nFlow=Math.min(6,P.loot.length);
+    // spiral guide
+    X.save();X.globalAlpha=0.12;X.strokeStyle='#FFC800';X.lineWidth=0.5;X.beginPath();
+    for(let i=0;i<=160;i++){const a=i*0.12;const r=Math.min(90,2.2*Math.pow(PHI,i/22));const px=ccx+r*Math.cos(a),py=ccy+r*Math.sin(a);i===0?X.moveTo(px,py):X.lineTo(px,py);}
+    X.stroke();X.restore();
+    for(let i=0;i<nFlow;i++){
         const l=P.loot[i];
-        const lx2=20+i*100;
         const {cat}=getRenderer(l.code);
-        X.fillStyle=RCOL[l.rarity];X.font='6px monospace';
-        X.fillText(cat.substr(0,8),lx2,chainY);
-        // arrow
-        X.strokeStyle=RCOL[l.rarity]+'60';X.lineWidth=0.5;
-        X.beginPath();X.moveTo(lx2+35,chainY-3);X.lineTo(lx2+55,chainY-3);X.stroke();
-        X.beginPath();X.moveTo(lx2+52,chainY-5);X.lineTo(lx2+55,chainY-3);X.lineTo(lx2+52,chainY-1);X.stroke();
-        // intermediary
-        const mid=cnames[(l.code)%cnames.length];
-        X.fillStyle='#555';X.fillText(mid.substr(0,8),lx2+58,chainY);
-        // arrow to gold
-        X.strokeStyle='#FFC80040';X.beginPath();X.moveTo(lx2+58+30,chainY-3);X.lineTo(lx2+58+45,chainY-3);X.stroke();
-        X.fillStyle='#FFC800';X.fillText('$'+fmt(l.value),lx2+58+48,chainY);
+        const phase=(t*0.6 + i*TAU/nFlow)%TAU;
+        const a=phase;const r=Math.min(90,2.2*Math.pow(PHI,(a/TAU)*22));
+        const px=ccx+r*Math.cos(a), py=ccy+r*Math.sin(a);
+        // travelling dot = loot item
+        X.globalAlpha=0.9;X.fillStyle=RCOL[l.rarity];
+        X.beginPath();X.arc(px,py,2.2,0,TAU);X.fill();
+        // trail to gold sink
+        X.globalAlpha=0.25;X.strokeStyle=RCOL[l.rarity];X.lineWidth=0.5;
+        X.beginPath();X.moveTo(px,py);X.lineTo(ccx+95,ccy);X.stroke();
+        X.globalAlpha=1;
+        // label when near sink
+        if(r>80){X.fillStyle=RCOL[l.rarity];X.font='6px monospace';X.fillText(cat.substr(0,7),px-12,py-4);}
     }
+    X.fillStyle='#FFC800';X.font='7px monospace';X.textAlign='left';
+    X.fillText('GOLD SINK',ccx+98,ccy-2);
+    X.fillStyle='#555';X.font='6px monospace';
+    X.fillText('loot → '+cnames[frame%cnames.length]+' → gold (phi-flow)',20,chainY+18);
 
     // footer + disclaimer
     X.fillStyle='#1a1a2e';X.fillRect(0,H-35,W,35);
@@ -598,6 +641,41 @@ refreshPlayers();
 const _urlUid = new URLSearchParams(location.search).get('uid');
 if(_urlUid){ loadPlayer(_urlUid); }
 else { newPortfolio(); }
+
+// ====== METAGAME PANEL (arena / guilds / leaderboard) ======
+async function doDuel(){
+    const uid = _urlUid && _urlUid!=='local' ? _urlUid : 1000;
+    try{
+        const r=await fetch(API+'/pulse/duel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
+        const d=await r.json();
+        if(d.error){showOverlay('Arena', d.error);return;}
+        showOverlay('PHI-DUEL', `vs ${d.opp_name} (gap ${d.gap})  [${d.win?'WIN':'LOSE'}]\n`+
+            `power ${d.my_power} vs ${d.opp_power}  swing ${d.phi_swing}\n`+
+            `gold ${d.reward_gold>=0?'+':''}${d.reward_gold}  lvl ${d.level}`);
+        loadPlayer(uid);
+    }catch(e){showOverlay('Arena','offline');}
+}
+async function showGuilds(){
+    try{
+        const r=await fetch(API+'/api/guilds');const d=await r.json();
+        showOverlay('CORP GUILDS (phi-ranked)', d.map(g=>`#${g.rank} ${g.name}  net $${fmt(g.net)}  (${g.members})`).join('\n'));
+    }catch(e){showOverlay('Guilds','offline');}
+}
+async function showBoard(){
+    try{
+        const r=await fetch(API+'/api/leaderboard');const d=await r.json();
+        showOverlay('LEADERBOARD (top 10)', d.slice(0,10).map(p=>`#${p.rank} ${p.name}  $${fmt(p.net_worth)}  ${p.corp}`).join('\n'));
+    }catch(e){showOverlay('Board','offline');}
+}
+function showOverlay(title,text){
+    const el=document.getElementById('overlay');
+    el.innerHTML='<b>'+title+'</b><pre>'+text+'</pre>';
+    el.style.display='block';
+    clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',6000);
+}
+document.getElementById('btn-duel').onclick=doDuel;
+document.getElementById('btn-guilds').onclick=showGuilds;
+document.getElementById('btn-board').onclick=showBoard;
 
 render();
 </script>

@@ -18,6 +18,7 @@ TRANSPORT MODEL:
 import asyncio
 import json
 import random
+import math
 import struct
 import os
 import sys
@@ -32,6 +33,10 @@ from aiohttp import web
 from protocol import (
     build_char_bytes, parse_char, CHAR_SIZE, CHAR_FMT,
     MsgType, PacketBuilder, PacketParser
+)
+from golden_econ import (
+    GuildSystem, Arena, roll_artifact, maybe_drop_artifact,
+    CORPS, FLOORS, PHI,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -161,6 +166,9 @@ class SharedState:
                 loot.append({"code":random.randint(0,65535),"rarity":r,
                              "qty":random.randint(1,5),
                              "value":[10,50,250,1500,10000,50000][r]})
+            art = maybe_drop_artifact(0.15)
+            if art:
+                loot.append(art)
             hist = []
             v = nw * 0.1
             for _ in range(150):
@@ -169,10 +177,11 @@ class SharedState:
             self.chars[uid] = {
                 "user_id":uid,"gold":gold,"xp":random.randint(0,999999),
                 "level":random.randint(1,100),"hero_id":random.randint(0,9),
-                "corp_id":random.randint(0,4),"floor":random.randint(0,6),
+                "corp_id":random.randint(0,6),"floor":random.randint(0,11),
                 "gacha_pity":random.randint(0,49),
                 "loot_count":sum(l["qty"] for l in loot),
                 "portfolio_value":random.randint(0,nw),"net_worth":nw,
+                "tier":min(5,max(0,int(math.log10(max(1,nw))/1.5))),
                 "rank_percent":random.randint(1,100),
                 "prestige":random.randint(0,10),
                 "streak_days":random.randint(0,365),
@@ -205,6 +214,8 @@ class SharedState:
 
 
 STATE = SharedState()
+GUILDS = GuildSystem(STATE)
+ARENA = Arena(STATE)
 
 
 # ============================================================
@@ -264,6 +275,24 @@ async def handle_proto(request):
 
 async def handle_stats(request):
     body = json.dumps(STATE.stats()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def handle_guilds(request):
+    body = json.dumps(GUILDS.corp_totals()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def handle_leaderboard(request):
+    body = json.dumps(GUILDS.leaderboard(50)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def handle_market_summary(request):
+    body = json.dumps(GUILDS.market_summary()).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
 
@@ -423,6 +452,18 @@ async def pulse_support(request):
     return web.json_response({"ok": True, "gold": c["gold"],
                               "note": note, "real_money_back": False})
 
+
+async def pulse_duel(request):
+    """Pulse: phi-duel arena fight. Pure in-game economy, no P2P, no real money."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = ARENA.fight(uid)
+    if "error" in result:
+        return web.json_response(result, status=404)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -561,6 +602,7 @@ def make_card_app():
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
     app.router.add_post("/pulse/donate", pulse_donate)
     app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
+    app.router.add_post("/pulse/duel", pulse_duel)
     return app
 
 async def handle_card_route(request):
@@ -591,6 +633,9 @@ def make_unified_app():
     app.router.add_get("/api/char/{uid}", handle_char)
     app.router.add_get("/api/chars", handle_list)
     app.router.add_get("/api/proto/{uid}", handle_proto)
+    app.router.add_get("/api/guilds", handle_guilds)
+    app.router.add_get("/api/leaderboard", handle_leaderboard)
+    app.router.add_get("/api/market-summary", handle_market_summary)
     app.router.add_post("/pulse/trade", pulse_trade)
     app.router.add_post("/pulse/gacha", pulse_gacha)
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
