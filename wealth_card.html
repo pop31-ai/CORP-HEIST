@@ -37,6 +37,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-raid" style="border-color:#FF4B4B;color:#FF4B4B">GUILD RAID</button>
 <button id="btn-quests" style="border-color:#00FF8C;color:#00FF8C">DAILY QUESTS</button>
 <button id="btn-finale" style="border-color:#FFC800;color:#FFC800">SEASON FINALE</button>
+<button id="btn-tour" style="border-color:#00E5FF;color:#00E5FF">TOWER TOUR</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -745,6 +746,94 @@ function drawFinale(){
     X.fillText('▸ click / tap anywhere to close ◂',cx,H-10);X.globalAlpha=1;
 }
 
+// ====== FULLSCREEN 3D TOWER TOUR (elevator ride through the floors) ======
+const TOUR={active:false,t:0,pos:0,target:0,vel:0};
+function openTour(){
+    TOUR.active=true;TOUR.t=0;
+    TOUR.pos=(P.floor||0);        // start at the player's floor
+    TOUR.target=FLOOR_NAMES.length-1; // ride all the way to Apex Atrium
+    TOUR.vel=0;
+}
+function drawTour(){
+    if(!TOUR.active)return;
+    TOUR.t+=0.016;const t=TOUR.t;
+    const n=FLOOR_NAMES.length;
+    // ease elevator toward target, then bounce back down, looping the tour
+    const d=TOUR.target-TOUR.pos;
+    TOUR.vel+=(d)*0.0016; TOUR.vel*=0.94; TOUR.pos+=TOUR.vel;
+    if(Math.abs(d)<0.02 && Math.abs(TOUR.vel)<0.002){
+        TOUR.target=(TOUR.target>n/2)?0:n-1;   // reverse direction
+    }
+    const cx=W/2, cy=H/2;
+    // backdrop
+    const k=Math.min(1,t/0.5);
+    X.save();X.globalAlpha=0.94*k;X.fillStyle='#04050a';X.fillRect(0,0,W,H);X.restore();
+    // vanishing-point corridor: floors as receding rectangles
+    const FLOOR_GAP=1.0;   // world units between floors
+    const focal=520;
+    // draw from far floors to near for correct overlap
+    const list=[];
+    for(let i=n-1;i>=-1;i--){
+        const rel=(i-TOUR.pos);            // signed distance in floors
+        const z=rel*FLOOR_GAP*260 + 60;    // depth; current floor near camera
+        if(z<=8)continue;                  // behind camera
+        list.push({i,rel,z});
+    }
+    list.sort((a,b)=>b.z-a.z);
+    for(const f of list){
+        const s=focal/f.z;                 // perspective scale
+        const fw=W*1.4*s, fh=H*0.55*s;
+        const yOff=(-f.rel)* (H*0.16);      // vertical shift so we look "up/down" the shaft
+        const fx=cx-fw/2, fy=cy-fh/2 - yOff*s;
+        const near=(Math.abs(f.rel)<0.6);
+        const glow=Math.max(0,1-Math.abs(f.rel)/4);
+        X.save();
+        X.globalAlpha=(0.15+0.75*glow)*k;
+        // floor slab (perspective quad ~ rectangle)
+        X.strokeStyle=(f.i===Math.round(TOUR.pos))?THEME.aura:THEME.accent;
+        X.lineWidth=Math.max(0.4,2*s);
+        X.strokeRect(fx,fy,fw,fh);
+        // inner golden-section divider
+        X.globalAlpha=(0.08+0.4*glow)*k;
+        X.beginPath();X.moveTo(fx+fw/PHI,fy);X.lineTo(fx+fw/PHI,fy+fh);X.stroke();
+        // floor label when large enough
+        if(fw>90 && f.i>=0){
+            X.globalAlpha=(0.5+0.5*glow)*k;
+            X.fillStyle=(near?THEME.aura:THEME.accent);
+            X.font=Math.max(7,Math.min(30,18*s))+'px monospace';
+            X.textAlign='center';
+            X.fillText((f.i+1)+' · '+FLOOR_NAMES[f.i], cx, fy+fh/2);
+        }
+        X.restore();
+    }
+    X.globalAlpha=1;
+    // elevator cab frame (fixed foreground)
+    X.save();
+    X.strokeStyle=THEME.aura;X.shadowColor=THEME.aura;X.shadowBlur=14;
+    X.lineWidth=3;X.strokeRect(cx-140,cy-120,280,240);
+    X.shadowBlur=0;
+    // doors seam
+    X.globalAlpha=0.5;X.lineWidth=1;
+    X.beginPath();X.moveTo(cx,cy-120);X.lineTo(cx,cy+120);X.stroke();
+    X.restore();X.globalAlpha=1;
+    // HUD readout
+    const cf=Math.round(TOUR.pos);
+    X.textAlign='center';X.shadowColor=THEME.aura;X.shadowBlur=16*k;
+    X.fillStyle=THEME.aura;X.font='bold 22px monospace';
+    X.fillText('CORP TOWER',cx,H*0.12);
+    X.shadowBlur=0;X.fillStyle='#ccc';X.font='13px monospace';
+    X.fillText('▲ FLOOR '+(cf+1)+' · '+FLOOR_NAMES[Math.max(0,Math.min(n-1,cf))],cx,H*0.12+22);
+    // rising cable motes for motion feel
+    X.globalAlpha=0.5;X.fillStyle=THEME.accent;
+    for(let m=0;m<10;m++){
+        const my=((t*260 + m*70)% (H+40))-20;
+        X.fillRect(cx-150,H-my,2,10);X.fillRect(cx+148,H-my,2,10);
+    }
+    X.globalAlpha=1;
+    X.fillStyle=THEME.aura;X.globalAlpha=0.6+0.4*Math.sin(t*3);X.font='9px monospace';
+    X.fillText('▸ click / tap anywhere to exit tour ◂',cx,H-10);X.globalAlpha=1;
+}
+
 // ====== PRESTIGE AURA (ranked golden rings around the whole card) ======
 function drawPrestigeAura(t){
     const p=P.prestige||0;
@@ -773,6 +862,101 @@ function drawPrestigeAura(t){
     X.fillText('✦ PRESTIGE '+p+' — ×'+(Math.pow(PHI,p)).toFixed(2)+' ✦',cx,16);
     X.restore();
     X.globalAlpha=1;
+}
+
+// ====== PHI-FIREWORKS (celebrate tier / floor promotion) ======
+const FW={rockets:[],sparks:[]};
+let LAST_TIER=null, LAST_FLOOR=null;
+function launchFirework(){
+    // rocket climbs, then bursts into a golden-angle spark spiral
+    FW.rockets.push({x:W*(0.2+Math.random()*0.6), y:H,
+        vy:-(3.4+Math.random()*1.6), tgt:H*(0.18+Math.random()*0.34),
+        col:['#FFC800','#FFE24B','#FF6BD6','#00E5FF','#FF9B00'][Math.floor(Math.random()*5)]});
+}
+function celebratePromotion(){ for(let i=0;i<5;i++)setTimeout(launchFirework,i*160); }
+function checkPromotion(tier){
+    if(LAST_TIER!==null && tier>LAST_TIER)celebratePromotion();
+    if(LAST_FLOOR!==null && (P.floor||0)>LAST_FLOOR)celebratePromotion();
+    LAST_TIER=tier; LAST_FLOOR=(P.floor||0);
+}
+function drawFireworks(t){
+    // rockets
+    for(let i=FW.rockets.length-1;i>=0;i--){
+        const r=FW.rockets[i];
+        r.y+=r.vy; r.vy+=0.03;
+        X.globalAlpha=0.9;X.fillStyle=r.col;
+        X.fillRect(r.x-1,r.y-4,2,7);
+        if(r.y<=r.tgt || r.vy>=0){
+            // burst: phi-spiral of sparks (golden angle)
+            const golden=2.399963, cnt=34;
+            for(let s=0;s<cnt;s++){
+                const a=s*golden, sp=1.2+ (s%5)*0.5;
+                FW.sparks.push({x:r.x,y:r.y,
+                    vx:Math.cos(a)*sp, vy:Math.sin(a)*sp,
+                    life:1, col:r.col});
+            }
+            FW.rockets.splice(i,1);
+        }
+    }
+    // sparks
+    for(let i=FW.sparks.length-1;i>=0;i--){
+        const s=FW.sparks[i];
+        s.x+=s.vx; s.y+=s.vy; s.vy+=0.045; s.vx*=0.985; s.life-=0.018;
+        if(s.life<=0){FW.sparks.splice(i,1);continue;}
+        X.globalAlpha=Math.max(0,s.life);
+        X.fillStyle=s.col;X.shadowColor=s.col;X.shadowBlur=6;
+        X.beginPath();X.arc(s.x,s.y,1.6,0,TAU);X.fill();
+    }
+    X.shadowBlur=0;X.globalAlpha=1;
+}
+
+// ====== LIVE STOCK MINI-CHART (rolling candlestick of the top holding) ======
+const CHARTBUF={sym:null, ticks:[]};   // ticks: {o,h,l,c}
+let _chartAccum=0, _chartOpen=null;
+function updateChart(){
+    const st=(P.stocks&&P.stocks.length)?P.stocks[0]:null;
+    if(!st)return;
+    if(CHARTBUF.sym!==st.name){CHARTBUF.sym=st.name;CHARTBUF.ticks=[];_chartOpen=st.price;}
+    const p=st.price;
+    if(_chartOpen==null)_chartOpen=p;
+    // form a new candle every ~24 frames
+    _chartAccum++;
+    let cur=CHARTBUF.ticks[CHARTBUF.ticks.length-1];
+    if(!cur || _chartAccum>=24){
+        cur={o:_chartOpen,h:p,l:p,c:p};CHARTBUF.ticks.push(cur);_chartAccum=0;_chartOpen=p;
+        if(CHARTBUF.ticks.length>40)CHARTBUF.ticks.shift();
+    }else{
+        cur.c=p; if(p>cur.h)cur.h=p; if(p<cur.l)cur.l=p;
+    }
+}
+function drawStockChart(x,y,w,h,t){
+    updateChart();
+    const ticks=CHARTBUF.ticks;
+    X.save();
+    X.fillStyle='#05060c';X.globalAlpha=0.55;X.fillRect(x,y,w,h);X.globalAlpha=1;
+    X.strokeStyle=THEME.accent+'40';X.lineWidth=0.6;X.strokeRect(x,y,w,h);
+    X.fillStyle=THEME.accent;X.font='7px monospace';X.textAlign='left';
+    X.fillText('LIVE · '+(CHARTBUF.sym||'—'),x+3,y-3);
+    if(ticks.length<2){X.restore();return;}
+    let lo=Infinity,hi=-Infinity;
+    for(const c of ticks){if(c.l<lo)lo=c.l;if(c.h>hi)hi=c.h;}
+    const pad=(hi-lo)*0.12||1; lo-=pad; hi+=pad;
+    const sc=v=>y+h-4-((v-lo)/(hi-lo))*(h-8);
+    const cw=(w-8)/40;
+    for(let i=0;i<ticks.length;i++){
+        const c=ticks[i];const cx=x+4+i*cw+cw/2;
+        const up=c.c>=c.o;const col=up?'#00FF8C':'#FF3B3B';
+        X.strokeStyle=col;X.lineWidth=0.7;
+        X.beginPath();X.moveTo(cx,sc(c.h));X.lineTo(cx,sc(c.l));X.stroke();
+        X.fillStyle=col;
+        const yo=sc(c.o),yc=sc(c.c);const bt=Math.min(yo,yc),bh=Math.max(1,Math.abs(yc-yo));
+        X.fillRect(cx-cw*0.32,bt,cw*0.64,bh);
+    }
+    // last price tag
+    const last=ticks[ticks.length-1];
+    X.fillStyle=last.c>=last.o?'#00FF8C':'#FF3B3B';X.font='8px monospace';X.textAlign='right';
+    X.fillText('$'+last.c.toFixed(1),x+w-3,y+9);
+    X.restore();X.globalAlpha=1;
 }
 
 // ====== CORP FLOORS MINI-MAP (phi-spaced levels + animated elevator) ======
@@ -1059,6 +1243,7 @@ function render(){
     X.restore();X.globalAlpha=1;
 
     const nw=P.netWorth;const tier=Math.min(5,Math.floor(Math.log10(Math.max(1,nw))/1.5));
+    checkPromotion(tier);
     // accent = corp theme; keep tier color available for rarity-driven bits
     const tc=THEME.accent;
 
@@ -1098,6 +1283,9 @@ function render(){
         X.fillStyle='#444';X.font='7px monospace';X.textAlign='left';X.fillText(st.name,sx+3,yB-3);
         X.fillStyle=col;X.textAlign='right';X.fillText('$'+st.price.toFixed(1),sx+sw-3,yB-3);
     });
+
+    // === LIVE STOCK MINI-CHART (top holding, rolling candles) ===
+    drawStockChart(170, 256, 350, 20, t);
 
     // === RIGHT: loot items rendered ===
     const lx=540,ly=50,lw=245,lh=200;
@@ -1244,6 +1432,9 @@ function render(){
     X.fillStyle='#222';X.font='7px monospace';
     X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-3);
 
+    // === PHI-FIREWORKS (tier / floor promotion celebration) ===
+    drawFireworks(t);
+
     // === VICTORY OVERLAY (full-screen phi loot-burst) ===
     drawVictory();
 
@@ -1252,6 +1443,9 @@ function render(){
 
     // === SEASON FINALE (full-screen podium) ===
     drawFinale();
+
+    // === 3D TOWER TOUR (full-screen elevator ride) ===
+    drawTour();
 
     if(!paused)requestAnimationFrame(render);
 }
@@ -1433,8 +1627,9 @@ document.getElementById('btn-ascend').onclick=showPrestige;
 document.getElementById('btn-raid').onclick=showRaid;
 document.getElementById('btn-quests').onclick=showQuests;
 document.getElementById('btn-finale').onclick=openFinale;
-// close full-screen finale on click/tap anywhere on the canvas
-C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;});
+document.getElementById('btn-tour').onclick=openTour;
+// close full-screen overlays on click/tap anywhere on the canvas
+C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;if(TOUR.active)TOUR.active=false;});
 
 // ====== INTERACTIVE MOUSE TILT / ZOOM (CSS 3D on the canvas) ======
 let TILT_ZOOM=1, TILT_RX=0, TILT_RY=0;
