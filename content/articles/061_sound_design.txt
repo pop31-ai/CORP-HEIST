@@ -1,0 +1,5 @@
+============================================================
+Звуковой дизайн
+============================================================
+
+Attack: sharp digital hit. Critical: bass drop + glass shatter. Dodge: whoosh. Victory: synth chord. Defeat: low drone. Инструменты: BFXR, Audacity, FMOD.

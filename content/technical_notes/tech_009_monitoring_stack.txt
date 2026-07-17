@@ -1,0 +1,5 @@
+============================================================
+Стек мониторинга
+============================================================
+
+Metrics: psutil (CPU, RAM, disk). Logs: logging module → rotating file. Alerts: email/webhook on thresholds. Future: Prometheus + Grafana.

@@ -1,0 +1,5 @@
+============================================================
+Streamer Kit
+============================================================
+
+Obs overlay template. Alert sounds. Chat commands (!gold, !hero, !stock). Stream description template. Hashtags: #CorpHeist #IndieGame #Python.

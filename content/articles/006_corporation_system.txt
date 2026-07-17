@@ -1,0 +1,5 @@
+============================================================
+5 корпораций: бонусы и стратегия
+============================================================
+
+Nexus Financial (+15% CRIT), Vertex Consulting (+20% GOLD), Apex Biotech (+25% XP), Obsidian Tech (+10% DODGE), Crimson Holdings (+12% DAMAGE). Каждая — playstyle. Корпорация permanent для героя.

@@ -1,0 +1,5 @@
+============================================================
+Пост на Reddit
+============================================================
+
+Title: I built a corporate hero battler in Python + Pygame. 10 heroes, 5 corporations, 7 floors, gacha with pity, passive tree, JSON saves. Open source.

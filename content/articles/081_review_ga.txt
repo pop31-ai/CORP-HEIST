@@ -1,0 +1,5 @@
+============================================================
+GitHub Actions: автоматизация
+============================================================
+
+CI: push/PR → checkout → setup-python → pip install pygame → py_compile main.py/game.py/heroes.py. Бесплатно для open source.

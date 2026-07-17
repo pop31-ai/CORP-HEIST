@@ -1,0 +1,5 @@
+============================================================
+Battle Pass концепция
+============================================================
+
+50 уровней. Free track: gold, xp boost. Premium track ($4.99): hero skins, exclusive heroes, emotes. Season: 30 дней. Refresh = retention.

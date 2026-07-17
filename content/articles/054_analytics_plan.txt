@@ -1,0 +1,5 @@
+============================================================
+План аналитики
+============================================================
+
+Acquisition: downloads, stars, forks. Engagement: session length, progress rate. Monetization: ARPU, conversion, LTV. Retention: D1, D7, D30. Инструменты: GameAnalytics, Firebase.

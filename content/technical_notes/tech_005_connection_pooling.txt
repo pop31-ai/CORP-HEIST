@@ -1,0 +1,5 @@
+============================================================
+Пулинг соединений
+============================================================
+
+10K WebSocket connections × 5KB buffer = 50MB. При 550K: 2.75GB. Connection pool: pre-allocate 10K, grow to 50K. Eviction: idle timeout 60s.

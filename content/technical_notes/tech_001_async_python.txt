@@ -1,0 +1,5 @@
+============================================================
+Async Python: почему asyncio
+============================================================
+
+CORP HEIST server: asyncio + websockets. Почему не threading: GIL. Почему не multiprocessing: overhead. asyncio: один поток, неблокирующий I/O. Идеально для WebSocket.

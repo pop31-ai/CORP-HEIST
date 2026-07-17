@@ -1,0 +1,9 @@
+============================================================
+Синергия команды
+============================================================
+
+Рекомендуемые композиции:
+  Tank: Risk Manager + CEO + Compliance
+  Burst: Trader + Quant + Data Scientist
+  Balanced: Consultant + Analyst + Brand Director
+  Speed: Quant + Trader + Analyst

@@ -1,0 +1,5 @@
+============================================================
+Система отзывов
+============================================================
+
+GitHub Issues + Discussions. In-game feedback form. Star rating. Bug report. Feature request voting. Отзывы — бесплатный QA.

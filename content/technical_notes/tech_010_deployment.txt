@@ -1,0 +1,5 @@
+============================================================
+Деплой на VM
+============================================================
+
+1. SSH to VM. 2. python3 -m venv venv. 3. pip install -r requirements.txt. 4. systemd service: corpheist.service. 5. nginx reverse proxy. 6. SSL: Let's Encrypt. Done.

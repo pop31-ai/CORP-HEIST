@@ -1,0 +1,5 @@
+============================================================
+Rate limiting
+============================================================
+
+Token bucket: 10 actions/sec, 1 render/sec, 5 pings/sec. Implementation: dict with timestamps. Cleanup: every 10s. Exceeded: drop + warning. After 3 warnings: disconnect.
