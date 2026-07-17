@@ -561,7 +561,6 @@ def make_card_app():
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
     app.router.add_post("/pulse/donate", pulse_donate)
     app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
-    app.router.add_post("/pulse/money-back", pulse_money_back)
     return app
 
 async def handle_card_route(request):
@@ -597,7 +596,6 @@ def make_unified_app():
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
     app.router.add_post("/pulse/donate", pulse_donate)
     app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
-    app.router.add_post("/pulse/money-back", pulse_money_back)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
