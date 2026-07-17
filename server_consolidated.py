@@ -696,6 +696,7 @@ def make_unified_app():
     app.router.add_post("/pulse/donate", pulse_donate)
     app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
     app.router.add_post("/pulse/duel", pulse_duel)
+    app.router.add_post("/pulse/passive", pulse_passive)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
