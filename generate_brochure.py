@@ -640,6 +640,8 @@ sections = [
         "Player -> Character -> System",
         "Zero P2P traffic",
         "1200 math render algorithms",
+        "Auto-refresh every hour (traffic saving)",
+        "Donate: sacrifice loot for gold multiplier",
     ]),
 ]
 

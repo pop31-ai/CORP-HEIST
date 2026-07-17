@@ -31,6 +31,8 @@ h1{color:#FFC800;font-size:13px;letter-spacing:3px;text-align:center;margin:8px 
 <button onclick="renderCategory('fashion')">FASHION</button>
 <button onclick="renderCategory('tech')">TECH</button>
 <button onclick="renderCategory('jets')">JETS</button>
+<button onclick="renderDonate()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
+<span id="refresh-timer" style="color:#555;font-size:9px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div class="grid" id="grid"></div>
 <div class="info" id="info"></div>
@@ -1037,6 +1039,43 @@ function renderCategory(cat){
     }
     document.getElementById('info').textContent=count+' items from '+cat+' | '+renderers.length+' total in category';
 }
+
+// donate: show gold burst animation on random rare items
+function renderDonate(){
+    const grid=document.getElementById('grid');grid.innerHTML='';
+    const cats=Object.keys(RENDERERS);
+    for(let i=0;i<30;i++){
+        const cat=cats[Math.floor(Math.random()*cats.length)];
+        const rLen=RENDERERS[cat].length;
+        const idx=Math.floor(Math.random()*rLen);
+        const code=idx*cats.length+cats.indexOf(cat);
+        const rarity=Math.floor(Math.random()*6);
+        const div=document.createElement('div');div.className='card';
+        const cv=document.createElement('canvas');cv.width=100;cv.height=100;
+        div.appendChild(cv);
+        const lb=document.createElement('div');lb.className='label';
+        lb.textContent='DONATED';lb.style.color='#FF3232';
+        div.appendChild(lb);
+        grid.appendChild(div);
+        // gold burst overlay
+        const ctx=cv.getContext('2d');
+        renderCard(cv,code,rarity,cat+'_'+idx);
+        ctx.fillStyle='rgba(255,200,0,0.3)';ctx.fillRect(0,0,100,100);
+        ctx.fillStyle='#FFC800';ctx.font='bold 14px monospace';ctx.textAlign='center';
+        ctx.fillText('GOLD',50,55);
+    }
+    document.getElementById('info').textContent='30 items donated for gold';
+}
+
+// hourly refresh
+let refreshLeft=3600;
+setInterval(()=>{
+    refreshLeft--;
+    if(refreshLeft<=0){location.reload();return;}
+    const m=Math.floor(refreshLeft/60),s=refreshLeft%60;
+    const el=document.getElementById('refresh-timer');
+    if(el)el.textContent='refresh in '+m+':'+(s<10?'0':'')+s;
+},1000);
 
 // START
 renderAll();

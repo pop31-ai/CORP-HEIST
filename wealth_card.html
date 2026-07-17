@@ -20,6 +20,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button onclick="tradeStock()">TRADE</button>
 <button onclick="togglePause()">PAUSE</button>
 <button onclick="exportPNG()">EXPORT PNG</button>
+<button onclick="donateLoot()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
+<span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
 <div class="info" id="info"></div>
@@ -263,8 +265,11 @@ function render(){
     const t=frame*0.018;frame++;
     X.fillStyle='#0a0a12';X.fillRect(0,0,W,H);
 
-    // grid
-    X.globalAlpha=0.06;for(let i=0;i<W;i+=30){X.beginPath();X.moveTo(i,0);X.lineTo(i,H);X.strokeStyle='#1a1a2e';X.lineWidth=0.5;X.stroke();}for(let i=0;i<H;i+=30){X.beginPath();X.moveTo(0,i);X.lineTo(W,i);X.stroke();}X.globalAlpha=1;
+    // grid (batched)
+    X.globalAlpha=0.06;X.strokeStyle='#1a1a2e';X.lineWidth=0.5;X.beginPath();
+    for(let i=0;i<W;i+=30){X.moveTo(i,0);X.lineTo(i,H);}
+    for(let i=0;i<H;i+=30){X.moveTo(0,i);X.lineTo(W,i);}
+    X.stroke();X.globalAlpha=1;
 
     const nw=P.netWorth;const tier=Math.min(5,Math.floor(Math.log10(Math.max(1,nw))/1.5));
     const tc=RCOL[tier];
@@ -280,10 +285,11 @@ function render(){
 
     P.stocks.forEach((st,idx)=>{
         const yB=sy+15+idx*(sh-20)/Math.max(1,P.stocks.length);
-        const pts=[];const amp=2.5+Math.abs(st.delta)*1.5;const freq=8+st.held/25;
-        for(let i=0;i<=sw;i+=2){const f=i/sw;const w=Math.sin(f*freq+t+idx*0.7)*amp*(1-Math.abs(f-0.5)*2);pts.push({x:sx+i,y:yB+w});}
+        const amp=2.5+Math.abs(st.delta)*1.5;const freq=8+st.held/25;
         const col=st.delta>=0?'#00FF8C':'#FF3232';
-        X.beginPath();pts.forEach((p,i)=>{i===0?X.moveTo(p.x,p.y):X.lineTo(p.x,p.y);});X.strokeStyle=col;X.globalAlpha=0.55;X.lineWidth=1.2;X.stroke();X.globalAlpha=1;
+        X.beginPath();
+        for(let i=0;i<=sw;i+=3){const f=i/sw;const w=Math.sin(f*freq+t+idx*0.7)*amp*(1-Math.abs(f-0.5)*2);i===0?X.moveTo(sx+i,yB+w):X.lineTo(sx+i,yB+w);}
+        X.strokeStyle=col;X.globalAlpha=0.55;X.lineWidth=1.2;X.stroke();X.globalAlpha=1;
         X.fillStyle='#444';X.font='7px monospace';X.textAlign='left';X.fillText(st.name,sx+3,yB-3);
         X.fillStyle=col;X.textAlign='right';X.fillText('$'+st.price.toFixed(1),sx+sw-3,yB-3);
     });
@@ -301,32 +307,29 @@ function render(){
         const cx=lx+8+col2*cellW+cellW/2;
         const cy=ly+8+row*cellH+cellH/2;
         const l=P.loot[i];
-        const {fn}=getRenderer(l.code);
         const rarityColor=RCOL[l.rarity];
-
-        // cell bg
-        X.fillStyle=rarityColor+'08';X.fillRect(cx-cellW/2+2,cy-cellW/2+2,cellW-4,cellH-4);
-
-        // maintenance check: ~5% chance item is "under maintenance"
         const isMaint=((l.code*7+13)%100)<5;
 
+        // cell bg + glow border in one stroke
+        X.fillStyle=isMaint?'#111':rarityColor+'08';
+        X.fillRect(cx-cellW/2+2,cy-cellH/2+2,cellW-4,cellH-4);
+        X.strokeStyle=isMaint?'#33333340':rarityColor+'60';X.lineWidth=0.5;
+        X.strokeRect(cx-cellW/2+2,cy-cellW/2+2,cellW-4,cellH-4);
+
         if(isMaint){
-            // UNDER MAINTENANCE - wrench icon + message
-            X.save();
-            X.strokeStyle='#555';X.lineWidth=1.5;
-            X.beginPath();X.arc(cx,cy-4,8,0,TAU);X.stroke();
             X.fillStyle='#333';X.font='8px monospace';X.textAlign='center';
-            X.fillText('MAINT.',cx,cy+10);
-            X.fillStyle='#444';X.font='6px monospace';
-            X.fillText('washing',cx,cy+18);
-            X.restore();
+            X.fillText('MAINT.',cx,cy+2);
         }else{
-            // render item normally
+            const {fn}=getRenderer(l.code);
             X.save();
-            X.beginPath();X.rect(cx-cellW/2+2,cy-cellW/2+2,cellW-4,cellH-4);X.clip();
+            X.beginPath();X.rect(cx-cellW/2+2,cy-cellH/2+2,cellW-4,cellH-4);X.clip();
             fn(X,cx,cy-2,cellW*0.42,l.code,l.rarity);
             X.restore();
         }
+
+        // qty
+        if(l.qty>1){X.fillStyle=rarityColor;X.font='bold 7px monospace';X.textAlign='right';X.fillText('x'+l.qty,cx+cellW/2-4,cy+cellH/2-4);}
+    }
 
         // glow border (maintenance = dimmed)
         X.strokeStyle=isMaint?'#33333340':rarityColor+'60';X.lineWidth=0.5;
@@ -415,8 +418,28 @@ function render(){
 function togglePause(){paused=!paused;if(paused)requestAnimationFrame(render);}
 function exportPNG(){const a=document.createElement('a');a.download='corp-heist-wealth.png';a.href=C.toDataURL('image/png');a.click();}
 
+// donate: sacrifice rarest loot for gold multiplier
+function donateLoot(){
+    if(!P.loot.length)return;
+    let ri=0;P.loot.forEach((l,i)=>{if(l.rarity>P.loot[ri].rarity)ri=i;});
+    const l=P.loot[ri];
+    const goldBonus=l.value*l.qty*[3,5,8,12,20,50][l.rarity];
+    P.gold+=goldBonus;P.netWorth+=goldBonus;
+    P.loot.splice(ri,1);
+    if(P.history.length)P.history.push(P.history[P.history.length-1]+goldBonus*0.5);
+}
+
+// hourly refresh
+let refreshLeft=3600;
+setInterval(()=>{
+    refreshLeft--;
+    if(refreshLeft<=0){location.reload();return;}
+    const m=Math.floor(refreshLeft/60),s=refreshLeft%60;
+    document.getElementById('refresh-timer').textContent='refresh in '+m+':'+(s<10?'0':'')+s;
+},1000);
+
 // ====== INFO ======
-document.getElementById('info').textContent=TOTAL+' math render algorithms | 10 categories | Pure Canvas, zero assets';
+document.getElementById('info').textContent=TOTAL+' math render algorithms | 10 categories | Pure Canvas, zero assets | Hourly refresh';
 
 newPortfolio();
 render();
