@@ -39,7 +39,27 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
-<div id="overlay" style="display:none;position:fixed;top:50px;left:50%;transform:translateX(-50%);background:#0a0a12ee;border:1px solid #FFC800;color:#FFC800;padding:14px 18px;font-family:monospace;font-size:11px;border-radius:6px;white-space:pre;max-width:90%;z-index:10"></div>
+<div id="overlay"></div>
+<style>
+#overlay{
+    display:none;position:fixed;top:50px;left:50%;
+    background:#0a0a12ee;border:1px solid #FFC800;color:#FFC800;
+    padding:14px 18px;font-family:monospace;font-size:11px;
+    border-radius:6px;max-width:90%;z-index:10;
+    transform:translateX(-50%) scale(.82) rotate(-2deg);
+    opacity:0;filter:blur(6px);
+    transition:opacity .32s cubic-bezier(.2,.9,.3,1.2),
+               transform .32s cubic-bezier(.2,.9,.3,1.2),
+               filter .32s ease, border-color .3s ease, box-shadow .3s ease;
+    box-shadow:0 0 0 rgba(255,200,0,0);
+}
+#overlay.show{
+    opacity:1;filter:blur(0);
+    transform:translateX(-50%) scale(1) rotate(0deg);
+    box-shadow:0 0 28px rgba(255,200,0,.25);
+}
+#overlay pre{white-space:pre;margin:6px 0 0}
+</style>
 <div class="info" id="info"></div>
 
 <script>
@@ -59,6 +79,18 @@ const RNAMES=['Common','Uncommon','Rare','Epic','Legendary','Unique'];
 const SNAMES=['AAPL','GOOGL','MSFT','TSLA','NVDA','JPM','META','AMZN','V','MA','NFLX','CRM','PYPL','COIN','PLTR','SQ','ABNB','SPOT','RIVN','SNOW'];
 const PNAMES=['WOLF','SHARK','EAGLE','COBRA','TIGER','PANTHER','DRAGON','VIPER','HAWK','PUMA'];
 const CNAMES=['Apex Corp','Quantum Ltd','Nova Group','Atlas Inc','Zenith Co','Titan SA','Cipher AG','Pulse LLC','Vector plc','Helix Corp'];
+
+// Corp color themes (indexed by corp_id % len). {accent, bg, aura, name}
+const CORP_THEMES=[
+    {name:'MERIDIAN', accent:'#00E5FF', bg:'#08111a', aura:'#00E5FF'},
+    {name:'APEX',     accent:'#FF7A00', bg:'#1a0f06', aura:'#FF7A00'},
+    {name:'NOVA',     accent:'#B14BFF', bg:'#120a1a', aura:'#B14BFF'},
+    {name:'VERTEX',   accent:'#00FF8C', bg:'#06180f', aura:'#00FF8C'},
+    {name:'PULSAR',   accent:'#FF4B7A', bg:'#1a0810', aura:'#FF4B7A'},
+    {name:'AUREATE',  accent:'#FFC800', bg:'#151005', aura:'#FFC800'},
+    {name:'SOLARIS',  accent:'#FFE24B', bg:'#161305', aura:'#FF9B00'},
+];
+let THEME=CORP_THEMES[5];   // default AUREATE (golden)
 
 let P,frame=0,paused=false;
 
@@ -302,8 +334,10 @@ function newPortfolio(){
     const stocks=[];for(let i=0;i<ns;i++){stocks.push({name:SNAMES[Math.floor(Math.random()*SNAMES.length)],price:Math.random()*300+10,held:Math.floor(Math.random()*200)+1,delta:(Math.random()-0.5)*10,vol:Math.floor(Math.random()*10000)});}
     const loot=[];for(let i=0;i<nl;i++){const r=rollRarity();loot.push({code:Math.floor(Math.random()*65535),rarity:r,qty:Math.floor(Math.random()*5)+1,value:[10,50,250,1500,10000,50000][r]});}
     let nw=0;stocks.forEach(s=>{nw+=s.price*s.held});loot.forEach(l=>{nw+=l.value*l.qty});
-    P={name:PNAMES[Math.floor(Math.random()*PNAMES.length)],corp:CNAMES[Math.floor(Math.random()*CNAMES.length)],level:Math.floor(Math.random()*50)+1,gold:Math.floor(Math.random()*500000),netWorth:nw,stocks,loot,
+    const cidx=Math.floor(Math.random()*CNAMES.length);
+    P={name:PNAMES[Math.floor(Math.random()*PNAMES.length)],corp:CNAMES[cidx],level:Math.floor(Math.random()*50)+1,gold:Math.floor(Math.random()*500000),netWorth:nw,stocks,loot,
        history:genHist(nw),prestige:Math.floor(Math.random()*10),streak:Math.floor(Math.random()*90),rank:Math.floor(Math.random()*100)+1};
+    THEME=CORP_THEMES[cidx%CORP_THEMES.length];
     frame=0;
 }
 function genHist(nw){const h=[];let v=nw*0.1;for(let i=0;i<150;i++){v+=v*0.02*(Math.random()-0.48);h.push(v);}return h;}
@@ -448,6 +482,91 @@ function drawHitParticles(cx,cy){
     }
     X.globalAlpha=1;
 }
+
+// ====== VICTORY: full-screen phi loot-burst on boss defeat ======
+const VICTORY={active:false,t:0,pool:0,shards:[]};
+function triggerVictory(pool){
+    VICTORY.active=true;VICTORY.t=0;VICTORY.pool=pool||0;VICTORY.shards=[];
+    const golden=2.399963;   // golden angle
+    // fountain of loot shards along the golden angle
+    for(let i=0;i<80;i++){
+        const a=i*golden;
+        const sp=1.5+ (i/80)*4.5;
+        VICTORY.shards.push({
+            a:a, r:0, sp:sp, life:1,
+            cat:Math.floor(Math.random()*11),
+            code:Math.floor(Math.random()*65535),
+            rar:Math.random()<0.15?5:Math.floor(Math.random()*5),
+            spin:Math.random()*TAU
+        });
+    }
+}
+function drawVictory(){
+    if(!VICTORY.active)return;
+    VICTORY.t+=0.016;
+    const t=VICTORY.t, cx=W/2, cy=H/2;
+    const dur=3.2;
+    const k=Math.min(1,t/dur);
+    // darken backdrop then fade out
+    X.save();
+    X.globalAlpha=(k<0.7?0.55:0.55*(1-(k-0.7)/0.3));
+    X.fillStyle='#000';X.fillRect(0,0,W,H);
+    X.restore();
+
+    // expanding golden phi-spiral shockwave
+    X.save();
+    const rings=3;
+    for(let rg=0;rg<rings;rg++){
+        const rt=t-rg*0.18;if(rt<0)continue;
+        X.globalAlpha=Math.max(0,0.5-rt*0.15);
+        X.strokeStyle=THEME.aura;X.lineWidth=2.2-rg*0.5;
+        X.beginPath();
+        const turns=4, steps=260;
+        const maxR=rt*260;
+        for(let i=0;i<=steps;i++){
+            const th=(i/steps)*turns*TAU + t*0.6;
+            const r=(maxR/Math.pow(PHI,turns*2))*Math.pow(PHI,th/(TAU/2));
+            if(r>maxR)break;
+            const px=cx+r*Math.cos(th), py=cy+r*Math.sin(th);
+            i===0?X.moveTo(px,py):X.lineTo(px,py);
+        }
+        X.stroke();
+    }
+    X.restore();
+
+    // loot shards flying outward along golden angle
+    for(const s of VICTORY.shards){
+        s.r+=s.sp; s.sp*=0.985; s.life-=0.006; s.spin+=0.08;
+        if(s.life<=0)continue;
+        const px=cx+Math.cos(s.a)*s.r*(1+t*0.05);
+        const py=cy+Math.sin(s.a)*s.r*(1+t*0.05) + t*t*8; // slight gravity
+        const sz=6+ s.rar*1.5;
+        X.save();X.globalAlpha=Math.max(0,s.life);
+        try{
+            const {fn}=getRenderer(s.code);
+            if(s.cat===10) fn(X,px,py,sz,s.code,s.rar,s.code*0.013);
+            else fn(X,px,py,sz,s.code,s.rar);
+        }catch(e){
+            X.fillStyle=RCOL[s.rar];X.beginPath();X.arc(px,py,sz*0.4,0,TAU);X.fill();
+        }
+        X.restore();
+    }
+
+    // centered banner
+    X.save();
+    const pop=Math.min(1,t*3);
+    X.globalAlpha=Math.min(1,k<0.85?1:(1-(k-0.85)/0.15));
+    X.textAlign='center';
+    X.shadowColor=THEME.aura;X.shadowBlur=24;
+    X.fillStyle=THEME.aura;X.font='bold '+(30*pop)+'px monospace';
+    X.fillText('BOSS DEFEATED',cx,cy-6);
+    X.shadowBlur=8;X.fillStyle='#FFD700';X.font='bold 16px monospace';
+    X.fillText('φ LOOT POOL  +'+fmt(VICTORY.pool)+'g',cx,cy+22);
+    X.restore();
+    X.globalAlpha=1;
+
+    if(t>=dur)VICTORY.active=false;
+}
 // ====== PRESTIGE AURA (ranked golden rings around the whole card) ======
 function drawPrestigeAura(t){
     const p=P.prestige||0;
@@ -460,7 +579,7 @@ function drawPrestigeAura(t){
         const rot=t*(0.05+i*0.02)*(i%2?-1:1);
         const seg=Math.floor(PHI*(i+3));   // phi-ish segment count
         X.globalAlpha=0.10+0.03*Math.sin(t*1.5+i);
-        X.strokeStyle=i===rings-1?'#FF6BD6':'#FFC800';
+        X.strokeStyle=i===rings-1?'#FF6BD6':THEME.aura;
         X.lineWidth=0.8;
         X.beginPath();
         for(let s=0;s<=seg;s++){
@@ -544,10 +663,15 @@ function drawGoldenSpiralLayered(cx,cy,maxR,turns,t,col){
 
 function render(){
     const t=frame*0.018;frame++;
-    X.fillStyle='#0a0a12';X.fillRect(0,0,W,H);
+    // corp-themed background with subtle centered vignette
+    X.fillStyle=THEME.bg;X.fillRect(0,0,W,H);
+    const vg=X.createRadialGradient(W/2,H/2,60,W/2,H/2,Math.max(W,H)*0.75);
+    vg.addColorStop(0,THEME.accent+'10');vg.addColorStop(1,'#00000000');
+    X.fillStyle=vg;X.fillRect(0,0,W,H);
 
     const nw=P.netWorth;const tier=Math.min(5,Math.floor(Math.log10(Math.max(1,nw))/1.5));
-    const tc=RCOL[tier];
+    // accent = corp theme; keep tier color available for rarity-driven bits
+    const tc=THEME.accent;
 
     // === GOLDEN SECTION BACKGROUND ===
     drawGoldenBg(t,tc);
@@ -716,6 +840,9 @@ function render(){
     X.fillStyle='#222';X.font='7px monospace';
     X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-3);
 
+    // === VICTORY OVERLAY (full-screen phi loot-burst) ===
+    drawVictory();
+
     if(!paused)requestAnimationFrame(render);
 }
 
@@ -780,6 +907,7 @@ async function loadPlayer(uid){
         if(d.error)return;
         P.name=PNAMES[d.user_id%PNAMES.length];
         P.corp=CNAMES[d.corp_id%CNAMES.length];
+        THEME=CORP_THEMES[d.corp_id%CORP_THEMES.length];
         P.level=d.level;P.gold=d.gold;P.netWorth=d.net_worth;
         P.stocks=d.stocks||[];P.loot=d.loot||[];
         P.history=d.history&&d.history.length?d.history:genHist(d.net_worth);
@@ -846,12 +974,36 @@ async function showBoard(){
         showOverlay('LEADERBOARD (top 10)', d.slice(0,10).map(p=>`#${p.rank} ${p.name}  $${fmt(p.net_worth)}  ${p.corp}`).join('\n'));
     }catch(e){showOverlay('Board','offline');}
 }
-function showOverlay(title,text){
+// morphing panel core: set themed border, morph-in, auto-dismiss
+function _applyPanel(html,ttl){
     const el=document.getElementById('overlay');
-    el.innerHTML='<b>'+title+'</b><pre>'+text+'</pre>';
-    el.style.display='block';el.style.opacity='0';el.style.transform='translateX(-50%) translateY(-8px)';
-    requestAnimationFrame(()=>{el.style.transition='opacity .35s ease,transform .35s ease';el.style.opacity='1';el.style.transform='translateX(-50%) translateY(0)';});
-    clearTimeout(el._t);el._t=setTimeout(()=>{el.style.opacity='0';setTimeout(()=>el.style.display='none',350);},6000);
+    el.style.borderColor=THEME.accent;el.style.color=THEME.accent;
+    const paint=()=>{
+        el.innerHTML=html;
+        el.style.display='block';
+        el.classList.remove('show');
+        // force reflow so the morph transition replays
+        void el.offsetWidth;
+        requestAnimationFrame(()=>el.classList.add('show'));
+        clearTimeout(el._t);
+        if(ttl)el._t=setTimeout(hideOverlay,ttl);
+    };
+    if(el.classList.contains('show')){
+        // morph out old panel, then morph in new (panel-to-panel transition)
+        el.classList.remove('show');
+        clearTimeout(el._t);
+        setTimeout(paint,180);
+    }else paint();
+}
+function showOverlay(title,text){
+    _applyPanel('<b>'+title+'</b><pre>'+text+'</pre>',6000);
+}
+function openPanel(html,ttl){ _applyPanel(html,ttl||9000); }
+function hideOverlay(){
+    const el=document.getElementById('overlay');
+    el.classList.remove('show');
+    clearTimeout(el._t);
+    setTimeout(()=>{if(!el.classList.contains('show'))el.style.display='none';},340);
 }
 async function showRewards(){
     try{
@@ -888,15 +1040,12 @@ async function showPrestige(){
         const lvlPct=Math.min(100,100*d.level/req.level);
         const netPct=Math.min(100,100*d.net_worth/req.net_worth);
         const pinkBar=(pct,ok)=>'<div style="height:7px;background:#1a0a18;border:1px solid #FF6BD6;border-radius:2px;margin:2px 0;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(ok?'linear-gradient(90deg,#FF6BD6,#FFC800)':'#FF6BD6')+';transition:width .5s"></div></div>';
-        const el=document.getElementById('overlay');
-        el.innerHTML='<b>ASCENSION φ — rank '+d.prestige+' (×'+d.current_mult+')</b>'+
+        openPanel('<b>ASCENSION φ — rank '+d.prestige+' (×'+d.current_mult+')</b>'+
             '<div style="color:#FF6BD6;font-size:10px;margin:4px 0">next rank → ×'+d.next_mult+'</div>'+
             '<div style="color:#888;font-size:9px">level '+d.level+' / '+req.level+'</div>'+pinkBar(lvlPct,lvlPct>=100)+
             '<div style="color:#888;font-size:9px">net '+fmt(d.net_worth)+' / '+fmt(req.net_worth)+'</div>'+pinkBar(netPct,netPct>=100)+
             '<pre style="font-size:9px">status: '+(d.eligible?'ELIGIBLE':'not yet')+'</pre>'+
-            (d.eligible?'<button onclick="doAscend()" style="margin-top:6px;background:#1a1a2e;color:#FF6BD6;border:1px solid #FF6BD6;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">ASCEND (reset for permanent xφ)</button>':'');
-        el.style.display='block';el.style.opacity='1';
-        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',9000);
+            (d.eligible?'<button onclick="doAscend()" style="margin-top:6px;background:#1a1a2e;color:#FF6BD6;border:1px solid #FF6BD6;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">ASCEND (reset for permanent xφ)</button>':''));
     }catch(e){showOverlay('Ascend','offline');}
 }
 async function doAscend(){
@@ -915,13 +1064,10 @@ async function showRaid(){
         RAIDVIZ.hp=d.hp;RAIDVIZ.max=d.max_hp;RAIDVIZ.pct=d.pct;RAIDVIZ.name=d.boss;RAIDVIZ.defeated=d.defeated;RAIDVIZ.loaded=true;
         const rows=(d.top_contributors||[]).map((c,i)=>`#${i+1} P_${c.user_id}  ${fmt(c.damage)}`).join('\n')||'no strikes yet';
         const bar=hpBarHTML(d.pct);
-        const el=document.getElementById('overlay');
-        el.innerHTML='<b>GUILD RAID — '+d.boss+'</b>'+bar+'<pre>'+
+        openPanel('<b>GUILD RAID — '+d.boss+'</b>'+bar+'<pre>'+
             `HP ${fmt(d.hp)}/${fmt(d.max_hp)}  (${d.pct}%)\n`+
             (d.defeated?'** DEFEATED **\n':'')+`\ntop damage:\n`+rows+'</pre>'+
-            (d.defeated?'':'<button onclick="doStrike()" style="margin-top:6px;background:#1a1a2e;color:#FF4B4B;border:1px solid #FF4B4B;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">STRIKE BOSS</button>');
-        el.style.display='block';el.style.opacity='1';
-        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',9000);
+            (d.defeated?'':'<button onclick="doStrike()" style="margin-top:6px;background:#1a1a2e;color:#FF4B4B;border:1px solid #FF4B4B;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">STRIKE BOSS</button>'));
     }catch(e){showOverlay('Raid','offline');}
 }
 async function doStrike(){
@@ -933,22 +1079,25 @@ async function doStrike(){
         RAIDVIZ.defeated=!!d.defeated;RAIDVIZ.flash=1;RAIDVIZ.loaded=true;
         spawnHitParticles();
         let msg='dmg '+fmt(d.damage)+'  boss '+fmt(d.boss_hp)+'/'+fmt(d.boss_max);
-        if(d.defeated){msg+='\n** BOSS DOWN ** loot pool '+fmt(d.loot.pool)+'g';loadPlayer(_uid());}
-        showOverlay('STRIKE',msg);
-        setTimeout(showRaid,900);
+        if(d.defeated){
+            msg+='\n** BOSS DOWN ** loot pool '+fmt(d.loot.pool)+'g';
+            triggerVictory(d.loot&&d.loot.pool?d.loot.pool:0);
+            hideOverlay();
+            loadPlayer(_uid());
+        }else{
+            showOverlay('STRIKE',msg);
+            setTimeout(showRaid,900);
+        }
     }catch(e){showOverlay('Raid','offline');}
 }
 async function showQuests(){
     try{
         const r=await fetch(API+'/api/quests?uid='+_uid());const d=await r.json();
-        const el=document.getElementById('overlay');
         const items=d.quests.map(q=>
             '<div style="margin:6px 0"><div style="color:#00FF8C;font-size:10px">[' + q.slot + '] ' + q.desc +
             '  <span style="color:#FFC800">+' + fmt(q.reward_gold) + 'g</span></div>' + questBarHTML() +
             '<button onclick="claimQuest(' + q.slot + ')" style="margin-top:2px;background:#1a1a2e;color:#00FF8C;border:1px solid #00FF8C;padding:2px 6px;font-family:monospace;font-size:9px;cursor:pointer">CLAIM ' + q.slot + '</button></div>').join('');
-        el.innerHTML='<b>DAILY φ-QUESTS</b>'+items+'<pre style="color:#555;font-size:8px">'+d.note+'</pre>';
-        el.style.display='block';el.style.opacity='1';
-        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',10000);
+        openPanel('<b>DAILY φ-QUESTS</b>'+items+'<pre style="color:#555;font-size:8px">'+d.note+'</pre>',10000);
     }catch(e){showOverlay('Quests','offline');}
 }
 async function claimQuest(slot){
@@ -975,11 +1124,8 @@ async function showPassives(){
         let cr=await fetch(API+'/api/char/'+uid);let cc=await cr.json();
         const lvl=cc.passives||[0,0,0,0,0,0,0,0,0,0,0,0];
         const rows=d.nodes.map((n,i)=>`${n.id}. ${n.name}  Lv${lvl[i]||0}  x${n.mult}  cost ${Math.round(n.cost*Math.pow(PHI,(lvl[i]||0)))}`).join('\n');
-        const el=document.getElementById('overlay');
-        el.innerHTML='<b>PASSIVE TREE (phi-cost)</b><pre>'+rows+'</pre>'+
-            '<button onclick="unlockPassive(0)" style="margin-top:6px;background:#1a1a2e;color:#FFC800;border:1px solid #FFC800;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">UNLOCK NODE 0</button>';
-        el.style.display='block';
-        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',9000);
+        openPanel('<b>PASSIVE TREE (phi-cost)</b><pre>'+rows+'</pre>'+
+            '<button onclick="unlockPassive(0)" style="margin-top:6px;background:#1a1a2e;color:#FFC800;border:1px solid #FFC800;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">UNLOCK NODE 0</button>');
     }catch(e){showOverlay('Passives','offline');}
 }
 async function unlockPassive(node){
