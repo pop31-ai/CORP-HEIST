@@ -39,9 +39,11 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-finale" style="border-color:#FFC800;color:#FFC800">SEASON FINALE</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
-<canvas id="c" width="800" height="500"></canvas>
+<div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
 <div id="overlay"></div>
 <style>
+#c{transition:transform .12s ease-out;transform-style:preserve-3d;will-change:transform;border-radius:6px}
+#c.tilting{transition:transform .05s linear}
 #overlay{
     display:none;position:fixed;top:50px;left:50%;
     background:#0a0a12ee;border:1px solid #FFC800;color:#FFC800;
@@ -368,7 +370,7 @@ function newPortfolio(){
     let nw=0;stocks.forEach(s=>{nw+=s.price*s.held});loot.forEach(l=>{nw+=l.value*l.qty});
     const cidx=Math.floor(Math.random()*CNAMES.length);
     P={name:PNAMES[Math.floor(Math.random()*PNAMES.length)],corp:CNAMES[cidx],level:Math.floor(Math.random()*50)+1,gold:Math.floor(Math.random()*500000),netWorth:nw,stocks,loot,
-       history:genHist(nw),prestige:Math.floor(Math.random()*10),streak:Math.floor(Math.random()*90),rank:Math.floor(Math.random()*100)+1};
+       history:genHist(nw),prestige:Math.floor(Math.random()*10),streak:Math.floor(Math.random()*90),rank:Math.floor(Math.random()*100)+1,floor:Math.floor(Math.random()*12)};
     setTheme(cidx%CORP_THEMES.length);
     frame=0;
 }
@@ -773,6 +775,93 @@ function drawPrestigeAura(t){
     X.globalAlpha=1;
 }
 
+// ====== CORP FLOORS MINI-MAP (phi-spaced levels + animated elevator) ======
+const FLOOR_NAMES=['Lobby','Trading','Vault','Boardroom','Data Ctr','Sky Garden','Penthouse','Cloud Spire','Gold Rsv','Quantum','Throne','Apex Atrium'];
+let ELEV_Y=null;   // animated elevator position (smoothed)
+function drawFloorMap(x,y,w,h,t){
+    const n=FLOOR_NAMES.length;
+    const cur=Math.max(0,Math.min(n-1, P.floor||0));
+    // phi-weighted row heights: taller near the bottom (grander lower floors)
+    const weights=[];let sum=0;
+    for(let i=0;i<n;i++){const wgt=Math.pow(PHI,(i)/6);weights.push(wgt);sum+=wgt;}
+    // panel
+    X.save();
+    X.fillStyle='#05060c';X.globalAlpha=0.6;X.fillRect(x,y,w,h);X.globalAlpha=1;
+    X.strokeStyle=THEME.accent+'50';X.lineWidth=0.6;X.strokeRect(x,y,w,h);
+    X.fillStyle=THEME.accent;X.font='7px monospace';X.textAlign='left';
+    X.fillText('CORP TOWER',x+4,y-3);
+
+    // rows from top(highest floor index) down to bottom(Lobby)
+    let yy=y+4;
+    const rows=[];   // store center Y per floor index
+    for(let i=n-1;i>=0;i--){
+        const rh=(h-8)*weights[i]/sum;
+        const up=i%2===0;
+        // floor slab
+        X.globalAlpha=(i===cur?0.9:0.35);
+        X.fillStyle=(i===cur?THEME.accent:'#1a1b28');
+        X.fillRect(x+16,yy,w-22,Math.max(2,rh-1.5));
+        // label
+        X.globalAlpha=(i===cur?1:0.5);
+        X.fillStyle=(i===cur?'#05060c':THEME.accent);
+        X.font='6px monospace';X.textAlign='left';
+        X.fillText((i+1)+'·'+FLOOR_NAMES[i], x+18, yy+Math.max(6,rh/2+2));
+        rows[i]=yy+rh/2;
+        yy+=rh;
+    }
+    X.globalAlpha=1;
+    // elevator shaft on the left edge
+    X.strokeStyle=THEME.accent+'40';X.lineWidth=1;
+    X.beginPath();X.moveTo(x+9,y+4);X.lineTo(x+9,y+h-4);X.stroke();
+    // elevator cab: ease toward current floor's Y
+    const targetY=rows[cur];
+    if(ELEV_Y==null)ELEV_Y=targetY;
+    ELEV_Y+=(targetY-ELEV_Y)*0.08;
+    // cab glow
+    X.save();
+    X.shadowColor=THEME.aura;X.shadowBlur=8;
+    X.fillStyle=THEME.aura;
+    X.fillRect(x+6,ELEV_Y-4,7,8);
+    X.restore();
+    // cab cable/counterweight motes
+    X.globalAlpha=0.5;X.fillStyle=THEME.accent;
+    const mote=(y+4)+((t*20)%(h-8));
+    X.fillRect(x+8.5,mote,1.5,3);
+    X.globalAlpha=1;
+    X.restore();
+}
+
+// ====== GOLDEN PHI-RAIN (wealth weather, density scales with net worth) ======
+const RAIN=[];
+function drawGoldRain(t,tier){
+    // target droplet count grows with wealth tier (0..5) on a phi curve
+    const target=Math.round(6*Math.pow(PHI,tier));   // ~6 .. ~110
+    while(RAIN.length<target){
+        RAIN.push({x:Math.random()*W, y:Math.random()*-H,
+            v:1.2+Math.random()*2.6, sz:1+Math.random()*2.2,
+            sway:Math.random()*TAU, coin:Math.random()<0.35});
+    }
+    while(RAIN.length>target)RAIN.pop();
+    X.save();
+    for(const d of RAIN){
+        d.y+=d.v; d.sway+=0.04;
+        d.x+=Math.sin(d.sway)*0.3;
+        if(d.y>H+6){d.y=-6;d.x=Math.random()*W;}
+        X.globalAlpha=0.18+0.22*(d.sz/3.2);
+        if(d.coin){
+            // spinning golden coin (phi-thin ellipse)
+            const wob=Math.abs(Math.sin(t*3+d.sway));
+            X.fillStyle=THEME.aura;
+            X.beginPath();X.ellipse(d.x,d.y,d.sz*1.4,d.sz*1.4*wob+0.4,0,0,TAU);X.fill();
+        }else{
+            // golden streak
+            X.strokeStyle=THEME.aura;X.lineWidth=d.sz*0.5;
+            X.beginPath();X.moveTo(d.x,d.y);X.lineTo(d.x,d.y+d.sz*3);X.stroke();
+        }
+    }
+    X.restore();X.globalAlpha=1;
+}
+
 // ====== LIVE TRADE TICKER (scrolling marquee) ======
 let TICKER_X=0;
 function drawTicker(t){
@@ -976,6 +1065,9 @@ function render(){
     // === GOLDEN SECTION BACKGROUND ===
     drawGoldenBg(t,tc);
 
+    // === GOLDEN PHI-RAIN (wealth weather) ===
+    drawGoldRain(t,tier);
+
     // === PRESTIGE AURA (ranked rings framing the card) ===
     drawPrestigeAura(t);
 
@@ -987,6 +1079,9 @@ function render(){
 
     // === LEFT: true golden spiral (layered) ===
     drawGoldenSpiralLayered(90, 250, Math.min(W,H)*0.38, 3.2, t, tc);
+
+    // === CORP FLOORS MINI-MAP (left edge, phi-elevator) ===
+    drawFloorMap(6, 66, 62, 176, t);
 
     // === CENTER: stocks as waves ===
     const sx=170,sy=50,sw=350,sh=200;
@@ -1227,6 +1322,7 @@ async function loadPlayer(uid){
         P.stocks=d.stocks||[];P.loot=d.loot||[];
         P.history=d.history&&d.history.length?d.history:genHist(d.net_worth);
         P.prestige=d.prestige;P.streak=d.streak_days;
+        P.floor=(d.floor!=null?d.floor:0);
         P.rank=d.rank_percent;frame=0;
         loadRaidViz(uid);
     }catch(e){}
@@ -1339,6 +1435,33 @@ document.getElementById('btn-quests').onclick=showQuests;
 document.getElementById('btn-finale').onclick=openFinale;
 // close full-screen finale on click/tap anywhere on the canvas
 C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;});
+
+// ====== INTERACTIVE MOUSE TILT / ZOOM (CSS 3D on the canvas) ======
+let TILT_ZOOM=1, TILT_RX=0, TILT_RY=0;
+function applyCardTransform(){
+    C.style.transform='rotateX('+TILT_RX.toFixed(2)+'deg) rotateY('+TILT_RY.toFixed(2)+'deg) scale('+TILT_ZOOM.toFixed(3)+')';
+}
+C.addEventListener('mousemove',e=>{
+    const r=C.getBoundingClientRect();
+    const px=(e.clientX-r.left)/r.width -0.5;   // -0.5..0.5
+    const py=(e.clientY-r.top)/r.height -0.5;
+    const max=9;   // max tilt degrees
+    TILT_RX=-py*max; TILT_RY=px*max;
+    C.classList.add('tilting');
+    applyCardTransform();
+});
+C.addEventListener('mouseleave',()=>{
+    TILT_RX=0; TILT_RY=0;
+    C.classList.remove('tilting');
+    applyCardTransform();
+});
+C.addEventListener('wheel',e=>{
+    e.preventDefault();
+    TILT_ZOOM=Math.max(0.7,Math.min(2.2,TILT_ZOOM - Math.sign(e.deltaY)*0.08));
+    applyCardTransform();
+},{passive:false});
+// double-click to reset view
+C.addEventListener('dblclick',()=>{TILT_ZOOM=1;TILT_RX=0;TILT_RY=0;C.classList.remove('tilting');applyCardTransform();});
 function _uid(){return _urlUid&&_urlUid!=='local'?_urlUid:1000;}
 function hpBarHTML(pct){
     pct=Math.max(0,Math.min(100,pct));
