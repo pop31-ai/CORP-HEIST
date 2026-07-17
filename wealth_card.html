@@ -310,16 +310,61 @@ function drawGoldenSpiral(cx,cy,maxR,turns,t,col){
 
 // Background tinted with golden-section guide lines
 function drawGoldenBg(t,tc){
-    // golden ratio vertical guide at W/phi
+    // golden ratio vertical/horizontal guides
     const gx=W/PHI, gy=H/PHI;
     X.save();
     X.globalAlpha=0.04;X.strokeStyle='#FFC800';X.lineWidth=0.5;
     X.beginPath();X.moveTo(gx,0);X.lineTo(gx,H);X.stroke();
     X.beginPath();X.moveTo(0,gy);X.lineTo(W,gy);X.stroke();
     X.restore();
+
+    // golden-section grid: divide by phi repeatedly
+    X.save();
+    X.globalAlpha=0.025;X.strokeStyle='#FFC800';X.lineWidth=0.4;
+    X.beginPath();
+    let x=W/PHI;
+    for(let k=0;k<6;k++){x/=PHI;X.moveTo(x,0);X.lineTo(x,H);X.moveTo(W-x,0);X.lineTo(W-x,H);}
+    let y=H/PHI;
+    for(let k=0;k<6;k++){y/=PHI;X.moveTo(0,y);X.lineTo(W,y);X.moveTo(0,H-y);X.lineTo(W,H-y);}
+    X.stroke();
+    X.restore();
+
     // faint golden rectangles in corners
     drawGoldenRect(8, 8, W*0.32, W*0.32/PHI, 5, tc, 0.05);
     drawGoldenRect(W-W*0.32-8, H-W*0.32/PHI-8, W*0.32, W*0.32/PHI, 5, tc, 0.05);
+
+    // radial golden rays from center under phi angles
+    const ccx=W/2, ccy=H/2, maxR=Math.hypot(W,H)/2;
+    X.save();
+    X.globalAlpha=0.03;X.strokeStyle='#FFC800';X.lineWidth=0.4;
+    X.beginPath();
+    for(let i=0;i<24;i++){
+        const a=(i*PHI*TAU)%TAU + t*0.05;
+        X.moveTo(ccx,ccy);X.lineTo(ccx+Math.cos(a)*maxR, ccy+Math.sin(a)*maxR);
+    }
+    X.stroke();
+    X.restore();
+}
+
+// Multi-layer gradient golden spiral (3 phase-shifted layers)
+function drawGoldenSpiralLayered(cx,cy,maxR,turns,t,col){
+    for(let L=0;L<3;L++){
+        const a=maxR/Math.pow(PHI,turns*2)*(1-L*0.18);
+        X.save();
+        X.globalAlpha=0.18-L*0.04;
+        X.strokeStyle=col;X.lineWidth=1.2-L*0.25;
+        X.beginPath();
+        const steps=420, phase=L*0.6;
+        for(let i=0;i<=steps;i++){
+            const th=(i/steps)*turns*TAU + t*0.15 + phase;
+            const r=a*Math.pow(PHI, th/(TAU/2));
+            if(r>maxR*1.7)break;
+            const px=cx+r*Math.cos(th), py=cy+r*Math.sin(th);
+            i===0?X.moveTo(px,py):X.lineTo(px,py);
+        }
+        X.stroke();
+        X.restore();
+    }
 }
 
 function render(){
@@ -332,8 +377,8 @@ function render(){
     // === GOLDEN SECTION BACKGROUND ===
     drawGoldenBg(t,tc);
 
-    // === LEFT: true golden spiral ===
-    drawGoldenSpiral(90, 250, Math.min(W,H)*0.38, 3.2, t, tc);
+    // === LEFT: true golden spiral (layered) ===
+    drawGoldenSpiralLayered(90, 250, Math.min(W,H)*0.38, 3.2, t, tc);
 
     // === CENTER: stocks as waves ===
     const sx=170,sy=50,sw=350,sh=200;
