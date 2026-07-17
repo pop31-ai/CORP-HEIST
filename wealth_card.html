@@ -36,6 +36,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-ascend" style="border-color:#FF6BD6;color:#FF6BD6">ASCEND</button>
 <button id="btn-raid" style="border-color:#FF4B4B;color:#FF4B4B">GUILD RAID</button>
 <button id="btn-quests" style="border-color:#00FF8C;color:#00FF8C">DAILY QUESTS</button>
+<button id="btn-finale" style="border-color:#FFC800;color:#FFC800">SEASON FINALE</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
@@ -90,7 +91,32 @@ const CORP_THEMES=[
     {name:'AUREATE',  accent:'#FFC800', bg:'#151005', aura:'#FFC800'},
     {name:'SOLARIS',  accent:'#FFE24B', bg:'#161305', aura:'#FF9B00'},
 ];
-let THEME=CORP_THEMES[5];   // default AUREATE (golden)
+// ---- theme cross-fade engine ----
+function hex2rgb(h){h=h.replace('#','');return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)];}
+function rgb2hex(a){return '#'+a.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('');}
+function lerpHex(a,b,k){const A=hex2rgb(a),B=hex2rgb(b);return rgb2hex([A[0]+(B[0]-A[0])*k,A[1]+(B[1]-A[1])*k,A[2]+(B[2]-A[2])*k]);}
+let THEME=Object.assign({},CORP_THEMES[5]);   // live (interpolated) theme
+let THEME_FROM=Object.assign({},CORP_THEMES[5]);
+let THEME_TO=Object.assign({},CORP_THEMES[5]);
+let THEME_T=1;   // 1 = settled
+let THEME_IDX=5;
+function setTheme(idx,instant){
+    idx=((idx%CORP_THEMES.length)+CORP_THEMES.length)%CORP_THEMES.length;
+    THEME_IDX=idx;
+    if(instant){THEME_FROM=Object.assign({},CORP_THEMES[idx]);THEME_TO=Object.assign({},CORP_THEMES[idx]);THEME=Object.assign({},CORP_THEMES[idx]);THEME_T=1;return;}
+    THEME_FROM=Object.assign({},THEME);   // start from whatever is on screen now
+    THEME_TO=Object.assign({},CORP_THEMES[idx]);
+    THEME_T=0;
+}
+function tickTheme(){
+    if(THEME_T>=1)return;
+    THEME_T=Math.min(1,THEME_T+0.035);
+    const k=THEME_T<0.5?2*THEME_T*THEME_T:1-Math.pow(-2*THEME_T+2,2)/2; // ease in-out
+    THEME.name=THEME_TO.name;
+    THEME.accent=lerpHex(THEME_FROM.accent,THEME_TO.accent,k);
+    THEME.bg=lerpHex(THEME_FROM.bg,THEME_TO.bg,k);
+    THEME.aura=lerpHex(THEME_FROM.aura,THEME_TO.aura,k);
+}
 
 let P,frame=0,paused=false;
 
@@ -337,7 +363,7 @@ function newPortfolio(){
     const cidx=Math.floor(Math.random()*CNAMES.length);
     P={name:PNAMES[Math.floor(Math.random()*PNAMES.length)],corp:CNAMES[cidx],level:Math.floor(Math.random()*50)+1,gold:Math.floor(Math.random()*500000),netWorth:nw,stocks,loot,
        history:genHist(nw),prestige:Math.floor(Math.random()*10),streak:Math.floor(Math.random()*90),rank:Math.floor(Math.random()*100)+1};
-    THEME=CORP_THEMES[cidx%CORP_THEMES.length];
+    setTheme(cidx%CORP_THEMES.length);
     frame=0;
 }
 function genHist(nw){const h=[];let v=nw*0.1;for(let i=0;i<150;i++){v+=v*0.02*(Math.random()-0.48);h.push(v);}return h;}
@@ -567,6 +593,99 @@ function drawVictory(){
 
     if(t>=dur)VICTORY.active=false;
 }
+
+// ====== SEASON FINALE: top-3 podium screen ======
+const FINALE={active:false,t:0,data:null,confetti:[]};
+async function openFinale(){
+    try{
+        const r=await fetch(API+'/api/season-rewards');const d=await r.json();
+        FINALE.data=d;FINALE.t=0;FINALE.active=true;FINALE.confetti=[];
+        for(let i=0;i<120;i++){
+            FINALE.confetti.push({x:Math.random()*W,y:-Math.random()*H,
+                vy:0.6+Math.random()*1.6, vx:(Math.random()-0.5)*0.6,
+                sz:2+Math.random()*3, rot:Math.random()*TAU, vr:(Math.random()-0.5)*0.2,
+                col:['#FFC800','#FFE24B','#FF9B00','#FF6BD6','#00E5FF'][Math.floor(Math.random()*5)]});
+        }
+    }catch(e){showOverlay('Finale','offline');}
+}
+function drawPodiumEmblem(cx,cy,size,seed,t,col){
+    const golden=2.399963, sides=3+(seed%5);
+    X.save();X.translate(cx,cy);X.rotate(t*0.4);
+    let r=size;
+    for(let l=0;l<4;l++){
+        X.globalAlpha=0.8-l*0.15;X.strokeStyle=col;X.lineWidth=1.4-l*0.25;
+        X.beginPath();
+        for(let s=0;s<=sides;s++){const a=s*TAU/sides+l*golden;s===0?X.moveTo(Math.cos(a)*r,Math.sin(a)*r):X.lineTo(Math.cos(a)*r,Math.sin(a)*r);}
+        X.stroke();r/=PHI;X.rotate(golden*0.5);
+    }
+    X.globalAlpha=1;X.fillStyle=col;X.shadowColor=col;X.shadowBlur=10;
+    X.beginPath();X.arc(0,0,size*0.14,0,TAU);X.fill();X.restore();X.globalAlpha=1;
+}
+function drawFinale(){
+    if(!FINALE.active||!FINALE.data)return;
+    FINALE.t+=0.016;const t=FINALE.t;
+    const k=Math.min(1,t/0.6);
+    // backdrop
+    X.save();X.globalAlpha=0.9*k;X.fillStyle='#05060a';X.fillRect(0,0,W,H);X.restore();
+    // radial golden glow behind podium
+    const cx=W/2, gy=H*0.62;
+    const g=X.createRadialGradient(cx,gy,20,cx,gy,W*0.5);
+    g.addColorStop(0,'#FFC80018');g.addColorStop(1,'#00000000');
+    X.globalAlpha=k;X.fillStyle=g;X.fillRect(0,0,W,H);X.globalAlpha=1;
+
+    // confetti
+    for(const c of FINALE.confetti){
+        c.y+=c.vy;c.x+=c.vx;c.rot+=c.vr;if(c.y>H+10){c.y=-10;c.x=Math.random()*W;}
+        X.save();X.translate(c.x,c.y);X.rotate(c.rot);X.globalAlpha=0.8*k;
+        X.fillStyle=c.col;X.fillRect(-c.sz/2,-c.sz/2,c.sz,c.sz*1.6);X.restore();
+    }
+    X.globalAlpha=1;
+
+    // title
+    X.textAlign='center';X.shadowColor='#FFC800';X.shadowBlur=20*k;
+    X.fillStyle='#FFC800';X.font='bold 26px monospace';
+    X.fillText('SEASON FINALE',cx,H*0.16);
+    X.shadowBlur=0;X.fillStyle='#888';X.font='11px monospace';
+    const d=FINALE.data;
+    X.fillText('Season '+d.season+' · week '+d.week+' · φ prize pool '+fmt(d.prize_pool)+'g',cx,H*0.16+22);
+
+    // podium: ranks 2,1,3 left-to-right; heights by phi
+    const top=(d.top||[]).slice(0,3);
+    const order=[1,0,2];  // display order (2nd, 1st, 3rd)
+    const baseW=W*0.16, gap=W*0.03;
+    const totalW=baseW*3+gap*2;
+    const startX=cx-totalW/2;
+    const podColH=[H*0.16, H*0.16*PHI, H*0.16/PHI]; // by rank 1,2,3
+    const medalCol=['#FFD700','#C0C7D0','#CD7F32'];
+    for(let slot=0;slot<3;slot++){
+        const rankIdx=order[slot];   // 0=1st,1=2nd,2=3rd
+        const px=startX+slot*(baseW+gap);
+        const h=podColH[rankIdx]* Math.min(1,Math.max(0,(t-0.4-slot*0.15)*2.2)); // grow-in
+        const py=gy - h;
+        // pillar
+        X.fillStyle='#12131f';X.fillRect(px,py,baseW,h);
+        X.strokeStyle=medalCol[rankIdx];X.lineWidth=1.5;X.strokeRect(px,py,baseW,h);
+        // rank number
+        X.fillStyle=medalCol[rankIdx];X.font='bold 22px monospace';X.textAlign='center';
+        X.fillText('#'+(rankIdx+1),px+baseW/2,gy-8);
+        const winner=top[rankIdx];
+        if(winner && h>10){
+            drawPodiumEmblem(px+baseW/2, py-26, 18, rankIdx+3, t, medalCol[rankIdx]);
+            X.fillStyle='#fff';X.font='bold 10px monospace';
+            X.fillText(winner.name,px+baseW/2,py-2);
+            X.fillStyle=medalCol[rankIdx];X.font='9px monospace';
+            X.fillText('+'+fmt(winner.prize_gold)+'g',px+baseW/2,py+12);
+            X.fillStyle='#888';X.font='8px monospace';
+            X.fillText(winner.corp+' · '+winner.points+'pts',px+baseW/2,py+24);
+        }
+    }
+    // footer note + dismiss hint
+    X.fillStyle='#555';X.font='8px monospace';X.textAlign='center';
+    X.fillText(d.note,cx,H-24);
+    X.fillStyle='#FFC800';X.globalAlpha=0.6+0.4*Math.sin(t*3);
+    X.fillText('▸ click / tap anywhere to close ◂',cx,H-10);X.globalAlpha=1;
+}
+
 // ====== PRESTIGE AURA (ranked golden rings around the whole card) ======
 function drawPrestigeAura(t){
     const p=P.prestige||0;
@@ -593,6 +712,53 @@ function drawPrestigeAura(t){
     // prestige badge (top-center)
     X.globalAlpha=0.85;X.fillStyle='#FF6BD6';X.font='bold 9px monospace';X.textAlign='center';
     X.fillText('✦ PRESTIGE '+p+' — ×'+(Math.pow(PHI,p)).toFixed(2)+' ✦',cx,16);
+    X.restore();
+    X.globalAlpha=1;
+}
+
+// ====== CORP EMBLEM (phi-fractal logo, seeded by corp index) ======
+// Nested phi-scaled polygons rotating by the golden angle; sides & petals
+// derive from the corp index so every corp gets a distinct mark.
+function drawCorpEmblem(cx,cy,size,t){
+    const idx=THEME_IDX;
+    const sides=3+(idx%5);           // 3..7 sided base
+    const petals=5+(idx%4)*2;        // 5,7,9,11 petals
+    const golden=2.399963;
+    X.save();
+    X.translate(cx,cy);
+    // soft aura halo
+    const halo=X.createRadialGradient(0,0,size*0.2,0,0,size*1.4);
+    halo.addColorStop(0,THEME.accent+'22');halo.addColorStop(1,'#00000000');
+    X.fillStyle=halo;X.beginPath();X.arc(0,0,size*1.4,0,TAU);X.fill();
+
+    // outer petal ring (golden-angle placement)
+    X.globalAlpha=0.5;X.strokeStyle=THEME.aura;X.lineWidth=0.8;
+    for(let i=0;i<petals;i++){
+        const a=i*golden + t*0.2;
+        const px=Math.cos(a)*size*0.95, py=Math.sin(a)*size*0.95;
+        X.beginPath();X.arc(px,py,size*0.12,0,TAU);X.stroke();
+    }
+    // nested rotating phi-polygons
+    X.rotate(t*0.25);
+    let r=size;
+    for(let layer=0;layer<5;layer++){
+        X.globalAlpha=0.65-layer*0.1;
+        X.strokeStyle=layer%2?THEME.aura:THEME.accent;
+        X.lineWidth=1.2-layer*0.15;
+        X.beginPath();
+        for(let s=0;s<=sides;s++){
+            const a=s*TAU/sides + layer*golden;
+            const px=Math.cos(a)*r, py=Math.sin(a)*r;
+            s===0?X.moveTo(px,py):X.lineTo(px,py);
+        }
+        X.stroke();
+        r/=PHI;   // shrink by golden ratio each layer
+        X.rotate(golden*0.5);
+    }
+    // core gem
+    X.globalAlpha=0.9;X.fillStyle=THEME.accent;
+    X.shadowColor=THEME.accent;X.shadowBlur=8;
+    X.beginPath();X.arc(0,0,size*0.10,0,TAU);X.fill();
     X.restore();
     X.globalAlpha=1;
 }
@@ -663,6 +829,7 @@ function drawGoldenSpiralLayered(cx,cy,maxR,turns,t,col){
 
 function render(){
     const t=frame*0.018;frame++;
+    tickTheme();
     // corp-themed background with subtle centered vignette
     X.fillStyle=THEME.bg;X.fillRect(0,0,W,H);
     const vg=X.createRadialGradient(W/2,H/2,60,W/2,H/2,Math.max(W,H)*0.75);
@@ -678,6 +845,12 @@ function render(){
 
     // === PRESTIGE AURA (ranked rings framing the card) ===
     drawPrestigeAura(t);
+
+    // === FLOATING CORP EMBLEM (phi-fractal logo, top-left) ===
+    const emY=42 + Math.sin(t*0.9)*4;   // gentle float
+    drawCorpEmblem(42, emY, 24, t);
+    X.fillStyle=THEME.accent;X.font='7px monospace';X.textAlign='center';
+    X.globalAlpha=0.8;X.fillText(THEME.name,42,emY+34);X.globalAlpha=1;
 
     // === LEFT: true golden spiral (layered) ===
     drawGoldenSpiralLayered(90, 250, Math.min(W,H)*0.38, 3.2, t, tc);
@@ -843,6 +1016,9 @@ function render(){
     // === VICTORY OVERLAY (full-screen phi loot-burst) ===
     drawVictory();
 
+    // === SEASON FINALE (full-screen podium) ===
+    drawFinale();
+
     if(!paused)requestAnimationFrame(render);
 }
 
@@ -907,7 +1083,7 @@ async function loadPlayer(uid){
         if(d.error)return;
         P.name=PNAMES[d.user_id%PNAMES.length];
         P.corp=CNAMES[d.corp_id%CNAMES.length];
-        THEME=CORP_THEMES[d.corp_id%CORP_THEMES.length];
+        setTheme(d.corp_id%CORP_THEMES.length);
         P.level=d.level;P.gold=d.gold;P.netWorth=d.net_worth;
         P.stocks=d.stocks||[];P.loot=d.loot||[];
         P.history=d.history&&d.history.length?d.history:genHist(d.net_worth);
@@ -1021,6 +1197,9 @@ document.getElementById('btn-rewards').onclick=showRewards;
 document.getElementById('btn-ascend').onclick=showPrestige;
 document.getElementById('btn-raid').onclick=showRaid;
 document.getElementById('btn-quests').onclick=showQuests;
+document.getElementById('btn-finale').onclick=openFinale;
+// close full-screen finale on click/tap anywhere on the canvas
+C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;});
 function _uid(){return _urlUid&&_urlUid!=='local'?_urlUid:1000;}
 function hpBarHTML(pct){
     pct=Math.max(0,Math.min(100,pct));
