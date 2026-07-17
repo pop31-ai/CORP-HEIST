@@ -204,6 +204,61 @@ def maybe_drop_artifact(chance=0.02):
 
 
 # ============================================================
+# SEASONS (phi-weeks: a season = PHI * 7 ≈ 11.3 weeks)
+# ============================================================
+
+SEASON_WEEKS = int(PHI * 7)          # ~11 weeks per season
+SEASON_EPOCH = 1700000000            # arbitrary fixed epoch (unix-ish)
+WEEK_SEC = 7 * 24 * 3600
+
+def current_season(now=None):
+    now = now or int(time.time())
+    weeks = (now - SEASON_EPOCH) // WEEK_SEC
+    return weeks // SEASON_WEEKS, (weeks % SEASON_WEEKS) + 1
+
+def season_progress(now=None):
+    now = now or int(time.time())
+    weeks = (now - SEASON_EPOCH) // WEEK_SEC
+    return round((weeks % SEASON_WEEKS + 1) / SEASON_WEEKS, 3)
+
+def season_points(char):
+    """Seasonal rating points scale with phi: net_worth^0.5 * phi^(prestige)."""
+    base = math.sqrt(max(1, char.get("net_worth", 0)))
+    return int(base * (PHI ** char.get("prestige", 0)))
+
+
+# ============================================================
+# PASSIVE TREE (phi-cost nodes, phi-scaled bonuses)
+# ============================================================
+# 12 nodes; unlock cost scales by phi^(depth). Each node multiplies a stat.
+
+PASSIVE_NODES = [
+    {"id": i, "name": n, "stat": s, "depth": i // 3,
+     "cost": int(50 * (PHI ** (i // 3))),
+     "mult": round(PHI ** (0.25 + (i % 3) * 0.1), 3)}
+    for i, (n, s) in enumerate([
+        ("Gold Yield", "gold_mult"), ("Duel Power", "power_mult"),
+        ("Loot Luck", "luck_mult"), ("Trade Edge", "trade_mult"),
+        ("Vault Cap", "cap_mult"), ("Prestige Gain", "pres_mult"),
+        ("Floor Reach", "floor_mult"), ("Market Sense", "market_mult"),
+        ("Guild Bond", "guild_mult"), ("Artifact Find", "art_mult"),
+        ("Net Worth", "net_mult"), ("Phi Mastery", "phi_mult"),
+    ])
+]
+
+def passive_bonus(passives):
+    """passives = list of 12 ints (levels per node). Return aggregated mults."""
+    mults = {}
+    for node, lvl in zip(PASSIVE_NODES, passives):
+        mults[node["stat"]] = round(mults.get(node["stat"], 1.0) * (node["mult"] ** lvl), 4)
+    return mults
+
+def unlock_cost(node_id, current_lvl):
+    node = PASSIVE_NODES[node_id]
+    return int(node["cost"] * (PHI ** current_lvl))
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 
@@ -233,4 +288,8 @@ if __name__ == "__main__":
     print("artifact:", roll_artifact())
     print("level_threshold(3):", level_threshold(3))
     print("hero_power(100,20):", hero_power(100, 20))
+    print("season:", current_season(), "progress:", season_progress())
+    print("season_points:", season_points(st.chars[1000]))
+    print("passive_bonus:", passive_bonus([1,0,2,0,0,0,0,0,0,0,0,0]))
+    print("unlock_cost(0,1):", unlock_cost(0, 1))
     print("OK")

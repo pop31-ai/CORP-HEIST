@@ -30,6 +30,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-duel" style="border-color:#FFC800;color:#FFC800">⚔ PHI-DUEL</button>
 <button id="btn-guilds" style="border-color:#FFC800;color:#FFC800">CORP GUILDS</button>
 <button id="btn-board" style="border-color:#FFC800;color:#FFC800">LEADERBOARD</button>
+<button id="btn-season" style="border-color:#FFC800;color:#FFC800">SEASON</button>
+<button id="btn-passive" style="border-color:#FFC800;color:#FFC800">PASSIVE TREE</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
@@ -73,9 +75,11 @@ R.artifacts=[];for(let i=0;i<120;i++)R.artifacts.push(drawGoldenArtifact);
 // index 10 = golden artifact (matches server cat:10)
 function drawGoldenArtifact(ctx,x,y,s,code,rarity,seed){
     seed=seed||(code*0.013);
-    ctx.save();ctx.translate(x,y);
-    const gold='hsl(48,100%,'+(60+rarity*4)+'%)';
-    const goldD='hsl(45,90%,'+(38+rarity*3)+'%)';
+    const rot=frame*0.01 + seed;
+    ctx.save();ctx.translate(x,y);ctx.rotate(rot);
+    const hue=45+rarity*3;
+    const gold='hsl('+hue+',100%,'+(60+rarity*4)+'%)';
+    const goldD='hsl('+(hue-6)+',90%,'+(38+rarity*3)+'%)';
     // phi fractal: recursive golden-rect subdiv with arcs
     function phiRect(px,py,pw,ph,depth){
         if(depth<=0||pw<2||ph<2)return;
@@ -88,8 +92,18 @@ function drawGoldenArtifact(ctx,x,y,s,code,rarity,seed){
     phiRect(-sz/2,-sz/2,sz,sz/PHI,5);
     // central glow dot
     const g=ctx.createRadialGradient(0,0,0,0,0,sz*0.3);
-    g.addColorStop(0,'rgba(255,215,0,0.8)');g.addColorStop(1,'rgba(255,215,0,0)');
+    g.addColorStop(0,'hsla('+hue+',100%,80%,0.85)');g.addColorStop(1,'hsla('+hue+',100%,60%,0)');
     ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,sz*0.3,0,TAU);ctx.fill();
+    ctx.restore();
+    // phi-pollen particles (stationary, drawn in world space)
+    ctx.save();
+    for(let i=0;i<6;i++){
+        const a=seed+i*PHI*TAU/6 + frame*0.03;
+        const r=sz*(0.45+0.12*Math.sin(frame*0.05+i));
+        const px=x+Math.cos(a)*r, py=y+Math.sin(a)*r;
+        ctx.fillStyle='hsla('+hue+',100%,75%,'+(0.5+0.3*Math.sin(frame*0.1+i))+')';
+        ctx.beginPath();ctx.arc(px,py,1.1,0,TAU);ctx.fill();
+    }
     ctx.restore();
 }
 
@@ -676,6 +690,40 @@ function showOverlay(title,text){
 document.getElementById('btn-duel').onclick=doDuel;
 document.getElementById('btn-guilds').onclick=showGuilds;
 document.getElementById('btn-board').onclick=showBoard;
+document.getElementById('btn-season').onclick=showSeason;
+document.getElementById('btn-passive').onclick=showPassives;
+
+async function showSeason(){
+    try{
+        const r=await fetch(API+'/api/season');const d=await r.json();
+        showOverlay('SEASON φ', `Season #${d.season}  week ${d.week}/${d.phi_weeks}\n`+
+            `progress ${Math.round(d.progress*100)}%\nphi-weeks = ${d.phi_weeks}`);
+    }catch(e){showOverlay('Season','offline');}
+}
+async function showPassives(){
+    try{
+        const r=await fetch(API+'/api/passives');const d=await r.json();
+        const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+        let cr=await fetch(API+'/api/char/'+uid);let cc=await cr.json();
+        const lvl=cc.passives||[0,0,0,0,0,0,0,0,0,0,0,0];
+        const rows=d.nodes.map((n,i)=>`${n.id}. ${n.name}  Lv${lvl[i]||0}  x${n.mult}  cost ${Math.round(n.cost*Math.pow(PHI,(lvl[i]||0)))}`).join('\n');
+        const el=document.getElementById('overlay');
+        el.innerHTML='<b>PASSIVE TREE (phi-cost)</b><pre>'+rows+'</pre>'+
+            '<button onclick="unlockPassive(0)" style="margin-top:6px;background:#1a1a2e;color:#FFC800;border:1px solid #FFC800;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">UNLOCK NODE 0</button>';
+        el.style.display='block';
+        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',9000);
+    }catch(e){showOverlay('Passives','offline');}
+}
+async function unlockPassive(node){
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/pulse/passive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,node:node})});
+        const d=await r.json();
+        if(d.error){showOverlay('Unlock',d.error+' (need '+d.cost+'g, have '+d.gold+'g)');return;}
+        showOverlay('PASSIVE UNLOCKED', `node ${d.node} -> Lv${d.level}\nnext cost ${d.cost_next}g`);
+        loadPlayer(uid);
+    }catch(e){showOverlay('Unlock','offline');}
+}
 
 render();
 </script>

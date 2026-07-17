@@ -37,6 +37,8 @@ from protocol import (
 from golden_econ import (
     GuildSystem, Arena, roll_artifact, maybe_drop_artifact,
     CORPS, FLOORS, PHI,
+    current_season, season_progress, season_points,
+    PASSIVE_NODES, passive_bonus, unlock_cost,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -184,6 +186,9 @@ class SharedState:
                 "tier":min(5,max(0,int(math.log10(max(1,nw))/1.5))),
                 "rank_percent":random.randint(1,100),
                 "prestige":random.randint(0,10),
+                "season":list(current_season()),
+                "season_points":season_points({
+                    "net_worth":nw,"prestige":random.randint(0,10)}),
                 "streak_days":random.randint(0,365),
                 "hero_levels":[random.randint(0,50) for _ in range(12)],
                 "passives":[random.randint(0,10) for _ in range(12)],
@@ -293,6 +298,26 @@ async def handle_leaderboard(request):
 
 async def handle_market_summary(request):
     body = json.dumps(GUILDS.market_summary()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def handle_season(request):
+    body = json.dumps({
+        "season": current_season()[0],
+        "week": current_season()[1],
+        "progress": season_progress(),
+        "phi_weeks": int(PHI * 7),
+    }).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def handle_passives(request):
+    body = json.dumps({
+        "nodes": PASSIVE_NODES,
+        "bonus_example": passive_bonus([1,0,2,0,0,0,0,0,0,0,0,0]),
+    }).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
 
@@ -464,6 +489,32 @@ async def pulse_duel(request):
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
 
+
+async def pulse_passive(request):
+    """Pulse: unlock a passive node. Cost scales by phi^(current level)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    node_id = d.get("node", 0)
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"})
+    if node_id < 0 or node_id >= len(PASSIVE_NODES):
+        return web.json_response({"error": "bad node"})
+    lvl = c["passives"][node_id]
+    cost = unlock_cost(node_id, lvl)
+    if c["gold"] < cost:
+        return web.json_response({"error": "not enough gold", "cost": cost,
+                                   "gold": c["gold"]})
+    c["gold"] -= cost
+    c["passives"][node_id] = lvl + 1
+    STATE.track(sent=30)
+    STATE.mark_dirty(uid)
+    STATE.save_char(uid)
+    return web.json_response({"ok": True, "node": node_id,
+                               "level": c["passives"][node_id],
+                               "cost_next": unlock_cost(node_id, lvl + 1),
+                               "gold": c["gold"]})
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -603,6 +654,7 @@ def make_card_app():
     app.router.add_post("/pulse/donate", pulse_donate)
     app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
     app.router.add_post("/pulse/duel", pulse_duel)
+    app.router.add_post("/pulse/passive", pulse_passive)
     return app
 
 async def handle_card_route(request):
@@ -636,6 +688,8 @@ def make_unified_app():
     app.router.add_get("/api/guilds", handle_guilds)
     app.router.add_get("/api/leaderboard", handle_leaderboard)
     app.router.add_get("/api/market-summary", handle_market_summary)
+    app.router.add_get("/api/season", handle_season)
+    app.router.add_get("/api/passives", handle_passives)
     app.router.add_post("/pulse/trade", pulse_trade)
     app.router.add_post("/pulse/gacha", pulse_gacha)
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
