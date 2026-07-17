@@ -38,6 +38,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-quests" style="border-color:#00FF8C;color:#00FF8C">DAILY QUESTS</button>
 <button id="btn-finale" style="border-color:#FFC800;color:#FFC800">SEASON FINALE</button>
 <button id="btn-tour" style="border-color:#00E5FF;color:#00E5FF">TOWER TOUR</button>
+<button id="btn-sound" style="border-color:#FFE24B;color:#FFE24B">♪ SOUND ON</button>
+<button id="btn-snap" style="border-color:#00FF8C;color:#00FF8C">📷 SNAPSHOT</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -77,6 +79,44 @@ const C=document.getElementById('c');
 const X=C.getContext('2d');
 const W=C.width,H=C.height;
 const PHI=1.618033988749,TAU=Math.PI*2;
+
+// ====== PHI-TONE AUDIO SYNTH (WebAudio, golden-ratio harmonics) ======
+const SFX={ctx:null,master:null,on:true};
+function sfxInit(){
+    if(SFX.ctx)return;
+    try{
+        const AC=window.AudioContext||window.webkitAudioContext;
+        SFX.ctx=new AC();
+        SFX.master=SFX.ctx.createGain();
+        SFX.master.gain.value=0.22;
+        SFX.master.connect(SFX.ctx.destination);
+    }catch(e){SFX.on=false;}
+}
+function sfxResume(){ if(SFX.ctx&&SFX.ctx.state==='suspended')SFX.ctx.resume(); }
+// single golden-tuned tone
+function sfxTone(freq,dur,type,vol,delay){
+    if(!SFX.on)return; sfxInit(); if(!SFX.ctx)return; sfxResume();
+    const c=SFX.ctx,t0=c.currentTime+(delay||0);
+    const o=c.createOscillator(),g=c.createGain();
+    o.type=type||'sine'; o.frequency.setValueAtTime(freq,t0);
+    g.gain.setValueAtTime(0,t0);
+    g.gain.linearRampToValueAtTime(vol||0.5,t0+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001,t0+(dur||0.2));
+    o.connect(g);g.connect(SFX.master);o.start(t0);o.stop(t0+(dur||0.2)+0.02);
+}
+// phi-arpeggio: base freq, notes climb by powers of phi
+function sfxPhiArp(base,steps,gap,type,vol){
+    for(let i=0;i<steps;i++)sfxTone(base*Math.pow(PHI,i/2),0.16,type||'triangle',vol||0.4,i*(gap||0.05));
+}
+const SND={
+    loot:(rar)=>sfxTone(330*Math.pow(PHI,(rar||0)/3),0.18,'triangle',0.35),
+    trade:()=>sfxTone(220,0.09,'sine',0.25),
+    promo:()=>sfxPhiArp(262,5,0.06,'triangle',0.42),
+    firework:()=>{sfxTone(180+Math.random()*120,0.06,'sine',0.3);sfxTone(660*Math.pow(PHI,Math.random()),0.22,'sawtooth',0.12,0.06);},
+    victory:()=>sfxPhiArp(196,7,0.07,'sawtooth',0.4),
+    duelHit:()=>sfxTone(120,0.08,'square',0.3),
+    click:()=>sfxTone(523,0.05,'sine',0.2)
+};
 const RCOL=['#888899','#00AAFF','#AA00FF','#FF3232','#FFC800','#FF00AA'];
 const RGLOW=[0,2,5,8,12,18];
 const RNAMES=['Common','Uncommon','Rare','Epic','Legendary','Unique'];
@@ -376,8 +416,8 @@ function newPortfolio(){
     frame=0;
 }
 function genHist(nw){const h=[];let v=nw*0.1;for(let i=0;i<150;i++){v+=v*0.02*(Math.random()-0.48);h.push(v);}return h;}
-function dropLoot(){const r=rollRarity();const v=[10,50,250,1500,10000,50000][r];P.loot.push({code:Math.floor(Math.random()*65535),rarity:r,qty:1,value:v});P.netWorth+=v;P.gold+=v;if(P.history.length)P.history.push(P.history[P.history.length-1]+v*0.3);}
-function tradeStock(){const s=P.stocks[Math.floor(Math.random()*P.stocks.length)];if(!s)return;const d=(Math.random()-0.5)*20;s.price=Math.max(1,s.price+d);s.delta=d;if(P.history.length)P.history.push(P.history[P.history.length-1]+d*s.held*0.1);}
+function dropLoot(){const r=rollRarity();const v=[10,50,250,1500,10000,50000][r];P.loot.push({code:Math.floor(Math.random()*65535),rarity:r,qty:1,value:v});P.netWorth+=v;P.gold+=v;if(P.history.length)P.history.push(P.history[P.history.length-1]+v*0.3);SND.loot(r);}
+function tradeStock(){const s=P.stocks[Math.floor(Math.random()*P.stocks.length)];if(!s)return;const d=(Math.random()-0.5)*20;s.price=Math.max(1,s.price+d);s.delta=d;if(P.history.length)P.history.push(P.history[P.history.length-1]+d*s.held*0.1);SND.trade();}
 
 // ====== RENDER ======
 function fmt(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return ''+n;}
@@ -521,7 +561,7 @@ function drawHitParticles(cx,cy){
 // ====== VICTORY: full-screen phi loot-burst on boss defeat ======
 const VICTORY={active:false,t:0,pool:0,shards:[]};
 function triggerVictory(pool){
-    VICTORY.active=true;VICTORY.t=0;VICTORY.pool=pool||0;VICTORY.shards=[];
+    VICTORY.active=true;VICTORY.t=0;VICTORY.pool=pool||0;VICTORY.shards=[];SND.victory();
     const golden=2.399963;   // golden angle
     // fountain of loot shards along the golden angle
     for(let i=0;i<80;i++){
@@ -746,6 +786,108 @@ function drawFinale(){
     X.fillText('▸ click / tap anywhere to close ◂',cx,H-10);X.globalAlpha=1;
 }
 
+// ====== PVP DUEL REPLAY (two cards side-by-side, phi-blow exchange) ======
+const DUEL={active:false,t:0,data:null,hpA:1,hpB:1,blows:[],hits:[],done:false};
+function openDuelReplay(d){
+    DUEL.active=true;DUEL.t=0;DUEL.data=d;DUEL.hpA=1;DUEL.hpB=1;DUEL.hits=[];DUEL.done=false;
+    // schedule alternating blows; winner lands the last decisive hit
+    const rounds=6;DUEL.blows=[];
+    const pa=d.my_power||100, pb=d.opp_power||100, tot=pa+pb;
+    for(let i=0;i<rounds;i++){
+        const attackerA=(i%2===0);
+        // damage weighted by relative power + phi swing flavor
+        const dmg=0.12+0.06*Math.random();
+        DUEL.blows.push({at:0.6+i*0.5, aAttacks:attackerA, dmg:dmg});
+    }
+    // ensure the real winner ends alive
+    DUEL._win=!!d.win;
+}
+function drawDuelFighter(cx,cy,r,t,col,name,pow,hp,flipped,punch){
+    X.save();X.translate(cx,cy);if(flipped)X.scale(-1,1);
+    const lunge=punch*18;X.translate(lunge,0);
+    // phi-fractal body (nested polygons rotating by golden angle)
+    const golden=2.399963;let rr=r;
+    for(let l=0;l<5;l++){
+        X.globalAlpha=0.85-l*0.14;X.strokeStyle=col;X.lineWidth=2-l*0.3;
+        const sides=3+l;
+        X.beginPath();
+        for(let s=0;s<=sides;s++){const a=s*TAU/sides+l*golden+t*0.5;s===0?X.moveTo(Math.cos(a)*rr,Math.sin(a)*rr):X.lineTo(Math.cos(a)*rr,Math.sin(a)*rr);}
+        X.stroke();rr/=PHI*0.78;
+    }
+    // core
+    X.globalAlpha=1;X.fillStyle=col;X.shadowColor=col;X.shadowBlur=14;
+    X.beginPath();X.arc(0,0,r*0.16,0,TAU);X.fill();X.shadowBlur=0;
+    X.restore();
+    // name + power (unflipped text)
+    X.save();X.globalAlpha=1;X.textAlign='center';
+    X.fillStyle=col;X.font='bold 12px monospace';X.fillText(name,cx,cy-r-16);
+    X.fillStyle='#ccc';X.font='9px monospace';X.fillText('PWR '+fmt(pow),cx,cy-r-4);
+    // HP bar
+    const bw=r*2.2,bx=cx-bw/2,byy=cy+r+12;
+    X.fillStyle='#222';X.fillRect(bx,byy,bw,7);
+    X.fillStyle=hp>0.35?'#00FF8C':'#FF3B3B';X.fillRect(bx,byy,bw*Math.max(0,hp),7);
+    X.strokeStyle=col;X.lineWidth=0.8;X.strokeRect(bx,byy,bw,7);
+    X.restore();
+}
+function drawDuel(){
+    if(!DUEL.active||!DUEL.data)return;
+    DUEL.t+=0.016;const t=DUEL.t;const d=DUEL.data;
+    const k=Math.min(1,t/0.5);
+    X.save();X.globalAlpha=0.95*k;X.fillStyle='#04050a';X.fillRect(0,0,W,H);X.restore();
+    // arena floor glow
+    const g=X.createRadialGradient(W/2,H*0.6,20,W/2,H*0.6,W*0.55);
+    g.addColorStop(0,THEME.accent+'18');g.addColorStop(1,'#00000000');
+    X.globalAlpha=k;X.fillStyle=g;X.fillRect(0,0,W,H);X.globalAlpha=1;
+    // title
+    X.textAlign='center';X.shadowColor=THEME.aura;X.shadowBlur=18*k;
+    X.fillStyle=THEME.aura;X.font='bold 24px monospace';X.fillText('PHI-DUEL',W/2,H*0.13);
+    X.shadowBlur=0;X.fillStyle='#888';X.font='10px monospace';
+    X.fillText('swing '+d.phi_swing+' · gap '+d.gap+' · passives pow x'+d.power_mult,W/2,H*0.13+20);
+    // process blows
+    let punchA=0,punchB=0;
+    for(const b of DUEL.blows){
+        if(t>=b.at && !b.done){
+            b.done=true;
+            if(b.aAttacks)DUEL.hpB=Math.max(0.05,DUEL.hpB-b.dmg);
+            else DUEL.hpA=Math.max(0.05,DUEL.hpA-b.dmg);
+            SND.duelHit();
+            const tx=b.aAttacks?W*0.66:W*0.34;
+            for(let s=0;s<14;s++){const a=Math.random()*TAU,sp=1+Math.random()*3;
+                DUEL.hits.push({x:tx,y:H*0.5,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,col:THEME.aura});}
+        }
+        if(b.done && t-b.at<0.25){const pr=1-(t-b.at)/0.25;if(b.aAttacks)punchA=pr;else punchB=pr;}
+    }
+    // resolve to real winner near the end
+    if(t>4.0 && !DUEL.done){
+        DUEL.done=true;
+        if(DUEL._win){DUEL.hpB=0;DUEL.hpA=Math.max(0.25,DUEL.hpA);}
+        else {DUEL.hpA=0;DUEL.hpB=Math.max(0.25,DUEL.hpB);}
+        if(DUEL._win)triggerVictory(Math.abs(d.reward_gold||0)); else SND.duelHit();
+    }
+    const cy=H*0.5, r=Math.min(W,H)*0.14;
+    drawDuelFighter(W*0.26,cy,r,t,THEME.accent,P.name||'YOU',d.my_power,DUEL.hpA,false,punchA);
+    drawDuelFighter(W*0.74,cy,r,t,'#FF6BD6',d.opp_name||'OPP',d.opp_power,DUEL.hpB,true,punchB);
+    // VS mark
+    X.fillStyle=THEME.aura;X.font='bold 20px monospace';X.textAlign='center';
+    X.globalAlpha=0.6+0.4*Math.sin(t*4);X.fillText('VS',W/2,cy+6);X.globalAlpha=1;
+    // hit particles
+    for(let i=DUEL.hits.length-1;i>=0;i--){const s=DUEL.hits[i];s.x+=s.vx;s.y+=s.vy;s.vy+=0.05;s.life-=0.03;
+        if(s.life<=0){DUEL.hits.splice(i,1);continue;}
+        X.globalAlpha=s.life;X.fillStyle=s.col;X.beginPath();X.arc(s.x,s.y,1.8,0,TAU);X.fill();}
+    X.globalAlpha=1;
+    // result banner
+    if(DUEL.done){
+        const win=DUEL._win;
+        X.fillStyle=win?'#00FF8C':'#FF3B3B';X.font='bold 22px monospace';X.textAlign='center';
+        X.shadowColor=X.fillStyle;X.shadowBlur=16;
+        X.fillText(win?'VICTORY':'DEFEAT',W/2,H*0.8);X.shadowBlur=0;
+        X.fillStyle='#ccc';X.font='11px monospace';
+        X.fillText('gold '+(d.reward_gold>=0?'+':'')+d.reward_gold+'  ·  lvl '+d.level,W/2,H*0.8+22);
+    }
+    X.fillStyle=THEME.aura;X.globalAlpha=0.6+0.4*Math.sin(t*3);X.font='9px monospace';X.textAlign='center';
+    X.fillText('▸ click / tap anywhere to close ◂',W/2,H-10);X.globalAlpha=1;
+}
+
 // ====== FULLSCREEN 3D TOWER TOUR (elevator ride through the floors) ======
 const TOUR={active:false,t:0,pos:0,target:0,vel:0};
 function openTour(){
@@ -873,7 +1015,7 @@ function launchFirework(){
         vy:-(3.4+Math.random()*1.6), tgt:H*(0.18+Math.random()*0.34),
         col:['#FFC800','#FFE24B','#FF6BD6','#00E5FF','#FF9B00'][Math.floor(Math.random()*5)]});
 }
-function celebratePromotion(){ for(let i=0;i<5;i++)setTimeout(launchFirework,i*160); }
+function celebratePromotion(){ SND.promo(); for(let i=0;i<5;i++)setTimeout(()=>{launchFirework();SND.firework();},i*160); }
 function checkPromotion(tier){
     if(LAST_TIER!==null && tier>LAST_TIER)celebratePromotion();
     if(LAST_FLOOR!==null && (P.floor||0)>LAST_FLOOR)celebratePromotion();
@@ -1447,6 +1589,9 @@ function render(){
     // === 3D TOWER TOUR (full-screen elevator ride) ===
     drawTour();
 
+    // === PVP DUEL REPLAY (full-screen two-fighter animation) ===
+    drawDuel();
+
     if(!paused)requestAnimationFrame(render);
 }
 
@@ -1560,10 +1705,7 @@ async function doDuel(){
         const r=await fetch(API+'/pulse/duel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
         const d=await r.json();
         if(d.error){showOverlay('Arena', d.error);return;}
-        showOverlay('PHI-DUEL', `vs ${d.opp_name} (gap ${d.gap})  [${d.win?'WIN':'LOSE'}]\n`+
-            `power ${d.my_power} vs ${d.opp_power}  swing ${d.phi_swing}\n`+
-            `passives: pow x${d.power_mult}  gold x${d.gold_mult}\n`+
-            `gold ${d.reward_gold>=0?'+':''}${d.reward_gold}  lvl ${d.level}`);
+        openDuelReplay(d);
         loadPlayer(uid);
     }catch(e){showOverlay('Arena','offline');}
 }
@@ -1628,8 +1770,25 @@ document.getElementById('btn-raid').onclick=showRaid;
 document.getElementById('btn-quests').onclick=showQuests;
 document.getElementById('btn-finale').onclick=openFinale;
 document.getElementById('btn-tour').onclick=openTour;
+// sound toggle
+const btnSound=document.getElementById('btn-sound');
+if(btnSound)btnSound.onclick=()=>{SFX.on=!SFX.on;if(SFX.on){sfxInit();sfxResume();SND.click();}btnSound.textContent=SFX.on?'♪ SOUND ON':'♪ SOUND OFF';btnSound.style.opacity=SFX.on?'1':'0.5';};
+// init audio on first user gesture (browser autoplay policy)
+window.addEventListener('pointerdown',()=>{sfxInit();sfxResume();},{once:true});
+// snapshot: export current canvas frame to PNG download
+const btnSnap=document.getElementById('btn-snap');
+if(btnSnap)btnSnap.onclick=()=>{
+    try{
+        const url=C.toDataURL('image/png');
+        const a=document.createElement('a');
+        a.href=url;
+        a.download='corp-heist-'+(P.name||'card')+'-'+Date.now()+'.png';
+        document.body.appendChild(a);a.click();a.remove();
+        SND.click();
+    }catch(e){showOverlay('Snapshot','export failed');}
+};
 // close full-screen overlays on click/tap anywhere on the canvas
-C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;if(TOUR.active)TOUR.active=false;});
+C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;if(TOUR.active)TOUR.active=false;if(DUEL.active&&DUEL.done)DUEL.active=false;});
 
 // ====== INTERACTIVE MOUSE TILT / ZOOM (CSS 3D on the canvas) ======
 let TILT_ZOOM=1, TILT_RX=0, TILT_RY=0;
