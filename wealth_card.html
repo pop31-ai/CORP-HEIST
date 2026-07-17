@@ -32,6 +32,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-board" style="border-color:#FFC800;color:#FFC800">LEADERBOARD</button>
 <button id="btn-season" style="border-color:#FFC800;color:#FFC800">SEASON</button>
 <button id="btn-passive" style="border-color:#FFC800;color:#FFC800">PASSIVE TREE</button>
+<button id="btn-rewards" style="border-color:#FFC800;color:#FFC800">SEASON REWARDS</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
@@ -350,8 +351,25 @@ function drawGoldenSpiral(cx,cy,maxR,turns,t,col){
     X.restore();
 }
 
+// Fractal phi-tree (Pythagoras tree with golden branch ratio)
+function drawPhiTree(x,y,len,ang,depth,t,col){
+    if(depth<=0||len<3)return;
+    const x2=x+Math.cos(ang)*len, y2=y+Math.sin(ang)*len;
+    X.strokeStyle=col;X.globalAlpha=0.02+depth*0.006;X.lineWidth=0.3+depth*0.12;
+    X.beginPath();X.moveTo(x,y);X.lineTo(x2,y2);X.stroke();
+    const sway=Math.sin(t*0.3+depth)*0.08;
+    const spread=0.5+sway;
+    drawPhiTree(x2,y2,len/PHI,ang-spread,depth-1,t,col);
+    drawPhiTree(x2,y2,len/PHI,ang+spread,depth-1,t,col);
+}
+
 // Background tinted with golden-section guide lines
 function drawGoldenBg(t,tc){
+    // full-screen faint fractal phi-trees (corners), animated sway
+    drawPhiTree(W*0.5, H+8, 60, -Math.PI/2, 9, t, tc);
+    drawPhiTree(0, H, 42, -Math.PI/3, 7, t*1.1, '#FFC800');
+    drawPhiTree(W, H, 42, -Math.PI*2/3, 7, t*0.9, '#FFC800');
+
     // golden ratio vertical/horizontal guides
     const gx=W/PHI, gy=H/PHI;
     X.save();
@@ -665,6 +683,7 @@ async function doDuel(){
         if(d.error){showOverlay('Arena', d.error);return;}
         showOverlay('PHI-DUEL', `vs ${d.opp_name} (gap ${d.gap})  [${d.win?'WIN':'LOSE'}]\n`+
             `power ${d.my_power} vs ${d.opp_power}  swing ${d.phi_swing}\n`+
+            `passives: pow x${d.power_mult}  gold x${d.gold_mult}\n`+
             `gold ${d.reward_gold>=0?'+':''}${d.reward_gold}  lvl ${d.level}`);
         loadPlayer(uid);
     }catch(e){showOverlay('Arena','offline');}
@@ -684,14 +703,23 @@ async function showBoard(){
 function showOverlay(title,text){
     const el=document.getElementById('overlay');
     el.innerHTML='<b>'+title+'</b><pre>'+text+'</pre>';
-    el.style.display='block';
-    clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',6000);
+    el.style.display='block';el.style.opacity='0';el.style.transform='translateX(-50%) translateY(-8px)';
+    requestAnimationFrame(()=>{el.style.transition='opacity .35s ease,transform .35s ease';el.style.opacity='1';el.style.transform='translateX(-50%) translateY(0)';});
+    clearTimeout(el._t);el._t=setTimeout(()=>{el.style.opacity='0';setTimeout(()=>el.style.display='none',350);},6000);
+}
+async function showRewards(){
+    try{
+        const r=await fetch(API+'/api/season-rewards');const d=await r.json();
+        const rows=d.top.map(p=>`#${p.rank} ${p.name}  ${p.points}pts  +${fmt(p.prize_gold)}g  ${p.corp}`).join('\n');
+        showOverlay('SEASON REWARDS  (pool '+fmt(d.prize_pool)+'g)', `S${d.season} wk${d.week}\n`+rows+'\n\n'+d.note);
+    }catch(e){showOverlay('Rewards','offline');}
 }
 document.getElementById('btn-duel').onclick=doDuel;
 document.getElementById('btn-guilds').onclick=showGuilds;
 document.getElementById('btn-board').onclick=showBoard;
 document.getElementById('btn-season').onclick=showSeason;
 document.getElementById('btn-passive').onclick=showPassives;
+document.getElementById('btn-rewards').onclick=showRewards;
 
 async function showSeason(){
     try{

@@ -49,10 +49,11 @@ def hero_power(base, level):
     """Power grows as base * PHI^(level/10)."""
     return int(base * (PHI ** (level / 10.0)))
 
-# Arena reward scales with opponent rank gap via phi
+# Arena reward scales with opponent rank gap via phi (softened for balance)
 def duel_reward(base_reward, rank_gap):
-    """Higher-ranked opponent beaten => bigger reward by phi^(gap)."""
-    return int(base_reward * (PHI ** min(rank_gap, 6)))
+    """Higher-ranked opponent beaten => bigger reward by phi^(gap/2).
+    Softer than phi^gap so top ranks stay reachable (max ~4x at gap 6)."""
+    return int(base_reward * (PHI ** (min(rank_gap, 6) / 2.0)))
 
 # Progression threshold to next level: phi-weighted
 def level_threshold(level):
@@ -111,6 +112,34 @@ class GuildSystem:
             "note": "Informational only. No trading advice. Rates set by system.",
         }
 
+    def season_rewards(self, top=10):
+        """Top players by seasonal points. Prize pool split by phi:
+        rank 1 gets a fraction, each next rank gets prev/phi (in-game gold)."""
+        ranked = sorted(self.state.chars.values(),
+                        key=lambda c: -season_points(c))[:top]
+        season, week = current_season()
+        # prize pool scales with number of players and season
+        pool = int(1_000_000 * (PHI ** (week / SEASON_WEEKS)))
+        # phi-decay shares: share_r = pool * (phi-1) / phi^r  (geometric, sums ~pool)
+        rewards = []
+        for r, c in enumerate(ranked, 1):
+            share = int(pool * (PHI - 1) / (PHI ** r))
+            rewards.append({
+                "rank": r,
+                "user_id": c["user_id"],
+                "name": f"Player_{c['user_id']}",
+                "points": season_points(c),
+                "prize_gold": share,
+                "corp": CORPS[c["corp_id"] % len(CORPS)],
+            })
+        return {
+            "season": season,
+            "week": week,
+            "prize_pool": pool,
+            "note": "Prizes are in-game gold only. No real money. Awarded at season end.",
+            "top": rewards,
+        }
+
 
 # ============================================================
 # GAMEPLAY: PHI-DUEL ARENA
@@ -147,8 +176,14 @@ class Arena:
         if not opp:
             return {"error": "no opponent"}
 
-        # power = hero power * level scaling
+        # passive bonuses (phi-scaled multipliers)
+        mults = passive_bonus(me.get("passives", [0] * 12))
+        pow_mult = mults.get("power_mult", 1.0)
+        gold_mult = mults.get("gold_mult", 1.0)
+
+        # power = hero power * level scaling * passive power_mult
         my_pow = hero_power(100 + me["level"] * 10, me["hero_levels"][me["hero_id"] % 12])
+        my_pow = int(my_pow * pow_mult)
         opp_pow = hero_power(100 + opp["level"] * 10, opp["hero_levels"][opp["hero_id"] % 12])
         # add a little randomness (phi-weighted swing)
         swing = random.uniform(1 / PHI, PHI)
@@ -157,6 +192,9 @@ class Arena:
         win = my_pow >= opp_pow
         base = 500 * (me["level"] + 1)
         reward = duel_reward(base, gap) if win else -int(base / PHI)
+        # gold_mult applies to positive rewards only
+        if reward > 0:
+            reward = int(reward * gold_mult)
 
         me["gold"] = max(0, me["gold"] + reward)
         me["xp"] += reward if win else 0
@@ -175,6 +213,8 @@ class Arena:
             "level": me["level"],
             "phi_swing": round(swing, 3),
             "gap": gap,
+            "power_mult": round(pow_mult, 3),
+            "gold_mult": round(gold_mult, 3),
         }
 
 
@@ -292,4 +332,7 @@ if __name__ == "__main__":
     print("season_points:", season_points(st.chars[1000]))
     print("passive_bonus:", passive_bonus([1,0,2,0,0,0,0,0,0,0,0,0]))
     print("unlock_cost(0,1):", unlock_cost(0, 1))
+    st.chars[1000]["passives"] = [3,3,0,0,0,0,0,0,0,0,0,0]
+    print("duel w/ passives:", ar.fight(1000))
+    print("season_rewards:", g.season_rewards(2))
     print("OK")

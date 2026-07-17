@@ -322,6 +322,12 @@ async def handle_passives(request):
     return web.Response(body=body, content_type="application/json")
 
 
+async def handle_season_rewards(request):
+    body = json.dumps(GUILDS.season_rewards(10)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ============================================================
 # PULSE ENDPOINTS (one-shot request/response, no persistent conn)
 # ============================================================
@@ -690,6 +696,7 @@ def make_unified_app():
     app.router.add_get("/api/market-summary", handle_market_summary)
     app.router.add_get("/api/season", handle_season)
     app.router.add_get("/api/passives", handle_passives)
+    app.router.add_get("/api/season-rewards", handle_season_rewards)
     app.router.add_post("/pulse/trade", pulse_trade)
     app.router.add_post("/pulse/gacha", pulse_gacha)
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
