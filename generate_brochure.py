@@ -67,6 +67,17 @@ def rrect(x, y, w, h, r=4, color=PANEL, fill=1, stroke=0, strokeColor=GRAY, alph
     c.setFillAlpha(1)
 
 
+def draw_page_bg():
+    """Draw the standard page background (dark + vignette)."""
+    c.setFillColor(BG)
+    c.rect(0, 0, W, H, fill=1, stroke=0)
+    c.setFillColor(PANEL)
+    c.setFillAlpha(0.15)
+    for i in range(8):
+        c.circle(W/2 + math.sin(i*0.8)*100, H/2 + math.cos(i*0.8)*80, 40+i*15, fill=1, stroke=0)
+    c.setFillAlpha(1)
+
+
 def path_fill(points, color, alpha=1.0):
     p = c.beginPath()
     p.moveTo(points[0][0], points[0][1])
@@ -650,6 +661,64 @@ for lnk in [
 ]:
     text(lnk, 50, y, GRAY, 8)
     y -= 13
+
+rrect(W/2-120, 30, 240, 30, 4, GOLD)
+text("CORP HEIST", W/2, 38, BG, 14, "SegB", "center")
+
+# === PAGE 7: LOOT DISCLAIMER ===
+c.showPage()
+draw_page_bg()
+
+text("LEGAL NOTICE", W/2, H - 60, GOLD, 22, "SegB", "center")
+
+disclaimer_lines = [
+    ("LOOT & ITEM OWNERSHIP", RED, [
+        "Loot icons displayed in CORP HEIST are personal",
+        "symbols of ownership. They do not represent real",
+        "property, financial instruments, or legal claims.",
+        "",
+        "CORP HEIST does not own, endorse, or guarantee",
+        "the value of any displayed loot item.",
+    ]),
+    ("TEMPORARY UNAVAILABILITY", ACCENT, [
+        "Items may be temporarily unavailable due to:",
+        "  - Routine maintenance and recalibration",
+        "  - Aesthetic cleaning and polishing",
+        "  - System upgrades and optimization",
+        "  - Security audits and compliance checks",
+        "",
+        "During maintenance, items display a",
+        "'MAINTENANCE' status indicator.",
+    ]),
+    ("NO FINANCIAL ADVICE", GOLD, [
+        "All stock market data, portfolio values, and net",
+        "worth figures are simulated for entertainment.",
+        "Nothing in CORP HEIST constitutes financial",
+        "advice, investment recommendation, or",
+        "guarantee of real-world returns.",
+    ]),
+    ("COMPLIANCE", GRAY, [
+        "14-ФЗ (Advertising) | 39-ФЗ (Securities)",
+        "152-ФЗ (Personal Data) | 149-ФЗ (Information)",
+        "Age rating: 12+ | Rating: 0+",
+    ]),
+]
+
+y = H - 100
+for title, color, items in disclaimer_lines:
+    text(title, 40, y, color, 11, "SegB")
+    y -= 16
+    for item in items:
+        text(item, 50, y, WHITE if item else GRAY, 7.5)
+        y -= 11
+    y -= 8
+
+# decorative maintenance wrench sketch
+c.setStrokeColor(GRAY); c.setLineWidth(1.5)
+c.line(80, 80, 100, 100)
+c.circle(105, 105, 6, fill=0, stroke=1)
+c.line(100, 110, 95, 115)
+text("MAINTENANCE", 90, 70, GRAY, 7, "SegB", "center")
 
 rrect(W/2-120, 30, 240, 30, 4, GOLD)
 text("CORP HEIST", W/2, 38, BG, 14, "SegB", "center")

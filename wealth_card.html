@@ -305,21 +305,41 @@ function render(){
         const rarityColor=RCOL[l.rarity];
 
         // cell bg
-        X.fillStyle=rarityColor+'08';X.fillRect(cx-cellW/2+2,cy-cellH/2+2,cellW-4,cellH-4);
+        X.fillStyle=rarityColor+'08';X.fillRect(cx-cellW/2+2,cy-cellW/2+2,cellW-4,cellH-4);
 
-        // render item
-        X.save();
-        X.beginPath();X.rect(cx-cellW/2+2,cy-cellH/2+2,cellW-4,cellH-4);X.clip();
-        fn(X,cx,cy-2,cellW*0.42,l.code,l.rarity);
-        X.restore();
+        // maintenance check: ~5% chance item is "under maintenance"
+        const isMaint=((l.code*7+13)%100)<5;
 
-        // glow border
-        X.strokeStyle=rarityColor+'60';X.lineWidth=0.5;X.strokeRect(cx-cellW/2+2,cy-cellH/2+2,cellW-4,cellH-4);
+        if(isMaint){
+            // UNDER MAINTENANCE - wrench icon + message
+            X.save();
+            X.strokeStyle='#555';X.lineWidth=1.5;
+            X.beginPath();X.arc(cx,cy-4,8,0,TAU);X.stroke();
+            X.fillStyle='#333';X.font='8px monospace';X.textAlign='center';
+            X.fillText('MAINT.',cx,cy+10);
+            X.fillStyle='#444';X.font='6px monospace';
+            X.fillText('washing',cx,cy+18);
+            X.restore();
+        }else{
+            // render item normally
+            X.save();
+            X.beginPath();X.rect(cx-cellW/2+2,cy-cellW/2+2,cellW-4,cellH-4);X.clip();
+            fn(X,cx,cy-2,cellW*0.42,l.code,l.rarity);
+            X.restore();
+        }
+
+        // glow border (maintenance = dimmed)
+        X.strokeStyle=isMaint?'#33333340':rarityColor+'60';X.lineWidth=0.5;
+        X.strokeRect(cx-cellW/2+2,cy-cellW/2+2,cellW-4,cellH-4);
 
         // qty
         if(l.qty>1){X.fillStyle=rarityColor;X.font='bold 7px monospace';X.textAlign='right';X.fillText('x'+l.qty,cx+cellW/2-4,cy+cellH/2-4);}
     }
     if(P.loot.length>maxShow){X.fillStyle='#555';X.font='7px monospace';X.textAlign='center';X.fillText('+'+(P.loot.length-maxShow)+' more',lx+lw/2,ly+lh-4);}
+
+    // disclaimer
+    X.fillStyle='#222';X.font='6px monospace';X.textAlign='center';
+    X.fillText('Loot icons are symbols of ownership, not property of CORP HEIST.',lx+lw/2,ly+lh-14);
 
     // === BOTTOM: stats bar ===
     const by=280,bh=210;
@@ -381,8 +401,13 @@ function render(){
         X.fillStyle='#FFC800';X.fillText('$'+fmt(l.value),lx2+58+48,chainY);
     }
 
-    // footer
-    X.fillStyle='#222';X.font='7px monospace';X.textAlign='center';X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-6);
+    // footer + disclaimer
+    X.fillStyle='#1a1a2e';X.fillRect(0,H-30,W,30);
+    X.fillStyle='#333';X.font='6px monospace';X.textAlign='center';
+    X.fillText('Loot icons are personal symbols of ownership. CORP HEIST makes no claims over displayed items.',W/2,H-20);
+    X.fillText('Items may be temporarily unavailable for maintenance, cleaning, or recalibration.',W/2,H-12);
+    X.fillStyle='#222';X.font='7px monospace';
+    X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-4);
 
     if(!paused)requestAnimationFrame(render);
 }

@@ -961,16 +961,33 @@ function renderCard(canvas,code,rarity,label){
     vg.addColorStop(0,'transparent');vg.addColorStop(1,'rgba(0,0,0,0.4)');
     ctx.fillStyle=vg;ctx.fillRect(0,0,w,h);
 
-    const {renderer,name}=getLootRenderer(code,rarity);
-    renderer(ctx,cx,cy,s,code,rarity);
+    // maintenance check (~5%)
+    const isMaint=((code*7+13)%100)<5;
+
+    if(isMaint){
+        // under maintenance
+        ctx.strokeStyle='#555';ctx.lineWidth=1.5;
+        ctx.beginPath();ctx.arc(cx,cy-4,s*0.3,0,TAU);ctx.stroke();
+        ctx.fillStyle='#444';ctx.font='8px monospace';ctx.textAlign='center';
+        ctx.fillText('MAINTENANCE',cx,cy+8);
+        ctx.fillStyle='#333';ctx.font='6px monospace';
+        ctx.fillText('washing...',cx,cy+18);
+    }else{
+        const {renderer}=getLootRenderer(code,rarity);
+        renderer(ctx,cx,cy,s,code,rarity);
+    }
 
     // label
     ctx.fillStyle='rgba(0,0,0,0.6)';
     ctx.fillRect(0,h-16,w,16);
-    ctx.fillStyle=RARITY_COLORS[rarity];
+    ctx.fillStyle=isMaint?'#555':RARITY_COLORS[rarity];
     ctx.font='7px "Courier New",monospace';
     ctx.textAlign='center';
-    ctx.fillText((label||name)+' ['+RARITY_NAMES[rarity]+']',cx,h-5);
+    ctx.fillText(isMaint?'[MAINT]':((label||getLootRenderer(code,rarity).name)+' ['+RARITY_NAMES[rarity]+']'),cx,h-5);
+
+    // disclaimer
+    ctx.fillStyle='#222';ctx.font='5px monospace';ctx.textAlign='center';
+    ctx.fillText('symbol of ownership only',cx,h-1);
 }
 
 function renderAll(){
