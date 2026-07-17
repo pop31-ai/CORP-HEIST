@@ -15,6 +15,10 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 </head>
 <body>
 <div class="ctrls">
+<select id="player-select" onchange="loadPlayer(this.value)" style="background:#1a1a2e;color:#FFC800;border:1px solid #333;padding:5px 8px;font-family:inherit;font-size:10px;border-radius:3px">
+<option value="local">LOCAL DEMO</option>
+</select>
+<button onclick="refreshPlayers()">REFRESH LIST</button>
 <button onclick="newPortfolio()">NEW PLAYER</button>
 <button onclick="dropLoot()">DROP LOOT</button>
 <button onclick="tradeStock()">TRADE</button>
@@ -456,6 +460,43 @@ function moneyBack(){
     if(P.history.length)P.history.push(P.history[P.history.length-1]-refund*0.2);
 }
 
+// ====== API BRIDGE (protocol -> canvas) ======
+const API=location.origin;
+
+async function refreshPlayers(){
+    try{
+        const r=await fetch(API+'/api/chars');
+        const list=await r.json();
+        const sel=document.getElementById('player-select');
+        sel.innerHTML='<option value="local">LOCAL DEMO</option>';
+        list.forEach(c=>{
+            const opt=document.createElement('option');
+            opt.value=c.user_id;
+            opt.textContent='#'+c.user_id+' LVL'+c.level+' $'+(c.netWorth>=1e6?(c.netWorth/1e6).toFixed(1)+'M':(c.netWorth/1e3).toFixed(0)+'K');
+            sel.appendChild(opt);
+        });
+    }catch(e){}
+}
+
+async function loadPlayer(uid){
+    if(uid==='local'){newPortfolio();return;}
+    try{
+        const r=await fetch(API+'/api/char/'+uid);
+        const d=await r.json();
+        if(d.error)return;
+        P.name=PNAMES[d.user_id%PNAMES.length];
+        P.corp=CNAMES[d.corp_id%CNAMES.length];
+        P.level=d.level;P.gold=d.gold;P.netWorth=d.net_worth;
+        P.stocks=d.stocks||[];P.loot=d.loot||[];
+        P.history=d.history&&d.history.length?d.history:genHist(d.net_worth);
+        P.prestige=d.prestige;P.streak=d.streak_days;
+        P.rank=d.rank_percent;frame=0;
+    }catch(e){}
+}
+
+// ====== INFO ======
+document.getElementById('info').textContent=TOTAL+' math render algorithms | 10 categories | Pure Canvas, zero assets | Hourly refresh';
+
 // hourly refresh
 let refreshLeft=3600;
 setInterval(()=>{
@@ -465,9 +506,8 @@ setInterval(()=>{
     document.getElementById('refresh-timer').textContent='refresh in '+m+':'+(s<10?'0':'')+s;
 },1000);
 
-// ====== INFO ======
-document.getElementById('info').textContent=TOTAL+' math render algorithms | 10 categories | Pure Canvas, zero assets | Hourly refresh';
-
+// try fetch player list on load
+refreshPlayers();
 newPortfolio();
 render();
 </script>
