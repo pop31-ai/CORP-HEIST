@@ -33,6 +33,9 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-season" style="border-color:#FFC800;color:#FFC800">SEASON</button>
 <button id="btn-passive" style="border-color:#FFC800;color:#FFC800">PASSIVE TREE</button>
 <button id="btn-rewards" style="border-color:#FFC800;color:#FFC800">SEASON REWARDS</button>
+<button id="btn-ascend" style="border-color:#FF6BD6;color:#FF6BD6">ASCEND</button>
+<button id="btn-raid" style="border-color:#FF4B4B;color:#FF4B4B">GUILD RAID</button>
+<button id="btn-quests" style="border-color:#00FF8C;color:#00FF8C">DAILY QUESTS</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <canvas id="c" width="800" height="500"></canvas>
@@ -578,7 +581,7 @@ function render(){
     X.fillStyle='#333';X.font='5.5px monospace';X.textAlign='center';
     X.fillText('Loot icons are personal symbols of ownership. CORP HEIST makes no claims over displayed items.',W/2,H-26);
     X.fillText('Items may be temporarily unavailable for maintenance, cleaning, or recalibration.',W/2,H-18);
-    X.fillText('All purchases are voluntary. Rates set by system. Money-back per 14-ФЗ (Advertising). Age 12+',W/2,H-10);
+    X.fillText('Donations are voluntary benefactions (no real-money return). Operator remits taxes. 14/39/152/149-ФЗ. Age 12+',W/2,H-10);
     X.fillStyle='#222';X.font='7px monospace';
     X.fillText('CORP HEIST | Binary Protocol v2 | '+TOTAL+' render algorithms | Player->Char->System',W/2,H-3);
 
@@ -720,6 +723,82 @@ document.getElementById('btn-board').onclick=showBoard;
 document.getElementById('btn-season').onclick=showSeason;
 document.getElementById('btn-passive').onclick=showPassives;
 document.getElementById('btn-rewards').onclick=showRewards;
+document.getElementById('btn-ascend').onclick=showPrestige;
+document.getElementById('btn-raid').onclick=showRaid;
+document.getElementById('btn-quests').onclick=showQuests;
+function _uid(){return _urlUid&&_urlUid!=='local'?_urlUid:1000;}
+
+async function showPrestige(){
+    try{
+        const r=await fetch(API+'/api/prestige?uid='+_uid());const d=await r.json();
+        if(d.error){showOverlay('Ascend',d.error);return;}
+        const req=d.requirement;
+        const el=document.getElementById('overlay');
+        el.innerHTML='<b>ASCENSION φ</b><pre>'+
+            `prestige rank ${d.prestige}  (x${d.current_mult})\n`+
+            `next rank -> x${d.next_mult}\n\n`+
+            `need: level ${req.level} (you ${d.level})\n`+
+            `      net ${fmt(req.net_worth)} (you ${fmt(d.net_worth)})\n`+
+            `status: ${d.eligible?'ELIGIBLE':'not yet'}`+'</pre>'+
+            (d.eligible?'<button onclick="doAscend()" style="margin-top:6px;background:#1a1a2e;color:#FF6BD6;border:1px solid #FF6BD6;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">ASCEND (reset for permanent xφ)</button>':'');
+        el.style.display='block';el.style.opacity='1';
+        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',9000);
+    }catch(e){showOverlay('Ascend','offline');}
+}
+async function doAscend(){
+    try{
+        const r=await fetch(API+'/pulse/prestige',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error){showOverlay('Ascend',d.error);return;}
+        showOverlay('ASCENDED','prestige rank '+d.prestige+'  (x'+d.new_mult+')\n'+d.note);
+        loadPlayer(_uid());
+    }catch(e){showOverlay('Ascend','offline');}
+}
+async function showRaid(){
+    try{
+        const r=await fetch(API+'/api/raid?uid='+_uid());const d=await r.json();
+        if(d.error){showOverlay('Raid',d.error);return;}
+        const rows=(d.top_contributors||[]).map((c,i)=>`#${i+1} P_${c.user_id}  ${fmt(c.damage)}`).join('\n')||'no strikes yet';
+        const el=document.getElementById('overlay');
+        el.innerHTML='<b>GUILD RAID</b><pre>'+
+            `${d.boss}\nHP ${fmt(d.hp)}/${fmt(d.max_hp)}  (${d.pct}%)\n`+
+            (d.defeated?'** DEFEATED **\n':'')+`\ntop damage:\n`+rows+'</pre>'+
+            (d.defeated?'':'<button onclick="doStrike()" style="margin-top:6px;background:#1a1a2e;color:#FF4B4B;border:1px solid #FF4B4B;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">STRIKE BOSS</button>');
+        el.style.display='block';el.style.opacity='1';
+        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',9000);
+    }catch(e){showOverlay('Raid','offline');}
+}
+async function doStrike(){
+    try{
+        const r=await fetch(API+'/pulse/raid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error){showOverlay('Raid',d.error);setTimeout(showRaid,700);return;}
+        let msg='dmg '+fmt(d.damage)+'  boss '+fmt(d.boss_hp)+'/'+fmt(d.boss_max);
+        if(d.defeated){msg+='\n** BOSS DOWN ** loot pool '+fmt(d.loot.pool)+'g';loadPlayer(_uid());}
+        showOverlay('STRIKE',msg);
+        setTimeout(showRaid,900);
+    }catch(e){showOverlay('Raid','offline');}
+}
+async function showQuests(){
+    try{
+        const r=await fetch(API+'/api/quests?uid='+_uid());const d=await r.json();
+        const el=document.getElementById('overlay');
+        const rows=d.quests.map(q=>`[${q.slot}] ${q.desc}  +${fmt(q.reward_gold)}g`).join('\n');
+        const btns=d.quests.map(q=>`<button onclick="claimQuest(${q.slot})" style="margin:4px 4px 0 0;background:#1a1a2e;color:#00FF8C;border:1px solid #00FF8C;padding:3px 6px;font-family:monospace;font-size:9px;cursor:pointer">CLAIM ${q.slot}</button>`).join('');
+        el.innerHTML='<b>DAILY φ-QUESTS</b><pre>'+rows+'\n\n'+d.note+'</pre>'+btns;
+        el.style.display='block';el.style.opacity='1';
+        clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',10000);
+    }catch(e){showOverlay('Quests','offline');}
+}
+async function claimQuest(slot){
+    try{
+        const r=await fetch(API+'/pulse/quest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),slot:slot})});
+        const d=await r.json();
+        if(d.error){showOverlay('Quest',d.error);return;}
+        showOverlay('QUEST CLAIMED','slot '+d.slot+'  +'+fmt(d.reward_gold)+'g\ngold '+fmt(d.gold));
+        loadPlayer(_uid());
+    }catch(e){showOverlay('Quest','offline');}
+}
 
 async function showSeason(){
     try{

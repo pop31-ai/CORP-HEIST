@@ -299,6 +299,228 @@ def unlock_cost(node_id, current_lvl):
 
 
 # ============================================================
+# PRESTIGE / ASCENSION (reset progress for a permanent phi-multiplier)
+# ============================================================
+# Ascending resets level/xp/gold to base but grants a permanent prestige rank.
+# Every stat that reads prestige (season_points, gold gains) grows by phi^prestige.
+
+PRESTIGE_BASE_LEVEL = 21      # min level to ascend (Fibonacci number)
+PRESTIGE_BASE_NET = 100_000   # min net worth to ascend
+
+def prestige_requirement(current_prestige):
+    """Requirement scales by phi each ascension."""
+    lvl = int(PRESTIGE_BASE_LEVEL * (PHI ** current_prestige))
+    net = int(PRESTIGE_BASE_NET * (PHI ** current_prestige))
+    return {"level": lvl, "net_worth": net}
+
+def prestige_multiplier(prestige):
+    """Permanent global gold/power multiplier from prestige ranks."""
+    return round(PHI ** prestige, 4)
+
+
+class Prestige:
+    """Ascension system. Reset level/xp/gold; gain a permanent prestige rank.
+    Purely in-game — no real money involved."""
+
+    def __init__(self, state):
+        self.state = state
+
+    def status(self, uid):
+        me = self.state.chars.get(uid)
+        if not me:
+            return {"error": "no char"}
+        p = me.get("prestige", 0)
+        req = prestige_requirement(p)
+        eligible = me["level"] >= req["level"] and me.get("net_worth", 0) >= req["net_worth"]
+        # pres_mult passive boosts the prestige reward multiplier
+        mults = passive_bonus(me.get("passives", [0] * 12))
+        pres_boost = mults.get("pres_mult", 1.0)
+        return {
+            "prestige": p,
+            "current_mult": prestige_multiplier(p),
+            "next_mult": round(prestige_multiplier(p + 1) * pres_boost, 4),
+            "requirement": req,
+            "level": me["level"],
+            "net_worth": me.get("net_worth", 0),
+            "eligible": eligible,
+        }
+
+    def ascend(self, uid):
+        me = self.state.chars.get(uid)
+        if not me:
+            return {"error": "no char"}
+        st = self.status(uid)
+        if not st.get("eligible"):
+            return {"error": "not eligible", **st}
+        me["prestige"] = me.get("prestige", 0) + 1
+        # reset progression (keep passives, prestige, corp identity)
+        me["level"] = 1
+        me["xp"] = 0
+        me["gold"] = 1000
+        me["net_worth"] = PRESTIGE_BASE_NET  # keep a phi-seed of net worth
+        self.state.mark_dirty(uid)
+        return {
+            "ascended": True,
+            "prestige": me["prestige"],
+            "new_mult": prestige_multiplier(me["prestige"]),
+            "note": "Progress reset. Permanent phi-multiplier gained (in-game only).",
+        }
+
+
+# ============================================================
+# GUILD RAIDS (coop boss; phi-scaled HP; loot split by phi shares)
+# ============================================================
+# The whole corp attacks a shared boss. Each strike deals damage = hero power.
+# Boss HP scales by phi with the season week. Loot pool splits by phi-decay.
+
+RAID_BASE_HP = 5_000_000
+
+class Raid:
+    """Per-corp coop boss. State stored on GuildState.raids[corp_id]."""
+
+    def __init__(self, state):
+        self.state = state
+        if not hasattr(state, "raids"):
+            state.raids = {}
+
+    def _boss(self, corp_id):
+        season, week = current_season()
+        max_hp = int(RAID_BASE_HP * (PHI ** (week / PHI)))
+        r = self.state.raids.get(corp_id)
+        if not r or r.get("season_week") != (season, week):
+            r = {
+                "corp_id": corp_id,
+                "name": f"{CORPS[corp_id % len(CORPS)]} Titan",
+                "max_hp": max_hp,
+                "hp": max_hp,
+                "season_week": (season, week),
+                "contributions": {},   # uid -> total damage
+            }
+            self.state.raids[corp_id] = r
+        return r
+
+    def status(self, corp_id):
+        r = self._boss(corp_id)
+        top = sorted(r["contributions"].items(), key=lambda kv: -kv[1])[:10]
+        return {
+            "boss": r["name"],
+            "hp": r["hp"],
+            "max_hp": r["max_hp"],
+            "pct": round(100 * r["hp"] / r["max_hp"], 2),
+            "defeated": r["hp"] <= 0,
+            "top_contributors": [
+                {"user_id": u, "damage": d} for u, d in top
+            ],
+        }
+
+    def strike(self, uid):
+        me = self.state.chars.get(uid)
+        if not me:
+            return {"error": "no char"}
+        corp_id = me["corp_id"] % len(CORPS)
+        r = self._boss(corp_id)
+        if r["hp"] <= 0:
+            return {"error": "boss already defeated", **self.status(corp_id)}
+
+        mults = passive_bonus(me.get("passives", [0] * 12))
+        pres = prestige_multiplier(me.get("prestige", 0))
+        base = hero_power(100 + me["level"] * 10,
+                          me["hero_levels"][me["hero_id"] % 12])
+        dmg = int(base * mults.get("power_mult", 1.0) * pres *
+                  random.uniform(1 / PHI, PHI))
+        r["hp"] = max(0, r["hp"] - dmg)
+        r["contributions"][uid] = r["contributions"].get(uid, 0) + dmg
+        self.state.mark_dirty(uid)
+
+        result = {"damage": dmg, "boss_hp": r["hp"], "boss_max": r["max_hp"]}
+        if r["hp"] <= 0:
+            result["defeated"] = True
+            result["loot"] = self._distribute(r)
+        return result
+
+    def _distribute(self, r):
+        """Split a phi-scaled loot pool among contributors by phi-decay shares
+        ordered by damage dealt. In-game gold only."""
+        pool = int(r["max_hp"] // PHI)   # gold pool ~ boss HP / phi
+        ranked = sorted(r["contributions"].items(), key=lambda kv: -kv[1])
+        out = []
+        for rank, (u, dmg) in enumerate(ranked, 1):
+            share = int(pool * (PHI - 1) / (PHI ** rank))
+            c = self.state.chars.get(u)
+            if c:
+                c["gold"] = c.get("gold", 0) + share
+                self.state.mark_dirty(u)
+            out.append({"rank": rank, "user_id": u, "damage": dmg,
+                        "reward_gold": share})
+        return {"pool": pool, "shares": out,
+                "note": "Raid loot is in-game gold only. No real money."}
+
+
+# ============================================================
+# DAILY PHI-QUESTS (3/day; phi-scaled gold rewards)
+# ============================================================
+# Deterministic per (uid, day) so all clients agree without server storage.
+
+QUEST_POOL = [
+    ("Win {n} phi-duels", "duels"),
+    ("Reach net worth {n}", "net"),
+    ("Unlock {n} passive levels", "passives"),
+    ("Deal {n} raid damage", "raid"),
+    ("Earn {n} gold today", "gold"),
+]
+
+def _day_index(now=None):
+    now = now or int(time.time())
+    return now // (24 * 3600)
+
+def daily_quests(uid, now=None):
+    """Return 3 deterministic quests for the day, phi-scaled rewards."""
+    day = _day_index(now)
+    rng = random.Random(uid * 1_000_003 + day)
+    picks = rng.sample(range(len(QUEST_POOL)), 3)
+    quests = []
+    for slot, idx in enumerate(picks):
+        desc, kind = QUEST_POOL[idx]
+        target = int(3 * (PHI ** (slot + rng.randint(1, 3))))
+        reward = int(1000 * (PHI ** (slot + 2)))
+        quests.append({
+            "slot": slot,
+            "kind": kind,
+            "desc": desc.format(n=target),
+            "target": target,
+            "reward_gold": reward,
+        })
+    return {"day": day, "quests": quests,
+            "note": "Rewards are in-game gold only."}
+
+def claim_quest(state, uid, slot, now=None):
+    """Claim a quest reward (server trusts client progress for this info-game).
+    Prevents double-claim via char['quest_claims'] = {day: [slots]}."""
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    day = _day_index(now)
+    q = daily_quests(uid, now)["quests"]
+    if slot < 0 or slot >= len(q):
+        return {"error": "bad slot"}
+    claims = me.setdefault("quest_claims", {})
+    day_key = str(day)
+    done = claims.setdefault(day_key, [])
+    if slot in done:
+        return {"error": "already claimed", "slot": slot}
+    reward = q[slot]["reward_gold"]
+    me["gold"] = me.get("gold", 0) + reward
+    done.append(slot)
+    # prune old days
+    for k in list(claims.keys()):
+        if k != day_key:
+            del claims[k]
+    state.mark_dirty(uid)
+    return {"claimed": True, "slot": slot, "reward_gold": reward,
+            "gold": me["gold"]}
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 
@@ -335,4 +557,16 @@ if __name__ == "__main__":
     st.chars[1000]["passives"] = [3,3,0,0,0,0,0,0,0,0,0,0]
     print("duel w/ passives:", ar.fight(1000))
     print("season_rewards:", g.season_rewards(2))
+    pr = Prestige(st)
+    st.chars[1000]["level"] = 30
+    print("prestige status:", pr.status(1000))
+    print("ascend:", pr.ascend(1000))
+    rd = Raid(st)
+    print("raid status:", rd.status(2)["pct"], rd.status(2)["boss"])
+    for _ in range(3):
+        s = rd.strike(1000)
+    print("raid strike:", {k: s[k] for k in ("damage", "boss_hp")})
+    print("daily_quests:", daily_quests(1000)["quests"][0])
+    print("claim_quest:", claim_quest(st, 1000, 0))
+    print("claim_again:", claim_quest(st, 1000, 0))
     print("OK")

@@ -39,6 +39,8 @@ from golden_econ import (
     CORPS, FLOORS, PHI,
     current_season, season_progress, season_points,
     PASSIVE_NODES, passive_bonus, unlock_cost,
+    Prestige, Raid, prestige_requirement, prestige_multiplier,
+    daily_quests, claim_quest,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -221,6 +223,8 @@ class SharedState:
 STATE = SharedState()
 GUILDS = GuildSystem(STATE)
 ARENA = Arena(STATE)
+PRESTIGE = Prestige(STATE)
+RAID = Raid(STATE)
 
 
 # ============================================================
@@ -521,6 +525,74 @@ async def pulse_passive(request):
                                "cost_next": unlock_cost(node_id, lvl + 1),
                                "gold": c["gold"]})
 
+
+async def handle_prestige(request):
+    """GET prestige status for a player (?uid=)."""
+    uid = int(request.query.get("uid", 1000))
+    result = PRESTIGE.status(uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_prestige(request):
+    """Pulse: ascend (reset progress for a permanent phi-multiplier). In-game only."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = PRESTIGE.ascend(uid)
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+async def handle_raid(request):
+    """GET raid boss status for a player's corp (?uid=)."""
+    uid = int(request.query.get("uid", 1000))
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"}, status=404)
+    corp_id = c["corp_id"] % len(CORPS)
+    result = RAID.status(corp_id)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_raid(request):
+    """Pulse: strike the corp raid boss. Loot split by phi shares (in-game gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = RAID.strike(uid)
+    if "error" in result and "boss already defeated" not in result.get("error", ""):
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+async def handle_quests(request):
+    """GET today's phi-quests for a player (?uid=)."""
+    uid = int(request.query.get("uid", 1000))
+    result = daily_quests(uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_quest(request):
+    """Pulse: claim a daily quest reward (in-game gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    slot = d.get("slot", 0)
+    result = claim_quest(STATE, uid, slot)
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -697,6 +769,9 @@ def make_unified_app():
     app.router.add_get("/api/season", handle_season)
     app.router.add_get("/api/passives", handle_passives)
     app.router.add_get("/api/season-rewards", handle_season_rewards)
+    app.router.add_get("/api/prestige", handle_prestige)
+    app.router.add_get("/api/raid", handle_raid)
+    app.router.add_get("/api/quests", handle_quests)
     app.router.add_post("/pulse/trade", pulse_trade)
     app.router.add_post("/pulse/gacha", pulse_gacha)
     app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
@@ -704,6 +779,9 @@ def make_unified_app():
     app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
     app.router.add_post("/pulse/duel", pulse_duel)
     app.router.add_post("/pulse/passive", pulse_passive)
+    app.router.add_post("/pulse/prestige", pulse_prestige)
+    app.router.add_post("/pulse/raid", pulse_raid)
+    app.router.add_post("/pulse/quest", pulse_quest)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

@@ -33,7 +33,7 @@ h1{color:#FFC800;font-size:13px;letter-spacing:3px;text-align:center;margin:8px 
 <button onclick="renderCategory('jets')">JETS</button>
 <button onclick="renderDonate()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
 <button onclick="renderBuyGold()" style="border-color:#00AAFF;color:#00AAFF">BUY GOLD</button>
-<button onclick="renderMoneyBack()" style="border-color:#00FF8C;color:#00FF8C">MONEY BACK</button>
+<button onclick="renderBenefaction()" style="border-color:#00FF8C;color:#00FF8C">BENEFACTION</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div class="grid" id="grid"></div>
@@ -1096,27 +1096,30 @@ function renderBuyGold(){
     document.getElementById('info').textContent='5 gold packs | USD + RUB | rates set by system';
 }
 
-// money back: refund per 14-ФЗ (system decides eligibility)
-function renderMoneyBack(){
+// benefaction: donations are voluntary charity (no real-money return).
+// system may comp IN-GAME gold only; operator remits taxes.
+function renderBenefaction(){
     const grid=document.getElementById('grid');grid.innerHTML='';
+    const PHI=1.618033988749;
     for(let i=0;i<20;i++){
         const div=document.createElement('div');div.className='card';
         const cv=document.createElement('canvas');cv.width=100;cv.height=100;
         div.appendChild(cv);
         const lb=document.createElement('div');lb.className='label';
-        const refund=Math.floor(Math.random()*50+5);
-        lb.textContent='REFUND '+refund+'%';lb.style.color='#00FF8C';
+        const goldComp=Math.floor(100*Math.pow(PHI,(i%8)/2));
+        lb.textContent='+'+goldComp+'g GOODWILL';lb.style.color='#00FF8C';
         div.appendChild(lb);
         grid.appendChild(div);
         const ctx=cv.getContext('2d');
         ctx.fillStyle='#0a0a12';ctx.fillRect(0,0,100,100);
-        ctx.fillStyle='#00FF8C';ctx.font='bold 20px monospace';ctx.textAlign='center';
-        ctx.fillText(refund+'%',50,45);
+        ctx.fillStyle='#FFC800';ctx.font='bold 16px monospace';ctx.textAlign='center';
+        ctx.fillText('+'+goldComp,50,42);
+        ctx.fillStyle='#00FF8C';ctx.font='8px monospace';
+        ctx.fillText('in-game gold',50,58);
         ctx.fillStyle='#555';ctx.font='7px monospace';
-        ctx.fillText('14-ФЗ',50,62);
-        ctx.fillText('system decides',50,74);
+        ctx.fillText('charity, no cash back',50,72);
     }
-    document.getElementById('info').textContent='20 refund variants | 14-ФЗ compliant | system decides eligibility';
+    document.getElementById('info').textContent='Donations = voluntary benefactions | in-game gold goodwill only | no real-money return | operator remits taxes';
 }
 
 // hourly refresh
