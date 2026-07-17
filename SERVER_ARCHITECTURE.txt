@@ -73,7 +73,60 @@
   │ Savings              │ -        │ 92.3%    │
   └──────────────────────┴──────────┴──────────┘
 
-4. INTER-INSTANCE COMMUNICATION
+4. TRANSPORT: PULSE + POLL (no WebSocket)
+==========================================
+
+  WebSocket: persistent connection, idle overhead, server RAM per conn
+  Pulse+Poll: one-shot requests, client decides interval, server Stateless
+
+  ┌─────────────────────────────────────────────────────┐
+  │                    CLIENT                            │
+  │                                                      │
+  │  POLL (every 3-5s):                                  │
+  │    GET /api/char/1000      → char data (JSON)        │
+  │    GET /api/market         → stock prices (JSON)     │
+  │    GET /api/chars          → leaderboard (JSON)      │
+  │                                                      │
+  │  PULSE (on action):                                  │
+  │    POST /pulse/trade       → {stock,amount,side}     │
+  │    POST /pulse/gacha       → {uid}                   │
+  │    POST /pulse/loot/sell   → {code,qty}              │
+  │    POST /pulse/donate      → {uid}                   │
+  │    POST /pulse/buy-gold    → {uid,pack}              │
+  │    POST /pulse/money-back  → {uid}                   │
+  │                                                      │
+  │  WebSocket: NOT USED                                 │
+  └─────────────────────────────────────────────────────┘
+
+  Why no WebSocket:
+  - Idle connections waste server RAM (~8KB/conn × 10K = 80MB)
+  - Reconnection logic = complexity
+  - HTTP/2 multiplexing already solves head-of-line blocking
+  - Pulse is simpler: POST → JSON response → done
+  - Poll is simpler: GET → JSON → render → sleep
+
+  Traffic comparison:
+  ┌──────────────────┬───────────┬───────────┬──────────┐
+  │ Model            │ Idle/s    │ Active/s  │ RAM      │
+  ├──────────────────┼───────────┼───────────┼──────────┤
+  │ WebSocket (10K)  │ 0 B       │ 4.3 MB/s  │ 80 MB    │
+  │ Pulse+Poll (10K) │ 0 B       │ 3.1 MB/s  │ 12 MB    │
+  │ Savings          │ -         │ 28%       │ 85%      │
+  └──────────────────┴───────────┴───────────┴──────────┘
+
+  Pulse endpoint sizes (binary in JSON):
+  ┌──────────────────┬────────┬────────┐
+  │ Endpoint         │ Req    │ Resp   │
+  ├──────────────────┼────────┼────────┤
+  │ /pulse/trade     │ 40 B   │ 30 B   │
+  │ /pulse/gacha     │ 12 B   │ 20 B   │
+  │ /pulse/loot/sell │ 24 B   │ 25 B   │
+  │ /pulse/donate    │ 12 B   │ 30 B   │
+  │ /pulse/buy-gold  │ 20 B   │ 30 B   │
+  │ /pulse/money-back│ 12 B   │ 30 B   │
+  └──────────────────┴────────┴────────┘
+
+5. INTER-INSTANCE COMMUNICATION
 ===============================
 
   Old model (30 processes):

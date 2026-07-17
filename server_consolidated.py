@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
 CORP HEIST — Consolidated Server
+No persistent WebSocket. Pulse (one-shot) + periodic polling only.
 All 30 instances + dashboard + market in ONE process.
-Internal routing, zero inter-process traffic.
-Shared memory, shared market, shared char DB.
+Shared memory, zero IPC.
 
 Run: python server_consolidated.py
 Ports: 9000 (dashboard) + 8080-8109 (30 cards) = 31 ports, 1 process
+
+TRANSPORT MODEL:
+  Pulse   — one-shot request/response (trade, gacha, sell, donate)
+  Poll    — client pulls data every N seconds (market, char, loot)
+  WebSocket: NOT USED (wastes idle connections)
+  Result: less RAM, less traffic, simpler client
 """
 import asyncio
 import json
@@ -196,6 +202,150 @@ async def handle_stats(request):
 
 
 # ============================================================
+# PULSE ENDPOINTS (one-shot request/response, no persistent conn)
+# ============================================================
+
+async def pulse_trade(request):
+    """Pulse: buy/sell stock. Returns fill confirmation."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    stock_name = d.get("stock", "ALPHA")
+    amount = d.get("amount", 10)
+    side = d.get("side", "buy")
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"})
+    ms = next((s for s in STATE.stocks if s["name"] == stock_name), None)
+    if not ms:
+        return web.json_response({"error": "no stock"})
+    cost = ms["price"] * amount
+    if side == "buy":
+        if c["gold"] < cost:
+            return web.json_response({"error": "not enough gold"})
+        c["gold"] -= int(cost)
+        c["portfolio_value"] += int(cost)
+        held = next((s for s in c["stocks"] if s["name"] == stock_name), None)
+        if held:
+            held["held"] += amount
+        else:
+            c["stocks"].append({"name": stock_name, "price": ms["price"],
+                                "delta": ms["delta"], "held": amount})
+    else:
+        held = next((s for s in c["stocks"] if s["name"] == stock_name), None)
+        if not held or held["held"] < amount:
+            return web.json_response({"error": "not enough held"})
+        held["held"] -= amount
+        c["gold"] += int(cost)
+        c["net_worth"] += int(cost)
+    STATE.track(sent=50)
+    return web.json_response({"ok": True, "gold": c["gold"], "side": side,
+                              "stock": stock_name, "amount": amount,
+                              "price": ms["price"]})
+
+async def pulse_gacha(request):
+    """Pulse: roll gacha. Returns hero + rarity."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"})
+    # gacha logic
+    c["gacha_pity"] += 1
+    roll = random.random() * 10000
+    if c["gacha_pity"] >= 50:
+        rarity = random.choices(range(6), weights=[0,0,2000,2500,4000,1500])[0]
+        c["gacha_pity"] = 0
+    elif roll < 40:
+        rarity = 5  # Unique 0.4%
+    elif roll < 250:
+        rarity = 4  # Legendary 2.5%
+    elif roll < 1700:
+        rarity = 3  # Epic 17%
+    elif roll < 3700:
+        rarity = 2  # Rare 20%
+    elif roll < 6700:
+        rarity = 1  # Uncommon 30%
+    else:
+        rarity = 0  # Common 33%
+    hero_id = random.randint(0, 9)
+    STATE.track(sent=20)
+    return web.json_response({"ok": True, "hero_id": hero_id,
+                              "rarity": rarity, "pity": c["gacha_pity"]})
+
+async def pulse_loot_sell(request):
+    """Pulse: sell loot item for gold."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    code = d.get("code", 0)
+    qty = d.get("qty", 1)
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"})
+    item = next((l for l in c["loot"] if l["code"] == code), None)
+    if not item or item["qty"] < qty:
+        return web.json_response({"error": "not enough"})
+    item["qty"] -= qty
+    if item["qty"] <= 0:
+        c["loot"].remove(item)
+    gold = item["value"] * qty
+    c["gold"] += gold
+    STATE.track(sent=30)
+    return web.json_response({"ok": True, "gold": c["gold"], "earned": gold})
+
+async def pulse_donate(request):
+    """Pulse: donate rarest loot for gold (system decides multiplier)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    c = STATE.chars.get(uid)
+    if not c or not c["loot"]:
+        return web.json_response({"error": "no loot"})
+    ri = max(range(len(c["loot"])), key=lambda i: c["loot"][i]["rarity"])
+    item = c["loot"][ri]
+    mult = [3,5,8,12,20,50][item["rarity"]]
+    gold = item["value"] * item["qty"] * mult
+    c["gold"] += gold
+    c["loot"].pop(ri)
+    STATE.track(sent=30)
+    return web.json_response({"ok": True, "gold": c["gold"], "donated_rarity": item["rarity"],
+                              "multiplier": mult, "earned": gold})
+
+async def pulse_buy_gold(request):
+    """Pulse: buy game gold for real money (USD/RUB, system decides rate)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    pack = d.get("pack", 0)
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"})
+    packs = [
+        {"usd":0.99,"rub":89,"gold":500},
+        {"usd":4.99,"rub":449,"gold":3000},
+        {"usd":9.99,"rub":899,"gold":7500},
+        {"usd":19.99,"rub":1799,"gold":18000},
+        {"usd":49.99,"rub":4499,"gold":50000},
+    ]
+    p = packs[pack % len(packs)]
+    c["gold"] += p["gold"]
+    c["net_worth"] += p["gold"]
+    STATE.track(sent=30)
+    return web.json_response({"ok": True, "gold": c["gold"], "paid_usd": p["usd"],
+                              "paid_rub": p["rub"], "received": p["gold"]})
+
+async def pulse_money_back(request):
+    """Pulse: refund per 14-ФЗ (system decides eligibility)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    c = STATE.chars.get(uid)
+    if not c or c["gold"] < 1000:
+        return web.json_response({"error": "not eligible"})
+    refund = int(c["gold"] * 0.15)
+    c["gold"] -= refund
+    STATE.track(sent=30)
+    return web.json_response({"ok": True, "refund": refund, "gold": c["gold"],
+                              "compliance": "14-ФЗ"})
+
+
+# ============================================================
 # DASHBOARD HTML
 # ============================================================
 
@@ -318,6 +468,13 @@ def make_card_app():
     app.router.add_get("/api/chars", handle_list)
     app.router.add_get("/api/proto/{uid}", handle_proto)
     app.router.add_get("/api/market", handle_market)
+    # pulse endpoints (one-shot POST)
+    app.router.add_post("/pulse/trade", pulse_trade)
+    app.router.add_post("/pulse/gacha", pulse_gacha)
+    app.router.add_post("/pulse/loot/sell", pulse_loot_sell)
+    app.router.add_post("/pulse/donate", pulse_donate)
+    app.router.add_post("/pulse/buy-gold", pulse_buy_gold)
+    app.router.add_post("/pulse/money-back", pulse_money_back)
     return app
 
 def make_dashboard_app():
