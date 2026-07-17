@@ -366,6 +366,118 @@ function drawPhiTree(x,y,len,ang,depth,t,col){
     drawPhiTree(x2,y2,len/PHI,ang+spread,depth-1,t,col);
 }
 
+// ====== RAID TITAN (phi-fractal boss) ======
+// Recursive golden-angle limbs radiating from a pulsing core.
+function drawTitanLimb(cx,cy,len,ang,depth,t,col,alpha){
+    if(depth<=0||len<4)return;
+    const x2=cx+Math.cos(ang)*len, y2=cy+Math.sin(ang)*len;
+    X.strokeStyle=col;X.globalAlpha=alpha;X.lineWidth=0.4+depth*0.5;
+    X.beginPath();X.moveTo(cx,cy);X.lineTo(x2,y2);X.stroke();
+    // joint node
+    X.fillStyle=col;X.globalAlpha=alpha*0.8;
+    X.beginPath();X.arc(x2,y2,0.6+depth*0.5,0,TAU);X.fill();
+    const golden=2.399963;   // golden angle (rad)
+    const wob=Math.sin(t*1.3+depth)*0.12;
+    drawTitanLimb(x2,y2,len/PHI,ang-golden+wob,depth-1,t,col,alpha*0.92);
+    drawTitanLimb(x2,y2,len/PHI,ang+golden*0.5+wob,depth-1,t,col,alpha*0.92);
+}
+function drawTitan(cx,cy,size,t){
+    const hurt=RAIDVIZ.flash;
+    const dead=RAIDVIZ.defeated;
+    const baseCol=dead?'#3a3a4a':(hurt>0.02?'#FF9B4B':'#FF4B4B');
+    const pulse=1+Math.sin(t*(dead?0.4:1.6))*0.06;
+    X.save();
+    // outer glow ring
+    X.globalAlpha=dead?0.08:0.16+hurt*0.25;
+    const g=X.createRadialGradient(cx,cy,size*0.2,cx,cy,size*1.5);
+    g.addColorStop(0,baseCol);g.addColorStop(1,'#0a0a1200');
+    X.fillStyle=g;X.beginPath();X.arc(cx,cy,size*1.5,0,TAU);X.fill();
+    // radiating fractal limbs (8 arms, golden-angle offset)
+    const arms=8;
+    for(let i=0;i<arms;i++){
+        const a=i*TAU/arms + t*(dead?0.05:0.25);
+        drawTitanLimb(cx,cy,size*0.6*pulse,a,4,t,baseCol,dead?0.15:0.5);
+    }
+    // core: golden nested rings
+    for(let k=0;k<4;k++){
+        const rr=size*0.28*pulse/Math.pow(PHI,k*0.5);
+        X.globalAlpha=(dead?0.2:0.55)-k*0.08;
+        X.strokeStyle=k===0?'#FFC800':baseCol;X.lineWidth=1.4-k*0.3;
+        X.beginPath();X.arc(cx,cy,rr,0,TAU);X.stroke();
+    }
+    // core eye
+    X.globalAlpha=dead?0.3:0.9;
+    X.fillStyle=dead?'#555':'#FFC800';
+    X.beginPath();X.arc(cx,cy,size*0.06*pulse,0,TAU);X.fill();
+    X.restore();
+    if(RAIDVIZ.flash>0)RAIDVIZ.flash*=0.88;
+}
+// animated HP bar with phi-segment ticks
+function drawHpBar(x,y,w,h,pct,t){
+    X.save();
+    X.fillStyle='#1a0a0a';X.fillRect(x,y,w,h);
+    const fw=w*Math.max(0,Math.min(1,pct/100));
+    const grad=X.createLinearGradient(x,0,x+w,0);
+    grad.addColorStop(0,'#FF4B4B');grad.addColorStop(0.6,'#FF9B4B');grad.addColorStop(1,'#FFC800');
+    X.fillStyle=grad;X.fillRect(x,y,fw,h);
+    // shimmer
+    X.globalAlpha=0.25+0.15*Math.sin(t*3);
+    X.fillStyle='#fff';X.fillRect(x+fw-3,y,3,h);X.globalAlpha=1;
+    // phi tick marks (at 1/phi, 1/phi^2 ...)
+    X.strokeStyle='#0a0a12';X.lineWidth=0.6;
+    let p=1/PHI;
+    for(let i=0;i<4;i++){X.beginPath();X.moveTo(x+w*p,y);X.lineTo(x+w*p,y+h);X.stroke();p/=PHI;}
+    X.strokeStyle='#FF4B4B';X.lineWidth=0.6;X.strokeRect(x,y,w,h);
+    X.restore();
+}
+// hit particles (golden pollen burst on strike)
+const HITP=[];
+function spawnHitParticles(){
+    for(let i=0;i<24;i++){
+        const a=Math.random()*TAU,sp=0.6+Math.random()*2.2;
+        HITP.push({x:0,y:0,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,
+            col:Math.random()<0.6?'#FFC800':'#FF9B4B'});
+    }
+}
+function drawHitParticles(cx,cy){
+    for(let i=HITP.length-1;i>=0;i--){
+        const p=HITP[i];p.x+=p.vx;p.y+=p.vy;p.vy+=0.04;p.life-=0.03;
+        if(p.life<=0){HITP.splice(i,1);continue;}
+        X.globalAlpha=p.life;X.fillStyle=p.col;
+        X.beginPath();X.arc(cx+p.x,cy+p.y,1.4*p.life+0.4,0,TAU);X.fill();
+    }
+    X.globalAlpha=1;
+}
+// ====== PRESTIGE AURA (ranked golden rings around the whole card) ======
+function drawPrestigeAura(t){
+    const p=P.prestige||0;
+    if(p<=0)return;
+    const cx=W/2, cy=H/2;
+    const rings=Math.min(p,8);
+    X.save();
+    for(let i=0;i<rings;i++){
+        const baseR=Math.max(W,H)*0.5 + 6 + i*7;
+        const rot=t*(0.05+i*0.02)*(i%2?-1:1);
+        const seg=Math.floor(PHI*(i+3));   // phi-ish segment count
+        X.globalAlpha=0.10+0.03*Math.sin(t*1.5+i);
+        X.strokeStyle=i===rings-1?'#FF6BD6':'#FFC800';
+        X.lineWidth=0.8;
+        X.beginPath();
+        for(let s=0;s<=seg;s++){
+            const a=rot+s*TAU/seg;
+            const rr=baseR+Math.sin(a*PHI+t)*3;
+            const px=cx+rr*Math.cos(a), py=cy+rr*Math.sin(a);
+            s===0?X.moveTo(px,py):X.lineTo(px,py);
+        }
+        X.stroke();
+    }
+    // prestige badge (top-center)
+    X.globalAlpha=0.85;X.fillStyle='#FF6BD6';X.font='bold 9px monospace';X.textAlign='center';
+    X.fillText('✦ PRESTIGE '+p+' — ×'+(Math.pow(PHI,p)).toFixed(2)+' ✦',cx,16);
+    X.restore();
+    X.globalAlpha=1;
+}
+
 // Background tinted with golden-section guide lines
 function drawGoldenBg(t,tc){
     // full-screen faint fractal phi-trees (corners), animated sway
@@ -439,6 +551,9 @@ function render(){
 
     // === GOLDEN SECTION BACKGROUND ===
     drawGoldenBg(t,tc);
+
+    // === PRESTIGE AURA (ranked rings framing the card) ===
+    drawPrestigeAura(t);
 
     // === LEFT: true golden spiral (layered) ===
     drawGoldenSpiralLayered(90, 250, Math.min(W,H)*0.38, 3.2, t, tc);
@@ -515,12 +630,14 @@ function render(){
     X.globalAlpha=0.25;X.beginPath();for(let i=0;i<100;i++){const a=i*0.15+t*0.4;const r=22*Math.pow(PHI,i/40-3);if(r>22)break;i===0?X.moveTo(60+r*Math.cos(a),by+40+r*Math.sin(a)):X.lineTo(60+r*Math.cos(a),by+40+r*Math.sin(a));}X.strokeStyle='#FFC800';X.lineWidth=1;X.stroke();X.globalAlpha=1;
 
     X.fillStyle='#FFC800';X.font='8px monospace';X.textAlign='left';X.fillText('NET WORTH',20,by+14);
-    X.font='bold 18px monospace';X.fillText('$'+fmt(P.netWorth),20,by+36);
+    X.save();X.shadowColor='#FFC800';X.shadowBlur=8+3*Math.sin(t*2);
+    X.font='bold 18px monospace';X.fillText('$'+fmt(P.netWorth),20,by+36);X.restore();
     X.fillStyle='#555';X.font='8px monospace';X.fillText('RANK #'+P.rank+' | '+P.corp,20,by+50);
 
     // gold
     X.fillStyle='#FFD700';X.font='8px monospace';X.fillText('GOLD',200,by+14);
-    X.font='bold 14px monospace';X.fillText('$'+fmt(P.gold),200,by+34);
+    X.save();X.shadowColor='#FFD700';X.shadowBlur=6+2*Math.sin(t*2.4);
+    X.font='bold 14px monospace';X.fillText('$'+fmt(P.gold),200,by+34);X.restore();
     X.fillStyle='#555';X.font='8px monospace';X.fillText('LVL '+P.level+' | PRESTIGE '+P.prestige,200,by+50);
     X.fillText('STREAK '+P.streak+'d',200,by+64);
 
@@ -575,6 +692,20 @@ function render(){
     X.fillText('GOLD SINK',ccx+98,ccy-2);
     X.fillStyle='#555';X.font='6px monospace';
     X.fillText('loot → '+cnames[frame%cnames.length]+' → gold (phi-flow)',20,chainY+18);
+
+    // === GUILD RAID TITAN (bottom-right of stats bar) ===
+    if(RAIDVIZ.loaded){
+        const tX=690, tY=by+150, tSz=42;
+        drawTitan(tX,tY,tSz,t);
+        drawHitParticles(tX,tY);
+        // label + hp bar
+        X.fillStyle=RAIDVIZ.defeated?'#555':'#FF4B4B';X.font='7px monospace';X.textAlign='center';
+        X.fillText(RAIDVIZ.name||'RAID BOSS',tX,by+95);
+        drawHpBar(tX-58,by+100,116,7,RAIDVIZ.pct,t);
+        X.fillStyle='#888';X.font='6px monospace';
+        X.fillText(RAIDVIZ.defeated?'** DEFEATED **':'HP '+fmt(RAIDVIZ.hp)+' / '+fmt(RAIDVIZ.max),tX,by+116);
+        X.fillStyle='#444';X.fillText('φ-fractal Titan · corp coop',tX,by+200);
+    }
 
     // footer + disclaimer
     X.fillStyle='#1a1a2e';X.fillRect(0,H-35,W,35);
@@ -654,6 +785,18 @@ async function loadPlayer(uid){
         P.history=d.history&&d.history.length?d.history:genHist(d.net_worth);
         P.prestige=d.prestige;P.streak=d.streak_days;
         P.rank=d.rank_percent;frame=0;
+        loadRaidViz(uid);
+    }catch(e){}
+}
+
+// Live raid-boss state for the on-card animated Titan
+const RAIDVIZ={hp:1,max:1,pct:100,name:'',defeated:false,flash:0,loaded:false};
+async function loadRaidViz(uid){
+    try{
+        const r=await fetch(API+'/api/raid?uid='+uid);const d=await r.json();
+        if(d.error)return;
+        RAIDVIZ.hp=d.hp;RAIDVIZ.max=d.max_hp;RAIDVIZ.pct=d.pct;
+        RAIDVIZ.name=d.boss;RAIDVIZ.defeated=d.defeated;RAIDVIZ.loaded=true;
     }catch(e){}
 }
 
@@ -727,19 +870,30 @@ document.getElementById('btn-ascend').onclick=showPrestige;
 document.getElementById('btn-raid').onclick=showRaid;
 document.getElementById('btn-quests').onclick=showQuests;
 function _uid(){return _urlUid&&_urlUid!=='local'?_urlUid:1000;}
+function hpBarHTML(pct){
+    pct=Math.max(0,Math.min(100,pct));
+    return '<div style="height:10px;background:#1a0a0a;border:1px solid #FF4B4B;border-radius:2px;margin:4px 0;overflow:hidden">'+
+        '<div style="height:100%;width:'+pct+'%;background:linear-gradient(90deg,#FF4B4B,#FF9B4B,#FFC800);transition:width .5s ease"></div></div>';
+}
+function questBarHTML(){
+    return '<div style="height:6px;background:#0a1a12;border:1px solid #00FF8C;border-radius:2px;margin:2px 0;overflow:hidden">'+
+        '<div style="height:100%;width:100%;background:linear-gradient(90deg,#00FF8C,#FFC800);opacity:.5"></div></div>';
+}
 
 async function showPrestige(){
     try{
         const r=await fetch(API+'/api/prestige?uid='+_uid());const d=await r.json();
         if(d.error){showOverlay('Ascend',d.error);return;}
         const req=d.requirement;
+        const lvlPct=Math.min(100,100*d.level/req.level);
+        const netPct=Math.min(100,100*d.net_worth/req.net_worth);
+        const pinkBar=(pct,ok)=>'<div style="height:7px;background:#1a0a18;border:1px solid #FF6BD6;border-radius:2px;margin:2px 0;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(ok?'linear-gradient(90deg,#FF6BD6,#FFC800)':'#FF6BD6')+';transition:width .5s"></div></div>';
         const el=document.getElementById('overlay');
-        el.innerHTML='<b>ASCENSION φ</b><pre>'+
-            `prestige rank ${d.prestige}  (x${d.current_mult})\n`+
-            `next rank -> x${d.next_mult}\n\n`+
-            `need: level ${req.level} (you ${d.level})\n`+
-            `      net ${fmt(req.net_worth)} (you ${fmt(d.net_worth)})\n`+
-            `status: ${d.eligible?'ELIGIBLE':'not yet'}`+'</pre>'+
+        el.innerHTML='<b>ASCENSION φ — rank '+d.prestige+' (×'+d.current_mult+')</b>'+
+            '<div style="color:#FF6BD6;font-size:10px;margin:4px 0">next rank → ×'+d.next_mult+'</div>'+
+            '<div style="color:#888;font-size:9px">level '+d.level+' / '+req.level+'</div>'+pinkBar(lvlPct,lvlPct>=100)+
+            '<div style="color:#888;font-size:9px">net '+fmt(d.net_worth)+' / '+fmt(req.net_worth)+'</div>'+pinkBar(netPct,netPct>=100)+
+            '<pre style="font-size:9px">status: '+(d.eligible?'ELIGIBLE':'not yet')+'</pre>'+
             (d.eligible?'<button onclick="doAscend()" style="margin-top:6px;background:#1a1a2e;color:#FF6BD6;border:1px solid #FF6BD6;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">ASCEND (reset for permanent xφ)</button>':'');
         el.style.display='block';el.style.opacity='1';
         clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',9000);
@@ -758,10 +912,12 @@ async function showRaid(){
     try{
         const r=await fetch(API+'/api/raid?uid='+_uid());const d=await r.json();
         if(d.error){showOverlay('Raid',d.error);return;}
+        RAIDVIZ.hp=d.hp;RAIDVIZ.max=d.max_hp;RAIDVIZ.pct=d.pct;RAIDVIZ.name=d.boss;RAIDVIZ.defeated=d.defeated;RAIDVIZ.loaded=true;
         const rows=(d.top_contributors||[]).map((c,i)=>`#${i+1} P_${c.user_id}  ${fmt(c.damage)}`).join('\n')||'no strikes yet';
+        const bar=hpBarHTML(d.pct);
         const el=document.getElementById('overlay');
-        el.innerHTML='<b>GUILD RAID</b><pre>'+
-            `${d.boss}\nHP ${fmt(d.hp)}/${fmt(d.max_hp)}  (${d.pct}%)\n`+
+        el.innerHTML='<b>GUILD RAID — '+d.boss+'</b>'+bar+'<pre>'+
+            `HP ${fmt(d.hp)}/${fmt(d.max_hp)}  (${d.pct}%)\n`+
             (d.defeated?'** DEFEATED **\n':'')+`\ntop damage:\n`+rows+'</pre>'+
             (d.defeated?'':'<button onclick="doStrike()" style="margin-top:6px;background:#1a1a2e;color:#FF4B4B;border:1px solid #FF4B4B;padding:4px 8px;font-family:monospace;font-size:10px;cursor:pointer">STRIKE BOSS</button>');
         el.style.display='block';el.style.opacity='1';
@@ -773,6 +929,9 @@ async function doStrike(){
         const r=await fetch(API+'/pulse/raid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
         const d=await r.json();
         if(d.error){showOverlay('Raid',d.error);setTimeout(showRaid,700);return;}
+        RAIDVIZ.hp=d.boss_hp;RAIDVIZ.max=d.boss_max;RAIDVIZ.pct=100*d.boss_hp/d.boss_max;
+        RAIDVIZ.defeated=!!d.defeated;RAIDVIZ.flash=1;RAIDVIZ.loaded=true;
+        spawnHitParticles();
         let msg='dmg '+fmt(d.damage)+'  boss '+fmt(d.boss_hp)+'/'+fmt(d.boss_max);
         if(d.defeated){msg+='\n** BOSS DOWN ** loot pool '+fmt(d.loot.pool)+'g';loadPlayer(_uid());}
         showOverlay('STRIKE',msg);
@@ -783,9 +942,11 @@ async function showQuests(){
     try{
         const r=await fetch(API+'/api/quests?uid='+_uid());const d=await r.json();
         const el=document.getElementById('overlay');
-        const rows=d.quests.map(q=>`[${q.slot}] ${q.desc}  +${fmt(q.reward_gold)}g`).join('\n');
-        const btns=d.quests.map(q=>`<button onclick="claimQuest(${q.slot})" style="margin:4px 4px 0 0;background:#1a1a2e;color:#00FF8C;border:1px solid #00FF8C;padding:3px 6px;font-family:monospace;font-size:9px;cursor:pointer">CLAIM ${q.slot}</button>`).join('');
-        el.innerHTML='<b>DAILY φ-QUESTS</b><pre>'+rows+'\n\n'+d.note+'</pre>'+btns;
+        const items=d.quests.map(q=>
+            '<div style="margin:6px 0"><div style="color:#00FF8C;font-size:10px">[' + q.slot + '] ' + q.desc +
+            '  <span style="color:#FFC800">+' + fmt(q.reward_gold) + 'g</span></div>' + questBarHTML() +
+            '<button onclick="claimQuest(' + q.slot + ')" style="margin-top:2px;background:#1a1a2e;color:#00FF8C;border:1px solid #00FF8C;padding:2px 6px;font-family:monospace;font-size:9px;cursor:pointer">CLAIM ' + q.slot + '</button></div>').join('');
+        el.innerHTML='<b>DAILY φ-QUESTS</b>'+items+'<pre style="color:#555;font-size:8px">'+d.note+'</pre>';
         el.style.display='block';el.style.opacity='1';
         clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',10000);
     }catch(e){showOverlay('Quests','offline');}
