@@ -40,10 +40,25 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-tour" style="border-color:#00E5FF;color:#00E5FF">TOWER TOUR</button>
 <button id="btn-sound" style="border-color:#FFE24B;color:#FFE24B">♪ SOUND ON</button>
 <button id="btn-snap" style="border-color:#00FF8C;color:#00FF8C">📷 SNAPSHOT</button>
+<button id="btn-tourney" style="border-color:#FF9B00;color:#FF9B00">🏆 TOURNAMENT</button>
+<button id="btn-customize" style="border-color:#B14BFF;color:#B14BFF">🎨 CUSTOMIZE</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
 <div id="overlay"></div>
+<div id="custom-panel" style="display:none;position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#0a0b16;border:1px solid #B14BFF;border-radius:6px;padding:14px 18px;z-index:50;font-size:11px;color:#ccc;box-shadow:0 0 24px #B14BFF44">
+  <div style="color:#B14BFF;font-weight:bold;margin-bottom:10px">🎨 CUSTOMIZE CARD</div>
+  <label style="display:block;margin:6px 0">Accent <input type="color" id="cu-accent" value="#FFC800"></label>
+  <label style="display:block;margin:6px 0">Aura&nbsp;&nbsp; <input type="color" id="cu-aura" value="#FF9B00"></label>
+  <label style="display:block;margin:6px 0">Corp name <input type="text" id="cu-name" maxlength="12" style="background:#12131f;color:#ccc;border:1px solid #333;padding:2px 4px;width:110px"></label>
+  <label style="display:block;margin:6px 0">Emblem <select id="cu-emblem" style="background:#12131f;color:#ccc;border:1px solid #333;padding:2px">
+    <option value="0">Trine</option><option value="1">Quad</option><option value="2">Penta</option><option value="3">Hexa</option><option value="4">Septa</option></select></label>
+  <label style="display:block;margin:8px 0"><input type="checkbox" id="cu-enabled"> Use custom look</label>
+  <div style="margin-top:10px;display:flex;gap:6px">
+    <button id="cu-save" style="background:#B14BFF;color:#05060c;border:none;padding:5px 12px;border-radius:3px;cursor:pointer;font-family:inherit">SAVE</button>
+    <button id="cu-close" style="background:#1a1a2e;color:#ccc;border:1px solid #333;padding:5px 12px;border-radius:3px;cursor:pointer;font-family:inherit">CLOSE</button>
+  </div>
+</div>
 <style>
 #c{transition:transform .12s ease-out;transform-style:preserve-3d;will-change:transform;border-radius:6px}
 #c.tilting{transition:transform .05s linear}
@@ -69,6 +84,85 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <div class="info" id="info"></div>
 
 <script>
+// ============================================================
+// COMPACT QR ENCODER (byte mode, EC-L, versions 1..4, mask 0)
+// self-contained, no external libraries
+// ============================================================
+const QR=(function(){
+  const GEXP=new Array(256),GLOG=new Array(256);
+  (function(){let x=1;for(let i=0;i<255;i++){GEXP[i]=x;GLOG[x]=i;x<<=1;if(x&0x100)x^=0x11d;}GEXP[255]=GEXP[0];})();
+  function gmul(a,b){if(a===0||b===0)return 0;return GEXP[(GLOG[a]+GLOG[b])%255];}
+  function rsPoly(n){let p=[1];for(let i=0;i<n;i++){const np=new Array(p.length+1).fill(0);
+    for(let j=0;j<p.length;j++){np[j]^=gmul(p[j],1);np[j+1]^=gmul(p[j],GEXP[i]);}p=np;}return p;}
+  function rsEncode(data,ecLen){const gen=rsPoly(ecLen);const res=data.concat(new Array(ecLen).fill(0));
+    for(let i=0;i<data.length;i++){const c=res[i];if(c!==0)for(let j=0;j<gen.length;j++)res[i+j]^=gmul(gen[j],c);}
+    return res.slice(data.length);}
+  // version params for EC-L: [version, totalCodewords, ecPerBlock] (single block, v1..4)
+  const V=[null,
+    {size:21,total:26,ec:7,cap:17},
+    {size:25,total:44,ec:10,cap:32},
+    {size:29,total:70,ec:15,cap:53},
+    {size:33,total:100,ec:20,cap:78}];
+  function pick(len){for(let v=1;v<=4;v++)if(len<=V[v].cap)return v;return 4;}
+  function encode(text){
+    const bytes=[];for(let i=0;i<text.length;i++){const c=text.charCodeAt(i);
+      if(c<128)bytes.push(c);else if(c<2048){bytes.push(192|(c>>6));bytes.push(128|(c&63));}
+      else{bytes.push(224|(c>>12));bytes.push(128|((c>>6)&63));bytes.push(128|(c&63));}}
+    const ver=pick(bytes.length);const p=V[ver];
+    // bitstream: mode(0100)+len(8bit v1-4? actually 8 for v1-9 byte)+data
+    let bits=[];const push=(val,n)=>{for(let i=n-1;i>=0;i--)bits.push((val>>i)&1);};
+    push(4,4);push(bytes.length,8);for(const b of bytes)push(b,8);
+    const dataCw=p.total-p.ec;const maxBits=dataCw*8;
+    // terminator
+    for(let i=0;i<4&&bits.length<maxBits;i++)bits.push(0);
+    while(bits.length%8!==0)bits.push(0);
+    const cw=[];for(let i=0;i<bits.length;i+=8){let b=0;for(let j=0;j<8;j++)b=(b<<1)|bits[i+j];cw.push(b);}
+    const pads=[0xEC,0x11];let pi=0;while(cw.length<dataCw){cw.push(pads[pi++%2]);}
+    const ec=rsEncode(cw,p.ec);const all=cw.concat(ec);
+    // build matrix
+    const sz=p.size;const m=[];const rez=[];
+    for(let i=0;i<sz;i++){m.push(new Array(sz).fill(null));rez.push(new Array(sz).fill(false));}
+    function finder(r,c){for(let dr=-1;dr<=7;dr++)for(let dc=-1;dc<=7;dc++){const rr=r+dr,cc=c+dc;
+      if(rr<0||cc<0||rr>=sz||cc>=sz)continue;const b=(dr>=0&&dr<=6&&(dc===0||dc===6))||(dc>=0&&dc<=6&&(dr===0||dr===6))||(dr>=2&&dr<=4&&dc>=2&&dc<=4);
+      m[rr][cc]=b?1:0;rez[rr][cc]=true;}}
+    finder(0,0);finder(0,sz-7);finder(sz-7,0);
+    // timing
+    for(let i=8;i<sz-8;i++){if(m[6][i]===null){m[6][i]=(i%2===0)?1:0;rez[6][i]=true;}if(m[i][6]===null){m[i][6]=(i%2===0)?1:0;rez[i][6]=true;}}
+    // alignment (v2-4 single at sz-7,sz-7 center)
+    if(ver>=2){const ac=sz-7;for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++){const rr=ac+dr,cc=ac+dc;
+      const b=(Math.abs(dr)===2||Math.abs(dc)===2||(dr===0&&dc===0));m[rr][cc]=b?1:0;rez[rr][cc]=true;}}
+    // dark module
+    m[sz-8][8]=1;rez[sz-8][8]=true;
+    // reserve format areas
+    for(let i=0;i<9;i++){if(!rez[8][i]){rez[8][i]=true;}if(!rez[i][8]){rez[i][8]=true;}}
+    for(let i=0;i<8;i++){rez[8][sz-1-i]=true;rez[sz-1-i][8]=true;}
+    // place data, mask 0 ((r+c)%2==0)
+    let bit=0;const stream=[];for(const b of all)for(let i=7;i>=0;i--)stream.push((b>>i)&1);
+    let dir=-1,col=sz-1;
+    while(col>0){if(col===6)col--;
+      for(let i=0;i<sz;i++){const row=dir<0?sz-1-i:i;
+        for(let cc=0;cc<2;cc++){const c=col-cc;
+          if(rez[row][c])continue;
+          let v=bit<stream.length?stream[bit++]:0;
+          if(((row+c)%2)===0)v^=1;
+          m[row][c]=v;rez[row][c]=true;
+        }}
+      dir=-dir;col-=2;}
+    // format info: EC-L(01) mask 0(000) -> data 01000 ; BCH
+    function fmtBits(){const data=0b01000;let d=data<<10;const g=0b10100110111;
+      let v=d;for(let i=14;i>=10;i--){if((v>>i)&1)v^=g<<(i-10);} let bits=(data<<10)|v; bits^=0b101010000010010; return bits;}
+    const fb=fmtBits();
+    // place format around top-left + split
+    for(let i=0;i<=5;i++)m[8][i]=(fb>>i)&1;
+    m[8][7]=(fb>>6)&1;m[8][8]=(fb>>7)&1;m[7][8]=(fb>>8)&1;
+    for(let i=9;i<15;i++)m[14-i][8]=(fb>>i)&1;
+    for(let i=0;i<8;i++)m[sz-1-i][8]=(fb>>i)&1;
+    for(let i=8;i<15;i++)m[8][sz-15+i]=(fb>>i)&1;
+    return {matrix:m,size:sz};
+  }
+  return {encode:encode};
+})();
+
 // ============================================================
 // CORP HEIST — INTEGRATED WEALTH CARD
 // Portfolio (stocks + loot) -> Canvas rendering
@@ -166,6 +260,18 @@ function tickTheme(){
     THEME.bg=lerpHex(THEME_FROM.bg,THEME_TO.bg,k);
     THEME.aura=lerpHex(THEME_FROM.aura,THEME_TO.aura,k);
 }
+// ---- player customization (accent/aura/emblem), persisted in localStorage ----
+const CUSTOM={enabled:false,accent:'#FFC800',aura:'#FF9B00',emblem:0,name:''};
+function loadCustom(){
+    try{const s=JSON.parse(localStorage.getItem('corpheist_custom'));if(s)Object.assign(CUSTOM,s);}catch(e){}
+}
+function saveCustom(){try{localStorage.setItem('corpheist_custom',JSON.stringify(CUSTOM));}catch(e){}}
+function applyCustom(){
+    if(!CUSTOM.enabled)return;
+    THEME.accent=CUSTOM.accent;THEME.aura=CUSTOM.aura;
+    if(CUSTOM.name)THEME.name=CUSTOM.name;
+}
+loadCustom();
 
 let P,frame=0,paused=false;
 
@@ -888,6 +994,98 @@ function drawDuel(){
     X.fillText('▸ click / tap anywhere to close ◂',W/2,H-10);X.globalAlpha=1;
 }
 
+// ====== 8-FIGHTER TOURNAMENT BRACKET (phi-seeded single elimination) ======
+const TOURNEY={active:false,t:0,seeds:[],rounds:[],winner:null,champT:0};
+async function openTourney(){
+    let pool=[];
+    try{
+        const r=await fetch(API+'/api/leaderboard');const d=await r.json();
+        pool=d.slice(0,16).map(p=>({name:p.name,pow:p.net_worth||1,corp:p.corp}));
+    }catch(e){}
+    // ensure the player is included
+    pool.unshift({name:(P.name||'YOU')+'*',pow:P.netWorth||1,corp:THEME.name});
+    // sort by power then take top 8, seed 1..8
+    pool.sort((a,b)=>b.pow-a.pow);
+    let seeds=pool.slice(0,8);
+    while(seeds.length<8)seeds.push({name:'BYE'+seeds.length,pow:1,corp:'—'});
+    // standard bracket order: 1v8 4v5 2v7 3v6 (phi-weighted upset chance)
+    const ord=[0,7,3,4,1,6,2,5];
+    TOURNEY.seeds=ord.map((i,idx)=>({...seeds[i],seed:i+1}));
+    TOURNEY.rounds=[TOURNEY.seeds.slice()];
+    TOURNEY.winner=null;TOURNEY.champT=0;TOURNEY.active=true;TOURNEY.t=0;
+    // precompute results: higher seed favored, phi-swing allows upsets
+    let cur=TOURNEY.seeds.slice();
+    while(cur.length>1){
+        const next=[];
+        for(let i=0;i<cur.length;i+=2){
+            const a=cur[i],b=cur[i+1];
+            const ratio=a.pow/(a.pow+b.pow);
+            const swing=(Math.random()-0.5)*(1/PHI);   // phi-scaled randomness
+            const aWins=(ratio+swing)>=0.5;
+            next.push(aWins?a:b);
+        }
+        cur=next;TOURNEY.rounds.push(cur.slice());
+    }
+    TOURNEY.winner=cur[0];
+}
+function drawTourney(){
+    if(!TOURNEY.active)return;
+    TOURNEY.t+=0.016;const t=TOURNEY.t;const k=Math.min(1,t/0.5);
+    X.save();X.globalAlpha=0.95*k;X.fillStyle='#04050a';X.fillRect(0,0,W,H);X.restore();
+    X.textAlign='center';X.shadowColor=THEME.aura;X.shadowBlur=16*k;
+    X.fillStyle=THEME.aura;X.font='bold 22px monospace';X.fillText('PHI TOURNAMENT',W/2,H*0.09);
+    X.shadowBlur=0;X.fillStyle='#888';X.font='9px monospace';
+    X.fillText('8 fighters · phi-seeded single elimination',W/2,H*0.09+16);
+    const R=TOURNEY.rounds;   // R[0]=8, R[1]=4, R[2]=2, R[3]=1 champ
+    const colW=(W-80)/4;      // 4 columns: R16?no -> QF(8/2 shown as 8 slots), SF, F, champ
+    const top=H*0.18, bot=H*0.9, colX=40;
+    // reveal rounds progressively
+    const roundReveal=Math.floor(t/1.1);   // new round every 1.1s
+    // draw each stage column: stage 0 shows 8 entrants (round0), stage c shows winners round c
+    const stages=[R[0],R[1],R[2],[TOURNEY.winner]];
+    for(let s=0;s<4;s++){
+        if(s>roundReveal)continue;
+        const list=stages[s];if(!list)continue;
+        const cx=colX+s*colW;
+        const slotH=(bot-top)/list.length;
+        for(let i=0;i<list.length;i++){
+            const f=list[i];if(!f)continue;
+            const y=top+slotH*i+slotH/2;
+            const w=colW-18, h=Math.min(26,slotH-6);
+            const isChamp=(s===3);
+            const app=Math.min(1,(t-s*1.1)*3);if(app<=0)continue;
+            X.globalAlpha=app;
+            X.fillStyle=isChamp?THEME.accent:'#12131f';
+            X.fillRect(cx,y-h/2,w,h);
+            X.strokeStyle=isChamp?THEME.aura:THEME.accent+'66';X.lineWidth=isChamp?2:0.8;
+            X.strokeRect(cx,y-h/2,w,h);
+            X.fillStyle=isChamp?'#05060c':'#ddd';X.font=(isChamp?'bold 10px':'9px')+' monospace';
+            X.textAlign='left';
+            X.fillText('#'+(f.seed||'?')+' '+f.name.slice(0,10),cx+5,y+3);
+            // connector lines to next column
+            if(s<3){
+                X.strokeStyle=THEME.accent+'40';X.lineWidth=0.6;X.globalAlpha=app*0.6;
+                X.beginPath();X.moveTo(cx+w,y);X.lineTo(cx+colW,top+((bot-top)/(stages[s+1].length))*(Math.floor(i/2)+0.5));X.stroke();
+            }
+            X.globalAlpha=1;
+        }
+        // column label
+        X.fillStyle='#666';X.font='8px monospace';X.textAlign='left';
+        X.fillText(['QUARTER','SEMI','FINAL','CHAMPION'][s],cx,top-8);
+    }
+    // champion crown reveal
+    if(roundReveal>=3 && TOURNEY.winner){
+        if(TOURNEY.champT===0){TOURNEY.champT=t;SND.victory();}
+        const ct=t-TOURNEY.champT;
+        X.textAlign='center';X.fillStyle=THEME.aura;X.font='bold 16px monospace';
+        X.shadowColor=THEME.aura;X.shadowBlur=14;
+        X.fillText('👑 '+TOURNEY.winner.name+' 👑',W/2,H*0.13);X.shadowBlur=0;
+        if(ct<0.1)for(let i=0;i<8;i++)setTimeout(launchFirework,i*90);
+    }
+    X.fillStyle=THEME.aura;X.globalAlpha=0.6+0.4*Math.sin(t*3);X.font='9px monospace';X.textAlign='center';
+    X.fillText('▸ click / tap anywhere to close ◂',W/2,H-6);X.globalAlpha=1;
+}
+
 // ====== FULLSCREEN 3D TOWER TOUR (elevator ride through the floors) ======
 const TOUR={active:false,t:0,pos:0,target:0,vel:0};
 function openTour(){
@@ -1101,6 +1299,32 @@ function drawStockChart(x,y,w,h,t){
     X.restore();X.globalAlpha=1;
 }
 
+// ====== QR CODE (scan to open this player's live card) ======
+let _qrCache={url:null,mat:null};
+function drawQR(x,y,box,t){
+    const uid=(_urlUid&&_urlUid!=='local')?_urlUid:'1000';
+    const url=location.origin+'/card/'+uid;
+    if(_qrCache.url!==url){
+        try{_qrCache.mat=QR.encode(url);_qrCache.url=url;}catch(e){_qrCache.mat=null;}
+    }
+    const q=_qrCache.mat;if(!q)return;
+    const n=q.size, cell=box/(n+2);   // 1-module quiet zone each side
+    const ox=x+cell, oy=y+cell;
+    // quiet-zone background
+    X.save();
+    X.fillStyle='#f5f5f5';X.fillRect(x,y,box,box);
+    X.fillStyle='#05060c';
+    for(let r=0;r<n;r++)for(let c=0;c<n;c++){
+        if(q.matrix[r][c])X.fillRect(ox+c*cell, oy+r*cell, Math.ceil(cell), Math.ceil(cell));
+    }
+    // subtle golden frame + pulse
+    X.strokeStyle=THEME.accent;X.globalAlpha=0.5+0.3*Math.sin(t*2);X.lineWidth=1;
+    X.strokeRect(x-1,y-1,box+2,box+2);X.globalAlpha=1;
+    X.fillStyle=THEME.accent;X.font='6px monospace';X.textAlign='center';
+    X.fillText('SCAN ▸ /card/'+uid, x+box/2, y+box+8);
+    X.restore();
+}
+
 // ====== CORP FLOORS MINI-MAP (phi-spaced levels + animated elevator) ======
 const FLOOR_NAMES=['Lobby','Trading','Vault','Boardroom','Data Ctr','Sky Garden','Penthouse','Cloud Spire','Gold Rsv','Quantum','Throne','Apex Atrium'];
 let ELEV_Y=null;   // animated elevator position (smoothed)
@@ -1237,7 +1461,7 @@ function drawTicker(t){
 // Nested phi-scaled polygons rotating by the golden angle; sides & petals
 // derive from the corp index so every corp gets a distinct mark.
 function drawCorpEmblem(cx,cy,size,t){
-    const idx=THEME_IDX;
+    const idx=(CUSTOM.enabled?CUSTOM.emblem:THEME_IDX);
     const sides=3+(idx%5);           // 3..7 sided base
     const petals=5+(idx%4)*2;        // 5,7,9,11 petals
     const golden=2.399963;
@@ -1346,7 +1570,7 @@ function drawGoldenSpiralLayered(cx,cy,maxR,turns,t,col){
 
 function render(){
     const t=frame*0.018;frame++;
-    tickTheme();
+    tickTheme();applyCustom();
     // day/night phi-cycle: shift bg brightness + a sky gradient overhead
     const dn=dayNightK(t);   // 0 night .. 1 day
     // corp-themed background, brightened toward "day"
@@ -1409,6 +1633,9 @@ function render(){
 
     // === CORP FLOORS MINI-MAP (left edge, phi-elevator) ===
     drawFloorMap(6, 66, 62, 176, t);
+
+    // === QR CODE (scan to open live card) ===
+    drawQR(9, 250, 52, t);
 
     // === CENTER: stocks as waves ===
     const sx=170,sy=50,sw=350,sh=200;
@@ -1592,6 +1819,9 @@ function render(){
     // === PVP DUEL REPLAY (full-screen two-fighter animation) ===
     drawDuel();
 
+    // === PHI TOURNAMENT (full-screen 8-fighter bracket) ===
+    drawTourney();
+
     if(!paused)requestAnimationFrame(render);
 }
 
@@ -1770,6 +2000,27 @@ document.getElementById('btn-raid').onclick=showRaid;
 document.getElementById('btn-quests').onclick=showQuests;
 document.getElementById('btn-finale').onclick=openFinale;
 document.getElementById('btn-tour').onclick=openTour;
+{const bt=document.getElementById('btn-tourney');if(bt)bt.onclick=openTourney;}
+// customization panel
+(function(){
+    const panel=document.getElementById('custom-panel');
+    const $a=document.getElementById('cu-accent'),$au=document.getElementById('cu-aura'),
+          $n=document.getElementById('cu-name'),$e=document.getElementById('cu-emblem'),
+          $en=document.getElementById('cu-enabled');
+    const btn=document.getElementById('btn-customize');
+    if(!btn)return;
+    btn.onclick=()=>{
+        $a.value=CUSTOM.accent;$au.value=CUSTOM.aura;$n.value=CUSTOM.name||'';
+        $e.value=String(CUSTOM.emblem);$en.checked=CUSTOM.enabled;
+        panel.style.display=panel.style.display==='none'?'block':'none';SND.click();
+    };
+    document.getElementById('cu-save').onclick=()=>{
+        CUSTOM.accent=$a.value;CUSTOM.aura=$au.value;CUSTOM.name=$n.value.trim().toUpperCase();
+        CUSTOM.emblem=parseInt($e.value)||0;CUSTOM.enabled=$en.checked;
+        saveCustom();SND.promo();panel.style.display='none';
+    };
+    document.getElementById('cu-close').onclick=()=>{panel.style.display='none';};
+})();
 // sound toggle
 const btnSound=document.getElementById('btn-sound');
 if(btnSound)btnSound.onclick=()=>{SFX.on=!SFX.on;if(SFX.on){sfxInit();sfxResume();SND.click();}btnSound.textContent=SFX.on?'♪ SOUND ON':'♪ SOUND OFF';btnSound.style.opacity=SFX.on?'1':'0.5';};
@@ -1788,7 +2039,7 @@ if(btnSnap)btnSnap.onclick=()=>{
     }catch(e){showOverlay('Snapshot','export failed');}
 };
 // close full-screen overlays on click/tap anywhere on the canvas
-C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;if(TOUR.active)TOUR.active=false;if(DUEL.active&&DUEL.done)DUEL.active=false;});
+C.addEventListener('click',()=>{if(FINALE.active)FINALE.active=false;if(TOUR.active)TOUR.active=false;if(DUEL.active&&DUEL.done)DUEL.active=false;if(TOURNEY.active)TOURNEY.active=false;});
 
 // ====== INTERACTIVE MOUSE TILT / ZOOM (CSS 3D on the canvas) ======
 let TILT_ZOOM=1, TILT_RX=0, TILT_RY=0;
