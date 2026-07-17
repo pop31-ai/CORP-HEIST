@@ -162,6 +162,83 @@ async def handle_market(request):
     return web.json_response(STOCKS[:20])
 
 
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>CORP HEIST — Command Center</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#080810;color:#ccc;font-family:'Courier New',monospace;padding:20px}
+h1{color:#FFC800;font-size:20px;letter-spacing:6px;text-align:center;margin-bottom:4px}
+.sub{color:#555;font-size:9px;text-align:center;margin-bottom:24px;letter-spacing:3px}
+.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;max-width:1100px;margin:0 auto}
+.node{background:#0d0d18;border:1px solid #1a1a2e;border-radius:4px;padding:12px;text-align:center;text-decoration:none;transition:all 0.3s}
+.node:hover{border-color:#FFC800;box-shadow:0 0 12px rgba(255,200,0,0.15)}
+.node .port{color:#FFC800;font-size:16px;font-weight:bold}
+.node .status{font-size:8px;margin-top:4px}
+.node .online{color:#00FF8C}
+.market{background:#0d0d18;border:1px solid #1a1a2e;border-radius:4px;padding:16px;margin:20px auto;max-width:1100px}
+.market h2{color:#FFC800;font-size:11px;letter-spacing:3px;margin-bottom:10px}
+.stocks{display:flex;flex-wrap:wrap;gap:6px}
+.stock{background:#12121e;border:1px solid #1a1a2e;border-radius:3px;padding:6px 10px;font-size:8px}
+.stock .name{color:#888}
+.stock .price{color:#FFC800;font-weight:bold}
+.stock .up{color:#00FF8C}
+.stock .down{color:#FF3232}
+.footer{text-align:center;color:#333;font-size:8px;margin-top:20px}
+</style>
+</head>
+<body>
+<h1>CORP HEIST</h1>
+<div class="sub">COMMAND CENTER | 30 INSTANCES | 500 PLAYERS</div>
+
+<div class="market">
+<h2>SHARED MARKET</h2>
+<div class="stocks" id="stocks"></div>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<div class="footer">
+CORP HEIST Command Center | Binary Protocol v2 | 1200 render algorithms | All ports 8080-8109
+</div>
+
+<script>
+const PORTS=[];for(let i=8080;i<=8109;i++)PORTS.push(i);
+const grid=document.getElementById('grid');
+PORTS.forEach(p=>{
+    const a=document.createElement('a');
+    a.className='node';a.href='http://'+location.hostname+':'+p;a.target='_blank';
+    a.innerHTML='<div class="port">'+p+'</div><div class="status online">ONLINE</div>';
+    grid.appendChild(a);
+});
+
+async function refreshMarket(){
+    try{
+        const r=await fetch('/api/market');
+        const stocks=await r.json();
+        const el=document.getElementById('stocks');
+        el.innerHTML='';
+        stocks.forEach(s=>{
+            const d=document.createElement('div');d.className='stock';
+            const cls=s.delta>=0?'up':'down';
+            d.innerHTML='<span class="name">'+s.name+'</span> <span class="price">$'+s.price.toFixed(2)+'</span> <span class="'+cls+'">'+(s.delta>=0?'+':'')+s.delta.toFixed(2)+'</span>';
+            el.appendChild(d);
+        });
+    }catch(e){}
+}
+refreshMarket();
+setInterval(refreshMarket,3000);
+</script>
+</body>
+</html>"""
+
+
+async def handle_dashboard(request):
+    return web.Response(text=DASHBOARD_HTML, content_type="text/html")
+
+
 # ============================================================
 # MARKET TICKER (shared background task)
 # ============================================================
@@ -177,6 +254,7 @@ async def market_ticker():
 # ============================================================
 
 PORTS = list(range(8080, 8110))  # 8080-8109 = 30 ports
+CMD_PORT = 9000  # command dashboard
 
 async def run_instance(app, port):
     runner = web.AppRunner(app)
@@ -201,6 +279,15 @@ async def main():
     loop = asyncio.get_event_loop()
     loop.create_task(market_ticker())
 
+    # command dashboard on port 9000
+    dash_app = web.Application()
+    dash_app.router.add_get("/", handle_dashboard)
+    dash_app.router.add_get("/api/market", handle_market)
+    dash_runner = web.AppRunner(dash_app)
+    await dash_runner.setup()
+    dash_site = web.TCPSite(dash_runner, "0.0.0.0", CMD_PORT)
+    await dash_site.start()
+
     # start 30 instances
     tasks = []
     for port in PORTS:
@@ -212,11 +299,11 @@ async def main():
     print(f"\n{'='*50}")
     print(f"  CORP HEIST — 30 Wealth Card Instances")
     print(f"{'='*50}")
+    print(f"  COMMAND CENTER:  http://localhost:{CMD_PORT}")
+    print(f"  30 INSTANCES:    ports {PORTS[0]}-{PORTS[-1]}")
     print(f"  500 players | Shared market | 1200 render algorithms")
-    print(f"{'='*50}\n")
-    print(f"  Open ports in firewall/router: 8080-8109")
-    print(f"  Each URL: http://localhost:PORT")
-    print(f"  Or from LAN: http://YOUR_IP:PORT")
+    print(f"{'='*50}")
+    print(f"  Open ports: {CMD_PORT}, {PORTS[0]}-{PORTS[-1]} TCP")
     print(f"{'='*50}\n")
 
     # keep alive
