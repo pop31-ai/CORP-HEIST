@@ -1039,10 +1039,11 @@ def buy_bond(state, uid, tier_idx, principal, now=None):
     if me.get("gold", 0) < principal:
         return {"error": "not enough gold"}
     me["gold"] -= principal
-    payout = int(principal * (PHI ** power))
+    rate = central_rate(now)
+    payout = int(principal * (PHI ** (power * rate)))
     bond = {"id": now * 1000 + random.randint(0, 999), "tier": tier_idx,
             "name": name, "principal": principal, "payout": payout,
-            "matures": now + lock}
+            "cb_rate": rate, "matures": now + lock}
     me.setdefault("bonds", []).append(bond)
     state.mark_dirty(uid)
     return {"ok": True, "bond": bond, "gold": me["gold"]}
@@ -1507,6 +1508,7 @@ def hedge_open(state, uid, amount, now=None):
     me["gold"] -= amount
     fund = {"id": now * 1000 + random.randint(0, 999),
             "principal": amount, "entry_index": market_index(state),
+            "cb_leverage": round(PHI / central_rate(now), 4),
             "matures": now + HEDGE_LOCK}
     me.setdefault("hedge", []).append(fund)
     state.mark_dirty(uid)
@@ -1517,8 +1519,9 @@ def _hedge_value(state, f):
     minus a phi mgmt fee on gains. Never below principal/phi (soft floor)."""
     cur = market_index(state)
     perf = cur / f["entry_index"] if f["entry_index"] else 1.0
-    # phi-amplified: gains and losses levered by phi but floored
-    lev = 1.0 + (perf - 1.0) * PHI
+    # phi-amplified: leverage set by the central rate at entry (dovish=more lev)
+    amp = f.get("cb_leverage", PHI)
+    lev = 1.0 + (perf - 1.0) * amp
     lev = max(1.0 / PHI, lev)
     gross = f["principal"] * lev
     gain = max(0.0, gross - f["principal"])
@@ -1679,10 +1682,11 @@ def _loan(state, uid):
     return me.get("loan")
 
 def _accrue(loan, now):
-    """Compound phi-interest for elapsed ticks."""
+    """Compound phi-interest for elapsed ticks, scaled by the central rate."""
     ticks = (now - loan["last_accrue"]) // LOAN_TICK
     if ticks > 0:
-        loan["debt"] = int(loan["debt"] * ((1 + LOAN_INTEREST) ** ticks))
+        rate_per_tick = 1 + LOAN_INTEREST * central_rate(now)
+        loan["debt"] = int(loan["debt"] * (rate_per_tick ** ticks))
         loan["last_accrue"] += ticks * LOAN_TICK
     return loan
 
@@ -1692,15 +1696,18 @@ def loan_status(state, uid, now=None):
     if not me:
         return {"error": "no char"}
     loan = me.get("loan")
+    cbr = central_rate(now)
     info = {"has_loan": bool(loan), "gold": me.get("gold", 0),
             "max_leverage": round(MAX_LEVERAGE, 4),
-            "interest_pct_per_hour": round(LOAN_INTEREST * 100, 3),
+            "interest_pct_per_hour": round(LOAN_INTEREST * cbr * 100, 3),
+            "cb_rate": cbr,
             "liquidation_ratio": round(LIQ_RATIO, 4),
             "note": "Loans and interest are in-game gold only."}
     if loan:
         _accrue(loan, now)
         state.mark_dirty(uid)
         info.update({"collateral": loan["collateral"], "debt": loan["debt"],
+                     "insured": bool(loan.get("insured")),
                      "health": round(loan["collateral"] * LIQ_RATIO / max(1, loan["debt"]), 3),
                      "liquidation_debt": int(loan["collateral"] * LIQ_RATIO),
                      "at_risk": loan["debt"] >= loan["collateral"] * LIQ_RATIO})
@@ -1751,22 +1758,118 @@ def repay_loan(state, uid, amount=None, now=None):
     result.update(loan_status(state, uid, now) if me.get("loan") else {"gold": me["gold"], "has_loan": False})
     return result
 
-def check_liquidations(state, now=None):
-    """Sweep all loans: if debt >= collateral*phi, seize collateral & wipe debt."""
+# ---- POSITION INSURANCE (pay phi-premium; protect from liquidation/loss) ----
+INSURANCE_PREMIUM_RATE = (PHI - 1) / PHI     # ~0.382 of collateral to insure
+
+def buy_insurance(state, uid, now=None):
+    """Insure your current loan against liquidation for one margin call.
+    Premium = phi-fraction of collateral."""
     now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    loan = me.get("loan")
+    if not loan:
+        return {"error": "no active loan to insure"}
+    if loan.get("insured"):
+        return {"error": "loan already insured"}
+    premium = int(loan["collateral"] * INSURANCE_PREMIUM_RATE)
+    if me.get("gold", 0) < premium:
+        return {"error": "not enough gold for premium", "premium": premium}
+    me["gold"] -= premium
+    loan["insured"] = True
+    state.mark_dirty(uid)
+    return {"ok": True, "premium": premium, "gold": me["gold"],
+            "note": "Insurance covers one liquidation, then is consumed."}
+
+def _liq_events(state):
+    if not hasattr(state, "liq_events"):
+        state.liq_events = []
+    if not hasattr(state, "_liq_seq"):
+        state._liq_seq = 0
+    return state.liq_events
+
+def check_liquidations(state, now=None):
+    """Sweep all loans: if debt >= collateral*phi, seize collateral & wipe debt.
+    Insured loans absorb one margin call (interest reset, insurance consumed).
+    Records events to state.liq_events for overlay/chat notification."""
+    now = now or int(time.time())
+    events = _liq_events(state)
     liquidated = []
+    saved = []
     for uid, me in state.chars.items():
         loan = me.get("loan")
         if not loan:
             continue
         _accrue(loan, now)
         if loan["debt"] >= loan["collateral"] * LIQ_RATIO:
-            # collateral seized; borrowed gold already spent/kept by player, debt wiped
+            name = me.get("name", f"Player_{uid}")
+            corp = me.get("corp_id", 0) % len(CORPS)
+            if loan.get("insured"):
+                # insurance absorbs: wipe excess debt back to collateral, consume cover
+                loan["debt"] = int(loan["collateral"] * (LIQ_RATIO / PHI))
+                loan["insured"] = False
+                loan["last_accrue"] = now
+                saved.append({"uid": uid, "name": name})
+                state._liq_seq += 1
+                events.append({"id": state._liq_seq, "ts": now, "uid": uid,
+                               "name": name, "corp": corp, "type": "saved",
+                               "text": f"{name} dodged liquidation — insurance paid out!"})
+                state.mark_dirty(uid)
+                continue
             liquidated.append({"uid": uid, "collateral_lost": loan["collateral"],
-                               "debt": loan["debt"]})
+                               "debt": loan["debt"], "name": name, "corp": corp})
+            state._liq_seq += 1
+            events.append({"id": state._liq_seq, "ts": now, "uid": uid,
+                           "name": name, "corp": corp, "type": "liquidated",
+                           "collateral_lost": loan["collateral"],
+                           "text": f"{name} was LIQUIDATED — {loan['collateral']:,}g collateral seized!"})
             me.pop("loan", None)
             state.mark_dirty(uid)
-    return {"liquidated": liquidated, "count": len(liquidated)}
+    del events[:-30]
+    return {"liquidated": liquidated, "saved": saved, "count": len(liquidated)}
+
+def liq_feed(state, since=0):
+    events = _liq_events(state)
+    return {"events": [e for e in events if e["id"] > since][-30:],
+            "last_id": events[-1]["id"] if events else 0}
+
+
+# ============================================================
+# CENTRAL BANK (global phi rate; affects loans/bonds/hedge)
+# ============================================================
+
+# The Golden Central Rate oscillates on a phi cycle between a dovish and a
+# hawkish stance. High rate = costlier loans, richer bond yields, tamer hedge
+# leverage. It is deterministic from the clock so all systems agree.
+CB_CYCLE = int(3600 * PHI * PHI)   # full easing<->tightening cycle (~2.6 h)
+CB_MID = 1.0
+CB_AMPL = PHI - 1                  # swings +/- 0.618 around mid
+
+def central_rate(now=None):
+    """Return a global rate factor in ~[1/phi, phi]. 1.0 is neutral."""
+    now = now or int(time.time())
+    phase = (now % CB_CYCLE) / CB_CYCLE
+    # smooth phi-amplitude cosine wave
+    factor = CB_MID + CB_AMPL * math.cos(phase * 2 * math.pi)
+    return round(max(1.0 / PHI, factor), 4)
+
+def cb_status(now=None):
+    now = now or int(time.time())
+    rate = central_rate(now)
+    if rate > 1.15:
+        stance = "HAWKISH — tightening"
+    elif rate < 0.9:
+        stance = "DOVISH — easing"
+    else:
+        stance = "NEUTRAL"
+    return {"rate": rate, "stance": stance,
+            "loan_interest_pct_per_hour": round(LOAN_INTEREST * rate * 100, 3),
+            "bond_yield_factor": round(rate, 4),
+            "hedge_leverage_factor": round(1.0 / rate, 4),
+            "cycle_seconds": CB_CYCLE,
+            "phase_pct": round((now % CB_CYCLE) / CB_CYCLE * 100, 1),
+            "note": "The Golden Central Rate scales all credit markets by phi."}
 
 
 # ============================================================

@@ -54,6 +54,7 @@ from golden_econ import (
     market_index, hedge_open, hedge_status, hedge_redeem,
     magnates, moy_status,
     loan_status, take_loan, repay_loan, check_liquidations,
+    central_rate, cb_status, buy_insurance, liq_feed,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -243,6 +244,27 @@ RAID = Raid(STATE)
 WORLDBOSS = WorldBoss(STATE)
 AUCTION = Auction(STATE)
 GUILDWAR = GuildWar(STATE)
+
+
+def _post_system_chat(corp, text):
+    """Post a SYSTEM message into a corp chat ring buffer."""
+    corp = corp % len(CORPS)
+    STATE._chat_seq += 1
+    msg = {"id": STATE._chat_seq, "uid": 0, "name": "⚡ SYSTEM",
+           "corp": corp, "text": text[:CHAT_TEXT_MAX], "ts": int(time.time())}
+    buf = STATE.chat.setdefault(corp, [])
+    buf.append(msg)
+    if len(buf) > CHAT_MAX:
+        del buf[:-CHAT_MAX]
+
+
+def _sweep_liquidations():
+    """Run liquidation sweep and broadcast any events into corp chat."""
+    res = check_liquidations(STATE)
+    for ev in res.get("liquidated", []) + res.get("saved", []):
+        _post_system_chat(ev["corp"], ev["text"])
+        STATE.save_char(ev["uid"])
+    return res
 
 
 def _boost_reward(uid, result, field="reward_gold"):
@@ -1121,9 +1143,42 @@ async def handle_moy(request):
 # ---- BANK / LOANS (borrow at phi-interest; leverage; liquidation) ----
 async def handle_loan(request):
     """GET a player's loan status (?uid=). Sweeps liquidations first."""
-    check_liquidations(STATE)
+    _sweep_liquidations()
     uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
     result = loan_status(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+# ---- CENTRAL BANK (global phi rate) ----
+async def handle_cb(request):
+    """GET the Golden Central Rate + stance."""
+    result = cb_status()
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+# ---- POSITION INSURANCE (protect a loan from liquidation) ----
+async def pulse_insure(request):
+    """Pulse: insure your active loan against one liquidation (phi premium)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = buy_insurance(STATE, uid)
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- LIQUIDATION FEED (dramatic overlay + notifications) ----
+async def handle_liqfeed(request):
+    """GET recent liquidation/save events (?since=). Sweeps first."""
+    _sweep_liquidations()
+    since = int(request.query.get("since", 0))
+    result = liq_feed(STATE, since)
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -1384,6 +1439,9 @@ def make_unified_app():
     app.router.add_get("/api/loan/{uid}", handle_loan)
     app.router.add_post("/pulse/loan/take", pulse_loan_take)
     app.router.add_post("/pulse/loan/repay", pulse_loan_repay)
+    app.router.add_get("/api/cb", handle_cb)
+    app.router.add_post("/pulse/loan/insure", pulse_insure)
+    app.router.add_get("/api/liqfeed", handle_liqfeed)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

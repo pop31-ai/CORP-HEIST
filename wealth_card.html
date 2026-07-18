@@ -62,6 +62,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-magnates" style="border-color:#FFC800;color:#FFC800">👑 MAGNATES</button>
 <button id="btn-moy" style="border-color:#FFE24B;color:#FFE24B">🏆 MAGNATE/YEAR</button>
 <button id="btn-bank" style="border-color:#FF9B00;color:#FF9B00">🏛 BANK</button>
+<button id="btn-cb" style="border-color:#B14BFF;color:#B14BFF">🏦 CENTRAL BANK</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -2747,13 +2748,15 @@ async function showBank(){
             if(d.has_loan){
                 const risk=d.at_risk;
                 const hcol=d.health>1.5?'#00FF8C':(d.health>1.1?'#FFE24B':'#FF3B3B');
-                p.innerHTML='<div style="color:#888;font-size:9px">interest '+d.interest_pct_per_hour+'%/h · liquidation at debt ≥ collateral×φ</div>'+
+                p.innerHTML='<div style="color:#888;font-size:9px">interest '+d.interest_pct_per_hour+'%/h (CB rate ×'+(d.cb_rate||1)+') · liquidation at debt ≥ collateral×φ</div>'+
                     '<table style="width:100%;font-size:10px;font-family:monospace;margin-top:4px">'+
                     '<tr><td style="color:#555">collateral</td><td style="color:#FFC800;text-align:right">'+fmt(d.collateral)+'g</td></tr>'+
                     '<tr><td style="color:#555">debt</td><td style="color:#FF9B00;text-align:right">'+fmt(d.debt)+'g</td></tr>'+
                     '<tr><td style="color:#555">liquidation debt</td><td style="color:#FF3B3B;text-align:right">'+fmt(d.liquidation_debt)+'g</td></tr>'+
-                    '<tr><td style="color:#555">health</td><td style="color:'+hcol+';text-align:right">'+d.health+(risk?' ⚠':'')+'</td></tr></table>'+
-                    '<div style="margin-top:6px;text-align:center"><button onclick="repayLoan()" style="background:#FFC800;color:#05060c;border:0;font-size:10px;padding:3px 12px;cursor:pointer;font-family:monospace">REPAY FULL</button></div>'+
+                    '<tr><td style="color:#555">health</td><td style="color:'+hcol+';text-align:right">'+d.health+(risk?' ⚠':'')+'</td></tr>'+
+                    (d.insured?'<tr><td style="color:#555">insured</td><td style="color:#00FF8C;text-align:right">🛡 YES</td></tr>':'')+'</table>'+
+                    '<div style="margin-top:6px;text-align:center"><button onclick="repayLoan()" style="background:#FFC800;color:#05060c;border:0;font-size:10px;padding:3px 12px;cursor:pointer;font-family:monospace">REPAY FULL</button>'+
+                    (d.insured?'':' <button onclick="insureLoan()" style="background:#1a1a2e;color:#00FF8C;border:1px solid #00FF8C;font-size:10px;padding:3px 10px;cursor:pointer;font-family:monospace">🛡 INSURE</button>')+'</div>'+
                     '<div style="color:#555;font-size:8px;margin-top:3px">gold '+fmt(d.gold)+'g</div>';
             }else{
                 p.innerHTML='<div style="color:#888;font-size:9px">post gold collateral, borrow up to (φ−1)×collateral×leverage. interest '+d.interest_pct_per_hour+'%/h. liquidation if debt ≥ collateral×φ.</div>'+
@@ -2786,6 +2789,81 @@ async function repayLoan(){
         showOverlay('🏛 LOAN'+(d.cleared?' CLEARED':' REPAID'),'repaid '+fmt(d.repaid)+'g'+(d.collateral_returned?'\ncollateral back +'+fmt(d.collateral_returned)+'g':'')+'\ngold '+fmt(d.gold)+'g');
         showBank();loadPlayer(_uid());
     }catch(e){}
+}
+async function insureLoan(){
+    try{
+        const r=await fetch(API+'/pulse/loan/insure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error){showOverlay('🛡 INSURE',d.error+(d.premium?(' (premium '+fmt(d.premium)+'g)'):''));return;}
+        SND.click();showOverlay('🛡 INSURED','premium '+fmt(d.premium)+'g\ncovers one liquidation\ngold '+fmt(d.gold)+'g');
+        showBank();loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- CENTRAL BANK (global phi rate) ----
+let _cbTimer=null;
+async function showCB(){
+    try{
+        openPanel('<b>🏦 GOLDEN CENTRAL BANK</b><div id="cb-body" style="color:#555">loading...</div>',20000);
+        const paint=async()=>{
+            const p=document.getElementById('cb-body');if(!p){if(_cbTimer)clearInterval(_cbTimer);return;}
+            const r=await fetch(API+'/api/cb');const d=await r.json();
+            const scol=d.rate>1.15?'#FF3B3B':(d.rate<0.9?'#00FF8C':'#FFE24B');
+            p.innerHTML='<div style="text-align:center;margin:6px 0"><span style="color:'+scol+';font-size:26px;text-shadow:0 0 12px '+scol+'">×'+d.rate+'</span></div>'+
+                '<div style="text-align:center;color:'+scol+';font-size:11px">'+d.stance+'</div>'+
+                '<div style="background:#1a1a2e;height:6px;border-radius:3px;overflow:hidden;margin:6px 0"><div style="width:'+d.phase_pct+'%;height:100%;background:'+scol+'"></div></div>'+
+                '<table style="width:100%;font-size:9px;font-family:monospace">'+
+                '<tr><td style="color:#555">loan interest</td><td style="color:#FF9B00;text-align:right">'+d.loan_interest_pct_per_hour+'%/h</td></tr>'+
+                '<tr><td style="color:#555">bond yield factor</td><td style="color:#00FF8C;text-align:right">×'+d.bond_yield_factor+'</td></tr>'+
+                '<tr><td style="color:#555">hedge leverage factor</td><td style="color:#00E5FF;text-align:right">×'+d.hedge_leverage_factor+'</td></tr></table>'+
+                '<div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
+        };
+        paint();if(_cbTimer)clearInterval(_cbTimer);_cbTimer=setInterval(paint,3000);
+    }catch(e){showOverlay('Central Bank','offline');}
+}
+// ---- LIQUIDATION overlay + notifications (global poll) ----
+let _liqSeen=0,_liqInit=false;
+async function pollLiquidations(){
+    try{
+        const r=await fetch(API+'/api/liqfeed?since='+_liqSeen);const d=await r.json();
+        if(!_liqInit){_liqSeen=d.last_id;_liqInit=true;return;}
+        for(const ev of (d.events||[])){
+            _liqSeen=Math.max(_liqSeen,ev.id);
+            if(ev.type==='liquidated')liquidationOverlay(ev);
+            else flashToast('🛡 '+ev.text,'#00FF8C');
+        }
+    }catch(e){}
+}
+setInterval(pollLiquidations,5000);setTimeout(pollLiquidations,1500);
+function flashToast(text,col){
+    const t=document.createElement('div');
+    t.style.cssText='position:fixed;left:50%;top:14%;transform:translateX(-50%);z-index:10000;background:#0d0d18;border:1px solid '+col+';color:'+col+';font-family:monospace;font-size:11px;padding:6px 12px;border-radius:4px;box-shadow:0 0 16px '+col;
+    t.textContent=text;document.body.appendChild(t);
+    setTimeout(()=>{t.style.transition='opacity .6s';t.style.opacity='0';setTimeout(()=>t.remove(),600);},3200);
+}
+function liquidationOverlay(ev){
+    SND.duelHit&&SND.duelHit();
+    const cv=document.createElement('canvas');
+    cv.width=window.innerWidth;cv.height=window.innerHeight;
+    cv.style.cssText='position:fixed;left:0;top:0;z-index:10001;pointer-events:none';
+    document.body.appendChild(cv);
+    const X=cv.getContext('2d');const W=cv.width,H=cv.height;
+    const mine=(String(ev.uid)===String(_uid()));
+    let t=0;const shards=[];
+    for(let i=0;i<80;i++)shards.push({x:W/2,y:H/2,a:Math.random()*TAU,v:2+Math.random()*10,r:2+Math.random()*5});
+    const anim=()=>{
+        t++;X.clearRect(0,0,W,H);
+        X.fillStyle='rgba(255,0,0,'+(0.25*Math.max(0,1-t/60))+')';X.fillRect(0,0,W,H);
+        for(const s of shards){s.x+=Math.cos(s.a)*s.v;s.y+=Math.sin(s.a)*s.v+t*0.15;X.fillStyle='#FF3B3B';X.fillRect(s.x,s.y,s.r,s.r);}
+        X.save();X.textAlign='center';
+        const sc=Math.min(1,t/12);X.font='bold '+Math.round(46*sc)+'px monospace';
+        X.fillStyle='#FF3B3B';X.shadowColor='#FF3B3B';X.shadowBlur=24;
+        X.fillText('LIQUIDATED',W/2,H*0.42);
+        X.shadowBlur=0;X.font='14px monospace';X.fillStyle=mine?'#FFE24B':'#ccc';
+        X.fillText(ev.name+(mine?' (YOU)':'')+' — '+fmt(ev.collateral_lost)+'g seized',W/2,H*0.42+34);
+        X.restore();
+        if(t<90)requestAnimationFrame(anim);else cv.remove();
+    };
+    anim();
 }
 function showOverlay(title,text){
     _applyPanel('<b>'+title+'</b><pre>'+text+'</pre>',6000);
@@ -2836,6 +2914,7 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bmg=document.getElementById('btn-magnates');if(bmg)bmg.onclick=showMagnates;}
 {const bmy=document.getElementById('btn-moy');if(bmy)bmy.onclick=showMoY;}
 {const bbk=document.getElementById('btn-bank');if(bbk)bbk.onclick=showBank;}
+{const bcb=document.getElementById('btn-cb');if(bcb)bcb.onclick=showCB;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
 {const ci=document.getElementById('chat-in');if(ci)ci.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});}
