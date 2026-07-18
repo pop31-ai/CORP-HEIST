@@ -3921,7 +3921,560 @@ class CorpTrial:
         state.mark_dirty(uid)
         return {"ok": True, "trial": trial["name"], "share": share,
                 "members": n, "gold_left": c["gold"]}
+
+
 # ============================================================
+# PHI CASINO — blackjack with phi-betting
+# ============================================================
+
+class PhiCasino:
+    """Blackjack card game. Player competes against dealer (phi-bot).
+    Cards are standard 2-11. Ace=11 or 1. Dealer stands on 17+.
+    Payout: win = 2x bet, blackjack (21 on first 2) = PHI * bet."""
+
+    BET_MIN = 100
+    BET_MAX = 50000
+
+    @staticmethod
+    def _deal_card(rng):
+        """Deal a card 2-11. Face cards = 10, Ace = 11."""
+        card = rng.randint(2, 14)
+        if card >= 12:
+            card = 10
+        elif card == 14:
+            card = 11
+        return card
+
+    @staticmethod
+    def _hand_value(hand):
+        """Calculate best hand value (handles aces)."""
+        total = sum(hand)
+        aces = hand.count(11)
+        while total > 21 and aces > 0:
+            total -= 10
+            aces -= 1
+        return total
+
+    @staticmethod
+    def play(state, uid, bet, action="deal", player_hand=None, dealer_hand=None):
+        """Play a blackjack hand.
+        action: 'deal' (new hand), 'hit' (take card), 'stand' (finish).
+        Returns game state."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        bet = max(PhiCasino.BET_MIN, min(bet, PhiCasino.BET_MAX))
+        gold = int(c.get("gold", 0))
+
+        if action == "deal":
+            if gold < bet:
+                return {"error": "not enough gold", "have": gold, "need": bet}
+            rng = random.Random(int(time.time() * PHI) + uid)
+            p_hand = [PhiCasino._deal_card(rng), PhiCasino._deal_card(rng)]
+            d_hand = [PhiCasino._deal_card(rng), PhiCasino._deal_card(rng)]
+            c["gold"] = gold - bet
+            state.mark_dirty(uid)
+            p_val = PhiCasino._hand_value(p_hand)
+            d_val = PhiCasino._hand_value(d_hand)
+            # auto-win on blackjack
+            if p_val == 21:
+                prize = int(bet * PHI)
+                c["gold"] = c.get("gold", 0) + prize
+                state.mark_dirty(uid)
+                return {"player": p_hand, "dealer": d_hand,
+                        "player_val": p_val, "dealer_val": d_val,
+                        "result": "blackjack", "prize": prize,
+                        "gold_left": c["gold"]}
+            return {"player": p_hand, "dealer": d_hand,
+                    "player_val": p_val, "dealer_val": d_hand[0],
+                    "dealer_hidden": d_hand[1], "bet": bet,
+                    "gold_left": c["gold"]}
+
+        elif action == "hit":
+            if not player_hand or not dealer_hand:
+                return {"error": "no active hand"}
+            rng = random.Random(int(time.time() * PHI * 2) + uid)
+            p_hand = list(player_hand) + [PhiCasino._deal_card(rng)]
+            p_val = PhiCasino._hand_value(p_hand)
+            if p_val > 21:
+                return {"player": p_hand, "dealer": dealer_hand,
+                        "player_val": p_val, "result": "bust", "prize": 0,
+                        "gold_left": c.get("gold", 0)}
+            return {"player": p_hand, "dealer": dealer_hand,
+                    "player_val": p_val, "dealer_val": dealer_hand[0],
+                    "bet": bet}
+
+        elif action == "stand":
+            if not player_hand or not dealer_hand:
+                return {"error": "no active hand"}
+            rng = random.Random(int(time.time() * PHI * 3) + uid)
+            d_hand = list(dealer_hand)
+            while PhiCasino._hand_value(d_hand) < 17:
+                d_hand.append(PhiCasino._deal_card(rng))
+            p_val = PhiCasino._hand_value(player_hand)
+            d_val = PhiCasino._hand_value(d_hand)
+            if d_val > 21 or p_val > d_val:
+                prize = bet * 2
+            elif p_val == d_val:
+                prize = bet  # push
+            else:
+                prize = 0
+            c["gold"] = c.get("gold", 0) + prize
+            state.mark_dirty(uid)
+            result = "win" if prize >= bet * 2 else ("push" if prize == bet else "lose")
+            return {"player": player_hand, "dealer": d_hand,
+                    "player_val": p_val, "dealer_val": d_val,
+                    "result": result, "prize": prize,
+                    "gold_left": c["gold"]}
+        return {"error": "invalid action"}
+
+
+# ============================================================
+# MARKET ORACLE — AI prediction system
+# ============================================================
+
+class MarketOracle:
+    """The Oracle makes predictions about market direction.
+    Players can follow or fade the Oracle's calls.
+    Oracle accuracy tracked over time. Accurate oracles earn followers gold."""
+
+    PREDICTION_COST = 250
+    TEMPLATES = [
+        {"call": "up", "text": "Зелёный луч пронзает тьму — ставь на рост"},
+        {"call": "down", "text": "Красная тень нависает — ставь на падение"},
+        {"call": "volatile", "text": "Фи-шторм предвидится — волатильность взлетит"},
+        {"call": "calm", "text": "Золотое затишье — рынок уснет на часы"},
+    ]
+
+    @staticmethod
+    def _oracle_seed(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        return (t - EPOCH) // int(3600 * PHI * 1.5)  # new prediction ~2.4h
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        seed = MarketOracle._oracle_seed(t)
+        rng = random.Random(seed)
+        oracle = rng.choice(MarketOracle.TEMPLATES)
+        stock_idx = rng.randint(0, 19)
+        stock = ["ALPHA","BETA","GAMMA","DELTA","OMEGA","SIGMA","THETA",
+                 "ZETA","PI","RHO","KAPPA","LAMBDA","MU","NU","XI",
+                 "OMIKRON","CHI","PSI","PHI","TAU"][stock_idx]
+        # accuracy
+        c = state.chars.get(uid, {})
+        history = c.get("_oracle_history", [])
+        wins = sum(1 for h in history if h.get("won"))
+        total = len(history)
+        return {
+            "oracle_text": oracle["text"],
+            "call": oracle["call"],
+            "stock": stock,
+            "accuracy": round(wins / total * 100, 1) if total > 0 else 0,
+            "history_len": total,
+            "cost": MarketOracle.PREDICTION_COST,
+        }
+
+    @staticmethod
+    def follow(state, uid, stock_override=None, now=None):
+        """Follow the Oracle's prediction. Costs gold, pays on correct."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        seed = MarketOracle._oracle_seed(t)
+        rng = random.Random(seed)
+        oracle = rng.choice(MarketOracle.TEMPLATES)
+        default_stock = ["ALPHA","BETA","GAMMA","DELTA","OMEGA","SIGMA","THETA",
+                         "ZETA","PI","RHO","KAPPA","LAMBDA","MU","NU","XI",
+                         "OMIKRON","CHI","PSI","PHI","TAU"][rng.randint(0, 19)]
+        stock = stock_override or default_stock
+
+        gold = int(c.get("gold", 0))
+        if gold < MarketOracle.PREDICTION_COST:
+            return {"error": "not enough gold"}
+        c["gold"] = gold - MarketOracle.PREDICTION_COST
+        c.setdefault("_oracle_pending", []).append({
+            "seed": seed, "stock": stock, "call": oracle["call"],
+            "expires": t + int(3600 * PHI),
+        })
+        state.mark_dirty(uid)
+        return {"ok": True, "oracle": oracle["text"], "stock": stock,
+                "call": oracle["call"], "cost": MarketOracle.PREDICTION_COST}
+
+    @staticmethod
+    def settle(state, uid, now=None):
+        """Check pending oracle predictions."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        pending = c.get("_oracle_pending", [])
+        results = []
+        remaining = []
+        for pred in pending:
+            if t > pred.get("expires", 0):
+                # check: did the oracle predict correctly?
+                # "up" -> stock delta > 0 at seed end, "down" -> delta < 0
+                rng = random.Random(pred["seed"] + 1000)
+                correct = rng.random() > 0.4  # oracle is 60% accurate
+                won = correct if pred["call"] in ("up", "down") else (rng.random() > 0.5)
+                prize = 0
+                if won:
+                    prize = int(MarketOracle.PREDICTION_COST * PHI ** 2)
+                    c["gold"] = c.get("gold", 0) + prize
+                results.append({
+                    "stock": pred["stock"], "call": pred["call"],
+                    "won": won, "prize": prize,
+                })
+                hist = c.get("_oracle_history", [])
+                hist.append({"won": won})
+                c["_oracle_history"] = hist[-30:]
+            else:
+                remaining.append(pred)
+        c["_oracle_pending"] = remaining
+        state.mark_dirty(uid)
+        return {"results": results, "gold_left": c.get("gold", 0)}
+
+
+# ============================================================
+# PHI ARENA RANKINGS — seasonal PvP ladder
+# ============================================================
+
+class PhiArenaRankings:
+    """Competitive PvP ladder. Players climb tiers by winning duels.
+    Tiers: Bronze -> Silver -> Gold -> Platinum -> Diamond -> PHImaster.
+    Seasonal reset with top rewards."""
+
+    TIERS = [
+        {"name": "Bronze", "name_ru": "Бронза", "min_elo": 0, "reward": 5000},
+        {"name": "Silver", "name_ru": "Серебро", "min_elo": 100, "reward": 15000},
+        {"name": "Gold", "name_ru": "Золото", "min_elo": 250, "reward": 40000},
+        {"name": "Platinum", "name_ru": "Платина", "min_elo": 500, "reward": 100000},
+        {"name": "Diamond", "name_ru": "Бриллиант", "min_elo": 800, "reward": 250000},
+        {"name": "PHImaster", "name_ru": "ФИ-Мастер", "min_elo": 1200, "reward": 1000000},
+    ]
+
+    @staticmethod
+    def status(state, uid, now=None):
+        c = state.chars.get(uid, {})
+        elo = c.get("_arena_elo", 0)
+        wins = c.get("_arena_wins", 0)
+        losses = c.get("_arena_losses", 0)
+        streak = c.get("_arena_streak", 0)
+        # determine tier
+        tier = PhiArenaRankings.TIERS[0]
+        for t in PhiArenaRankings.TIERS:
+            if elo >= t["min_elo"]:
+                tier = t
+        # leaderboard
+        lb = []
+        for ch in state.chars.values():
+            if ch.get("_arena_elo", 0) > 0:
+                lb.append({"uid": ch.get("user_id", 0),
+                           "elo": ch.get("_arena_elo", 0),
+                           "wins": ch.get("_arena_wins", 0)})
+        lb.sort(key=lambda x: x["elo"], reverse=True)
+        my_rank = next((i + 1 for i, e in enumerate(lb) if e["uid"] == uid), len(lb) + 1)
+        return {
+            "elo": elo, "wins": wins, "losses": losses, "streak": streak,
+            "tier": tier["name"], "tier_ru": tier["name_ru"],
+            "tier_reward": tier["reward"],
+            "next_tier": next((t["name"] for t in PhiArenaRankings.TIERS if t["min_elo"] > elo), None),
+            "rank": my_rank,
+            "leaderboard": lb[:10],
+        }
+
+    @staticmethod
+    def record_match(state, uid, won, now=None):
+        """Record a duel result in the arena ranking."""
+        c = state.chars.get(uid)
+        if not c:
+            return
+        elo = c.get("_arena_elo", 0)
+        wins = c.get("_arena_wins", 0)
+        losses = c.get("_arena_losses", 0)
+        streak = c.get("_arena_streak", 0)
+        if won:
+            gains = int(PHI * 20 * (1 + streak * 0.1))
+            elo += gains
+            wins += 1
+            streak += 1
+        else:
+            losses += 1
+            elo = max(0, elo - int(15 / PHI))
+            streak = 0
+        c["_arena_elo"] = elo
+        c["_arena_wins"] = wins
+        c["_arena_losses"] = losses
+        c["_arena_streak"] = streak
+
+    @staticmethod
+    def claim_season_reward(state, uid, now=None):
+        """Claim end-of-season arena reward."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        elo = c.get("_arena_elo", 0)
+        claim_key = f"_arena_reward_{current_season()[0]}"
+        if c.get(claim_key):
+            return {"error": "already claimed"}
+        tier = PhiArenaRankings.TIERS[0]
+        for t in PhiArenaRankings.TIERS:
+            if elo >= t["min_elo"]:
+                tier = t
+        # bonus for top 10
+        bonus = 0
+        lb = sorted(state.chars.values(), key=lambda x: x.get("_arena_elo", 0), reverse=True)
+        for i, ch in enumerate(lb[:10]):
+            if ch.get("user_id") == uid:
+                bonus = int(tier["reward"] * PHI ** (10 - i) / PHI ** 10)
+                break
+        prize = tier["reward"] + bonus
+        c["gold"] = c.get("gold", 0) + prize
+        c[claim_key] = True
+        state.mark_dirty(uid)
+        return {"ok": True, "tier": tier["name"], "prize": prize,
+                "gold_left": c["gold"]}
+
+
+# ============================================================
+# CRASH INSURANCE — hedge against flash crashes
+# ============================================================
+
+class CrashInsurance:
+    """Players buy insurance against flash crashes. If a crash happens
+    while insured, they receive a payout proportional to their net worth.
+    Insurance lasts 24 hours. Cost = net_worth / PHI^5."""
+
+    DURATION = 86400  # 24 hours
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        insured_until = c.get("_insurance_until", 0)
+        insured = t < insured_until
+        nw = c.get("net_worth", 0)
+        cost = max(100, int(nw / PHI ** 5)) if nw > 0 else 100
+        return {
+            "insured": insured,
+            "remaining": max(0, insured_until - t),
+            "cost": cost,
+            "payout_if_crash": int(nw / PHI),
+        }
+
+    @staticmethod
+    def buy(state, uid, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        if t < c.get("_insurance_until", 0):
+            return {"error": "already insured"}
+        nw = c.get("net_worth", 0)
+        cost = max(100, int(nw / PHI ** 5)) if nw > 0 else 100
+        gold = int(c.get("gold", 0))
+        if gold < cost:
+            return {"error": "not enough gold", "have": gold, "need": cost}
+        c["gold"] = gold - cost
+        c["_insurance_until"] = t + CrashInsurance.DURATION
+        state.mark_dirty(uid)
+        return {"ok": True, "cost": cost, "expires_in": CrashInsurance.DURATION,
+                "gold_left": c["gold"]}
+
+    @staticmethod
+    def payout(state, uid, now=None):
+        """Called after a flash crash to pay insured players."""
+        c = state.chars.get(uid)
+        if not c:
+            return 0
+        t = now or int(time.time())
+        if t >= c.get("_insurance_until", 0):
+            return 0
+        nw = c.get("net_worth", 0)
+        payout = int(nw / PHI)
+        c["gold"] = c.get("gold", 0) + payout
+        state.mark_dirty(uid)
+        return payout
+
+
+# ============================================================
+# PHI ARTIFACTS — collectible sets with bonuses
+# ============================================================
+
+class PhiArtifacts:
+    """Collectible artifact sets. Each set has 3 artifacts. Collecting
+    the full set grants a permanent bonus multiplier."""
+
+    SETS = [
+        {"name": "Golden Triad", "name_ru": "Золотая Триада",
+         "artifacts": ["Golden Eye", "Golden Hand", "Golden Heart"],
+         "bonus": "gold_mult", "bonus_val": PHI,
+         "desc": "+PHI% gold from all sources"},
+        {"name": "Phi Trinity", "name_ru": "ФИ-Троица",
+         "artifacts": ["Phi Shard", "Phi Crystal", "Phi Core"],
+         "bonus": "trade_mult", "bonus_val": PHI ** 0.5,
+         "desc": "+sqrt(PHI)% trade profits"},
+        {"name": "Void Set", "name_ru": "Пустота",
+         "artifacts": ["Void Mask", "Void Cloak", "Void Blade"],
+         "bonus": "duel_power", "bonus_val": PHI * 10,
+         "desc": "+PHI*10 duel power"},
+        {"name": "Crown Collection", "name_ru": "Корона",
+         "artifacts": ["PHI_CROWN", "TRADER_CROWN", "Philosopher Stone"],
+         "bonus": "prestige_mult", "bonus_val": PHI ** 2,
+         "desc": "+PHI^2 prestige points"},
+        {"name": "Market Masters", "name_ru": "Мастера Рынка",
+         "artifacts": ["Bull Token", "Bear Token", "Crash Token"],
+         "bonus": "hedge_bonus", "bonus_val": PHI,
+         "desc": "+PHI% hedge fund returns"},
+    ]
+
+    @staticmethod
+    def get_sets(state, uid):
+        c = state.chars.get(uid, {})
+        loot = c.get("loot", [])
+        artifact_codes = [l.get("code", -1) for l in loot if l.get("cat") == 10 or l.get("rarity", 0) >= 5]
+        result = []
+        for s in PhiArtifacts.SETS:
+            owned = [a for a in s["artifacts"] if a in artifact_codes]
+            complete = len(owned) == len(s["artifacts"])
+            result.append({
+                "name": s["name"], "name_ru": s["name_ru"],
+                "artifacts": s["artifacts"], "owned": len(owned),
+                "complete": complete,
+                "bonus": s["bonus"], "desc": s["desc"],
+            })
+        return result
+
+    @staticmethod
+    def get_total_bonuses(state, uid):
+        """Calculate total artifact set bonuses."""
+        sets = PhiArtifacts.get_sets(state, uid)
+        bonuses = {}
+        for s in sets:
+            if s["complete"]:
+                b = s["bonus"]
+                bonuses[b] = bonuses.get(b, 0) + PhiArtifacts._bonus_value(s["bonus"])
+        return bonuses
+
+    @staticmethod
+    def _bonus_value(bonus_type):
+        for s in PhiArtifacts.SETS:
+            if s["bonus"] == bonus_type:
+                return s["bonus_val"]
+        return 1.0
+
+
+# ============================================================
+# MARKET INSIDER — anonymous tip system
+# ============================================================
+
+class MarketInsider:
+    """Anonymous tips about market moves. Players read a tip, decide
+    to bet on it or fade it. Correct bets earn phi-rewards.
+    Tips generated from actual market patterns."""
+
+    TIP_COST = 150
+    TIPS = [
+        {"id": 0, "text": "Инсайд: АНОНИМНЫЙисточник сообщает о слиянии TECH-сектора", "stock_sector": 0, "direction": "up"},
+        {"id": 1, "text": "Слито: Гигант FINANCE терпит убытки", "stock_sector": 1, "direction": "down"},
+        {"id": 2, "text": "Течь: ENERGY найдет новое месторождение", "stock_sector": 2, "direction": "up"},
+        {"id": 3, "text": "Слух: LUXURY теряет эксклюзивность", "stock_sector": 3, "direction": "down"},
+        {"id": 4, "text": "Анонимка: Роботы скупают TECH-акции", "stock_sector": 0, "direction": "up"},
+        {"id": 5, "text": "Записка: FINANCE перед收购ом", "stock_sector": 1, "direction": "up"},
+        {"id": 6, "text": "Сообщение: ENERGY кризис в Азии", "stock_sector": 2, "direction": "down"},
+        {"id": 7, "text": "Письмо: LUXURY запускает PHI-линейку", "stock_sector": 3, "direction": "up"},
+    ]
+
+    @staticmethod
+    def _current_tip(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        idx = (t - EPOCH) // int(3600 * PHI)  # new tip every ~1.6h
+        rng = random.Random(idx)
+        tip = dict(rng.choice(MarketInsider.TIPS))
+        tip["stock"] = ["ALPHA","BETA","GAMMA","DELTA"][tip["stock_sector"] % 4]
+        return tip
+
+    @staticmethod
+    def status(state, uid, now=None):
+        tip = MarketInsider._current_tip(now)
+        c = state.chars.get(uid, {})
+        bets = c.get("_insider_bets", {})
+        my_bet = bets.get(str(tip["id"]))
+        history = c.get("_insider_history", [])
+        wins = sum(1 for h in history if h.get("won"))
+        return {
+            "tip_text": tip["text"],
+            "tip_stock": tip["stock"],
+            "cost": MarketInsider.TIP_COST,
+            "my_bet": my_bet,
+            "accuracy": round(wins / len(history) * 100, 1) if history else 0,
+            "history_len": len(history),
+        }
+
+    @staticmethod
+    def bet(state, uid, side, now=None):
+        """side: 'follow' (bet with tip) or 'fade' (bet against tip)"""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        tip = MarketInsider._current_tip(t)
+        bets = c.get("_insider_bets", {})
+        if str(tip["id"]) in bets:
+            return {"error": "already bet on this tip"}
+        gold = int(c.get("gold", 0))
+        if gold < MarketInsider.TIP_COST:
+            return {"error": "not enough gold"}
+        if side not in ("follow", "fade"):
+            return {"error": "side must be 'follow' or 'fade'"}
+        c["gold"] = gold - MarketInsider.TIP_COST
+        bets[str(tip["id"])] = {"side": side, "tip": tip}
+        c["_insider_bets"] = bets
+        state.mark_dirty(uid)
+        return {"ok": True, "side": side, "stock": tip["stock"],
+                "cost": MarketInsider.TIP_COST}
+
+    @staticmethod
+    def settle(state, uid, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        bets = c.get("_insider_bets", {})
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        current_idx = (t - EPOCH) // int(3600 * PHI)
+        results = []
+        remaining = {}
+        for tip_id_str, bet in bets.items():
+            tip_idx = int(tip_id_str)
+            if tip_idx < current_idx:
+                # expired — resolve
+                rng = random.Random(tip_idx)
+                tip = rng.choice(MarketInsider.TIPS)
+                # was the tip correct?
+                tip_correct = rng.random() > 0.35  # 65% accurate
+                player_correct = (bet["side"] == "follow" and tip_correct) or \
+                                 (bet["side"] == "fade" and not tip_correct)
+                prize = 0
+                if player_correct:
+                    prize = int(MarketInsider.TIP_COST * PHI * 2)
+                    c["gold"] = c.get("gold", 0) + prize
+                results.append({
+                    "tip_id": tip_id_str, "side": bet["side"],
+                    "won": player_correct, "prize": prize,
+                })
+                hist = c.get("_insider_history", [])
+                hist.append({"won": player_correct})
+                c["_insider_history"] = hist[-30:]
+            else:
+                remaining[tip_id_str] = bet
+        c["_insider_bets"] = remaining
+        state.mark_dirty(uid)
+        return {"results": results, "gold_left": c.get("gold", 0)}
 
 if __name__ == "__main__":
     class FakeState:

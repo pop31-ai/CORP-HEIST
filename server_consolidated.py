@@ -70,6 +70,8 @@ from golden_econ import (
     GoldenRain, CorpEspionage,
     PhiWeather, BountyBoard, PhiWheel, MarketFrenzy,
     WhaleChase, CorpTrial,
+    PhiCasino, MarketOracle, PhiArenaRankings,
+    CrashInsurance, PhiArtifacts, MarketInsider,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -2031,6 +2033,110 @@ async def pulse_trial_claim(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- NEW EVENTS 3: Casino, Oracle, Arena, Insurance, Artifacts, Insider ----
+
+async def pulse_casino_play(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    action = d.get("action", "deal")
+    bet = int(d.get("bet", 100))
+    player_hand = d.get("player_hand")
+    dealer_hand = d.get("dealer_hand")
+    result = PhiCasino.play(STATE, uid, bet, action, player_hand, dealer_hand)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_oracle(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(MarketOracle.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_oracle_follow(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    stock = d.get("stock")
+    result = MarketOracle.follow(STATE, uid, stock)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_oracle_settle(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = MarketOracle.settle(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_arena(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PhiArenaRankings.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_arena_match(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    won = bool(d.get("won", False))
+    PhiArenaRankings.record_match(STATE, uid, won)
+    body = json.dumps({"ok": True, "won": won}).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_arena_claim(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = PhiArenaRankings.claim_season_reward(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_insurance(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(CrashInsurance.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_insurance_buy(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = CrashInsurance.buy(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_artifacts(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PhiArtifacts.get_sets(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_insider(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(MarketInsider.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_insider_bet(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    side = d.get("side", "follow")
+    result = MarketInsider.bet(STATE, uid, side)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_insider_settle(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = MarketInsider.settle(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 def make_card_app():
     app = web.Application()
     app.router.add_get("/", handle_card_index)
@@ -2204,6 +2310,20 @@ def make_unified_app():
     app.router.add_post("/pulse/whale/settle", pulse_whale_settle)
     app.router.add_get("/api/trial/{uid}", handle_trial)
     app.router.add_post("/pulse/trial/claim", pulse_trial_claim)
+    # ---- NEW EVENTS 3: Casino, Oracle, Arena, Insurance, Artifacts, Insider ----
+    app.router.add_post("/pulse/casino/play", pulse_casino_play)
+    app.router.add_get("/api/oracle/{uid}", handle_oracle)
+    app.router.add_post("/pulse/oracle/follow", pulse_oracle_follow)
+    app.router.add_post("/pulse/oracle/settle", pulse_oracle_settle)
+    app.router.add_get("/api/arena/{uid}", handle_arena)
+    app.router.add_post("/pulse/arena/match", pulse_arena_match)
+    app.router.add_post("/pulse/arena/claim", pulse_arena_claim)
+    app.router.add_get("/api/insurance/{uid}", handle_insurance)
+    app.router.add_post("/pulse/insurance/buy", pulse_insurance_buy)
+    app.router.add_get("/api/artifacts/{uid}", handle_artifacts)
+    app.router.add_get("/api/insider/{uid}", handle_insider)
+    app.router.add_post("/pulse/insider/bet", pulse_insider_bet)
+    app.router.add_post("/pulse/insider/settle", pulse_insider_settle)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

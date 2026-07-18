@@ -87,6 +87,12 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-frenzy" style="border-color:#FF3232;color:#FF3232">⚡ FRENZY</button>
 <button id="btn-whale" style="border-color:#00E5FF;color:#00E5FF">🐋 WHALE</button>
 <button id="btn-trial" style="border-color:#00FF8C;color:#00FF8C">⚔ CORP TRIAL</button>
+<button id="btn-casino" style="border-color:#FF00FF;color:#FF00FF">🎰 CASINO</button>
+<button id="btn-oracle" style="border-color:#8B5CF6;color:#8B5CF6">🔮 ORACLE</button>
+<button id="btn-arena" style="border-color:#F97316;color:#F97316">🏆 ARENA</button>
+<button id="btn-insurance" style="border-color:#14B8A6;color:#14B8A6">🛡 INSURE</button>
+<button id="btn-artifacts" style="border-color:#A855F7;color:#A855F7">💎 ARTIFACTS</button>
+<button id="btn-insider" style="border-color:#DC2626;color:#DC2626">🕵 INSIDER</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -4156,6 +4162,119 @@ document.getElementById('btn-trial').onclick=async()=>{
             }
         }else{showOverlay('CORP TRIAL',s);}
     }catch(e){showOverlay('TRIAL','offline');}
+};
+
+// ====== PHI CASINO ======
+document.getElementById('btn-casino').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('CASINO','select player first');return;}
+        const bet=prompt('bet (100-50000):','500');if(!bet)return;
+        const r=await fetch(API+'/pulse/casino/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,action:'deal',bet:parseInt(bet)})});const d=await r.json();
+        if(d.error){showOverlay('CASINO',d.error);return;}
+        let s='PHI CASINO — BLACKJACK\n\n';
+        s+='Your hand: '+d.player.join(', ')+' = '+d.player_val+'\n';
+        s+='Dealer shows: '+d.dealer_val+'\n';
+        if(d.result==='blackjack'){SND.promo();s+='★ BLACKJACK! Won '+d.prize+'g!';showOverlay('CASINO',s);loadPlayer(uid);return;}
+        if(d.result==='bust'){s+='BUST! Lost '+bet+'g';showOverlay('CASINO',s);loadPlayer(uid);return;}
+        const action=confirm(s+'\nHit?');
+        if(action){
+            const r2=await fetch(API+'/pulse/casino/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,action:'hit',bet:parseInt(bet),player_hand:d.player,dealer_hand:d.dealer})});const d2=await r2.json();
+            if(d2.result==='bust'){showOverlay('CASINO','BUST! Lost '+bet+'g');loadPlayer(uid);return;}
+            const r3=await fetch(API+'/pulse/casino/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,action:'stand',bet:parseInt(bet),player_hand:d2.player,dealer_hand:d2.dealer})});const d3=await r3.json();
+            s='DEALER: '+d3.dealer.join(', ')+' = '+d3.dealer_val+'\nYOU: '+d3.player.join(', ')+' = '+d3.player_val+'\n';
+            if(d3.result==='win'){SND.promo();s+='★ WIN! +'+d3.prize+'g';}else if(d3.result==='push'){s+='PUSH. Return '+d3.prize+'g';}else{s+='LOSE. -'+bet+'g';}
+            showOverlay('CASINO',s);loadPlayer(uid);
+        }else{
+            const r2=await fetch(API+'/pulse/casino/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,action:'stand',bet:parseInt(bet),player_hand:d.player,dealer_hand:d.dealer})});const d2=await r2.json();
+            s='DEALER: '+d2.dealer.join(', ')+' = '+d2.dealer_val+'\nYOU: '+d2.player.join(', ')+' = '+d2.player_val+'\n';
+            if(d2.result==='win'){SND.promo();s+='★ WIN! +'+d2.prize+'g';}else if(d2.result==='push'){s+='PUSH. Return '+d2.prize+'g';}else{s+='LOSE. -'+bet+'g';}
+            showOverlay('CASINO',s);loadPlayer(uid);
+        }
+    }catch(e){showOverlay('CASINO','offline');}
+};
+
+// ====== MARKET ORACLE ======
+document.getElementById('btn-oracle').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('ORACLE','select player first');return;}
+        const r=await fetch(API+'/api/oracle/'+uid);const d=await r.json();
+        let s='🔮 THE ORACLE speaks:\n\n"'+d.oracle_text+'"\n\n';
+        s+='Call: '+d.call.toUpperCase()+' on '+d.stock+'\n';
+        s+='Accuracy: '+d.accuracy+'% ('+d.history_len+' predictions)\n';
+        s+='Cost: '+d.cost+'g';
+        if(confirm(s+'\n\nFollow the Oracle?')){
+            const r2=await fetch(API+'/pulse/oracle/follow',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+            if(d2.error){showOverlay('ORACLE',d2.error);}else{SND.promo();showOverlay('ORACLE','Following: '+d2.call.toUpperCase()+' on '+d2.stock+'\nCost: '+d2.cost+'g');loadPlayer(uid);}
+        }else{showOverlay('ORACLE',s);}
+    }catch(e){showOverlay('ORACLE','offline');}
+};
+
+// ====== PHI ARENA ======
+document.getElementById('btn-arena').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('ARENA','select player first');return;}
+        const r=await fetch(API+'/api/arena/'+uid);const d=await r.json();
+        let s='🏆 PHI ARENA\n\n';
+        s+='Tier: '+d.tier_ru+' ('+d.tier+')\n';
+        s+='ELO: '+d.elo+' | W:'+d.wins+' L:'+d.losses+' Streak:'+d.streak+'\n';
+        s+='Rank: #'+d.rank;
+        if(d.next_tier)s+='\nNext tier: '+d.next_tier;
+        s+='\n\nTop 5:\n'+d.leaderboard.slice(0,5).map((e,i)=>(i+1)+'. UID '+e.uid+' — '+e.elo+' ELO').join('\n');
+        const action=confirm(s+'\n\nWon last duel? (OK=win, Cancel=loss)');
+        await fetch(API+'/pulse/arena/match',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,won:action})});
+        showOverlay('ARENA','Result: '+(action?'WIN':'LOSS')+' recorded!');
+        loadPlayer(uid);
+    }catch(e){showOverlay('ARENA','offline');}
+};
+
+// ====== CRASH INSURANCE ======
+document.getElementById('btn-insurance').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('INSURE','select player first');return;}
+        const r=await fetch(API+'/api/insurance/'+uid);const d=await r.json();
+        let s='🛡 CRASH INSURANCE\n\n';
+        s+='Status: '+(d.insured?'ACTIVE ('+d.remaining+'s remaining)':'NOT INSURED')+'\n';
+        s+='Cost: '+d.cost+'g\n';
+        s+='Payout if crash: '+d.payout_if_crash+'g';
+        if(!d.insured && confirm(s+'\n\nBuy insurance?')){
+            const r2=await fetch(API+'/pulse/insurance/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+            if(d2.error){showOverlay('INSURE',d2.error);}else{SND.promo();showOverlay('INSURE','INSURED for 24h!\nCost: '+d2.cost+'g\nPayout on crash: '+d2.payout_if_crash+'g');loadPlayer(uid);}
+        }else{showOverlay('INSURANCE',s);}
+    }catch(e){showOverlay('INSURE','offline');}
+};
+
+// ====== PHI ARTIFACTS ======
+document.getElementById('btn-artifacts').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('ARTIFACTS','select player first');return;}
+        const r=await fetch(API+'/api/artifacts/'+uid);const d=await r.json();
+        let s='💎 PHI ARTIFACT SETS\n\n';
+        d.forEach(st=>{
+            s+=(st.complete?'★ ':'○ ')+st.name_ru+' ('+st.owned+'/'+st.artifacts.length+')\n';
+            s+='  '+st.desc+(st.complete?' ✅ ACTIVE':'')+'\n';
+        });
+        showOverlay('ARTIFACTS',s);
+    }catch(e){showOverlay('ARTIFACTS','offline');}
+};
+
+// ====== MARKET INSIDER ======
+document.getElementById('btn-insider').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('INSIDER','select player first');return;}
+        const r=await fetch(API+'/api/insider/'+uid);const d=await r.json();
+        let s='🕵 MARKET INSIDER\n\n';
+        s+=d.tip_text+'\n';
+        s+='Stock: '+d.tip_stock+'\n';
+        s+='Cost: '+d.cost+'g\n';
+        s+='Accuracy: '+d.accuracy+'% ('+d.history_len+' tips)\n';
+        if(d.my_bet)s+='Your bet: '+d.my_bet.side.toUpperCase();
+        if(!d.my_bet){
+            const side=confirm(s+'\n\nFollow the tip? (OK=follow, Cancel=fade)');
+            await fetch(API+'/pulse/insider/bet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,side:side?'follow':'fade'})});
+            showOverlay('INSIDER','Bet placed: '+(side?'FOLLOW':'FADE'));
+            loadPlayer(uid);
+        }else{showOverlay('INSIDER',s);}
+    }catch(e){showOverlay('INSIDER','offline');}
 };
 
 render();
