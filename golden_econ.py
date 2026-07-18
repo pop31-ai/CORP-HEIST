@@ -1408,12 +1408,14 @@ def award_gold(state, uid, base_amount, now=None, dividends=True):
     gained = int(round(base_amount * mult))
     me["gold"] = me.get("gold", 0) + gained
     div = _pay_dividends(state, uid, gained) if dividends else 0
+    ipo_div = _pay_ipo_dividends(state, uid, gained) if dividends else 0
     state.mark_dirty(uid)
     return {"gained": gained, "golden": gh > 1.0,
             "multiplier": round(gh, 6),
             "sky_mult": round(sky, 4),
             "sky_bonus_pct": round((sky - 1.0) * 100, 2),
-            "dividends_paid": div, "gold": me["gold"]}
+            "dividends_paid": div, "ipo_dividends_paid": ipo_div,
+            "gold": me["gold"]}
 
 
 # ============================================================
@@ -1886,6 +1888,30 @@ def _ipos(state):
         state.ipos = {}
     return state.ipos
 
+def _pay_ipo_dividends(state, founder_uid, gross):
+    """When an IPO founder earns gold, divert a phi-fraction to their shareholders."""
+    ipo = _ipos(state).get(str(founder_uid))
+    if not ipo:
+        return 0
+    sold = sum(ipo["held"].values())
+    if sold <= 0:
+        return 0
+    pool = int(gross * IPO_DIVIDEND_RATE)
+    if pool <= 0:
+        return 0
+    paid = 0
+    for u, q in ipo["held"].items():
+        share = int(pool * q / IPO_TOTAL_SHARES)
+        if share <= 0:
+            continue
+        ch = state.chars.get(int(u))
+        if ch is not None:
+            ch["gold"] = ch.get("gold", 0) + share
+            state.mark_dirty(int(u))
+            paid += share
+    ipo["dividends_paid"] = ipo.get("dividends_paid", 0) + paid
+    return paid
+
 def ipo_price(state, founder_uid):
     ipo = _ipos(state).get(str(founder_uid))
     if not ipo:
@@ -1965,6 +1991,159 @@ def ipo_buy(state, uid, founder_uid, qty, now=None):
 
 
 # ============================================================
+# SHORT SELLING (profit on price drops; phi margin; squeeze risk)
+# ============================================================
+
+SHORT_MARGIN_RATE = 1.0 / PHI          # margin = size_value / phi
+SHORT_SQUEEZE_MULT = PHI               # if price rises to entry*phi -> forced liquidation
+SHORT_FEE_RATE = (PHI - 1) / 100       # opening fee on notional
+
+def _shorts(char):
+    if "shorts" not in char:
+        char["shorts"] = []
+    return char["shorts"]
+
+def _short_pnl(pos, spot):
+    return int((pos["entry"] - spot) * pos["size"])
+
+def short_status(state, uid):
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    out = []
+    for p in _shorts(me):
+        s = _stock_by_name(state, p["symbol"])
+        spot = s["price"] if s else p["entry"]
+        squeeze_at = round(p["entry"] * SHORT_SQUEEZE_MULT, 2)
+        out.append({"id": p["id"], "symbol": p["symbol"], "size": p["size"],
+                    "entry": round(p["entry"], 2), "spot": round(spot, 2),
+                    "margin": p["margin"], "pnl": _short_pnl(p, spot),
+                    "squeeze_at": squeeze_at,
+                    "danger": spot >= p["entry"] * (1 + (SHORT_SQUEEZE_MULT - 1) / PHI)})
+    return {"positions": out, "margin_rate": round(SHORT_MARGIN_RATE, 4),
+            "squeeze_mult": round(SHORT_SQUEEZE_MULT, 4),
+            "note": "Shorts profit when price falls. If price hits entry*phi you get squeezed and lose margin. In-game gold only."}
+
+def short_open(state, uid, symbol, size, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    s = _stock_by_name(state, symbol)
+    if not s:
+        return {"error": "no such symbol"}
+    size = max(1, int(size))
+    notional = s["price"] * size
+    margin = int(notional * SHORT_MARGIN_RATE)
+    fee = int(notional * SHORT_FEE_RATE)
+    cost = margin + fee
+    if me.get("gold", 0) < cost:
+        return {"error": "not enough gold for margin+fee", "need": cost}
+    me["gold"] -= cost
+    seq = getattr(state, "_short_seq", 0) + 1
+    state._short_seq = seq
+    pos = {"id": seq, "symbol": symbol, "size": size,
+           "entry": s["price"], "margin": margin, "opened": now}
+    _shorts(me).append(pos)
+    state.mark_dirty(uid)
+    return {"ok": True, "id": seq, "symbol": symbol, "size": size,
+            "entry": round(s["price"], 2), "margin": margin, "fee": fee,
+            "squeeze_at": round(s["price"] * SHORT_SQUEEZE_MULT, 2),
+            "gold": me["gold"]}
+
+def short_close(state, uid, pos_id, now=None):
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    shorts = _shorts(me)
+    pos = next((p for p in shorts if p["id"] == int(pos_id)), None)
+    if not pos:
+        return {"error": "no such short"}
+    s = _stock_by_name(state, pos["symbol"])
+    spot = s["price"] if s else pos["entry"]
+    pnl = _short_pnl(pos, spot)
+    squeezed = spot >= pos["entry"] * SHORT_SQUEEZE_MULT
+    shorts.remove(pos)
+    if squeezed:
+        # margin wiped on a squeeze; no return
+        state.mark_dirty(uid)
+        return {"ok": True, "squeezed": True, "symbol": pos["symbol"],
+                "entry": round(pos["entry"], 2), "spot": round(spot, 2),
+                "margin_lost": pos["margin"], "returned": 0, "gold": me["gold"]}
+    payout = max(0, pos["margin"] + pnl)
+    res = award_gold(state, uid, payout, now=now) if payout > 0 else {"gained": 0}
+    state.mark_dirty(uid)
+    return {"ok": True, "squeezed": False, "symbol": pos["symbol"],
+            "entry": round(pos["entry"], 2), "spot": round(spot, 2),
+            "pnl": pnl, "margin": pos["margin"], "returned": payout,
+            "golden": res.get("golden", False), "gold": me["gold"]}
+
+
+# ============================================================
+# GOLDEN-500 INDEX (phi-weighted composite + candle history)
+# ============================================================
+
+def _index_hist(state):
+    if not hasattr(state, "index_hist"):
+        state.index_hist = []      # list of candles {t,o,h,l,c}
+        state._index_last = None
+    return state.index_hist
+
+def golden_index_value(state):
+    """phi-weighted composite of all stocks + IPO + M&A share prices."""
+    stocks = getattr(state, "stocks", [])
+    total = 0.0
+    wsum = 0.0
+    for i, s in enumerate(stocks):
+        w = PHI ** (-(i % 8))       # phi-decaying weights
+        total += s["price"] * w
+        wsum += w
+    base = (total / wsum) if wsum else 0.0
+    # blend in IPO + M&A average valuations (phi-minor weight)
+    ipo_avg = 0.0
+    ipos = _ipos(state)
+    if ipos:
+        ipo_avg = sum(ipo_price(state, int(fu)) for fu in ipos) / len(ipos)
+    ma_avg = 0.0
+    n_corp = len(CORPS)
+    if n_corp:
+        ma_avg = sum(share_price(state, c) for c in range(n_corp)) / n_corp
+    val = base * PHI + (ipo_avg + ma_avg) / PHI / 100.0
+    return round(val, 2)
+
+def tick_index(state, now=None):
+    """Record the Golden-500 into a rolling candle series (call each market tick)."""
+    now = now or int(time.time())
+    hist = _index_hist(state)
+    v = golden_index_value(state)
+    CANDLE_SECS = int(60 * PHI)        # ~97s candles
+    last = getattr(state, "_index_last", None)
+    if last is None or now - last["t0"] >= CANDLE_SECS:
+        candle = {"t": now, "o": v, "h": v, "l": v, "c": v, "t0": now}
+        hist.append(candle)
+        state._index_last = candle
+        if len(hist) > 90:
+            del hist[:len(hist) - 90]
+    else:
+        c = state._index_last
+        c["h"] = max(c["h"], v)
+        c["l"] = min(c["l"], v)
+        c["c"] = v
+
+def golden_index(state):
+    hist = _index_hist(state)
+    cur = golden_index_value(state)
+    candles = [{"t": c["t"], "o": round(c["o"], 2), "h": round(c["h"], 2),
+                "l": round(c["l"], 2), "c": round(c["c"], 2)} for c in hist]
+    prev = candles[0]["c"] if candles else cur
+    chg = round(cur - prev, 2)
+    chg_pct = round((chg / prev * 100) if prev else 0, 2)
+    return {"value": cur, "change": chg, "change_pct": chg_pct,
+            "candles": candles, "count": len(candles),
+            "note": "GOLDEN-500: phi-weighted composite of all markets."}
+
+
+# ============================================================
 # PORTFOLIO (unified view of all assets; phi net-worth breakdown)
 # ============================================================
 
@@ -2011,6 +2190,12 @@ def portfolio(state, uid, now=None):
     if own_ipo:
         unsold = IPO_TOTAL_SHARES - sum(own_ipo["held"].values())
         own_ipo_val = unsold * ipo_price(state, uid)
+    # short positions (margin + mark-to-market PnL, floored at 0)
+    short_val = 0
+    for p in me.get("shorts", []):
+        s = _stock_by_name(state, p["symbol"])
+        spot = s["price"] if s else p["entry"]
+        short_val += max(0, p["margin"] + _short_pnl(p, spot))
     # loan debt (liability)
     debt = 0
     loan = me.get("loan")
@@ -2022,6 +2207,7 @@ def portfolio(state, uid, now=None):
         "gold": int(gold), "loot": int(loot_val), "stocks": int(stock_val),
         "bonds": int(bond_val), "hedge": int(hedge_val), "derivatives": int(deriv_val),
         "ma_stakes": int(ma_val), "ipo_shares": int(ipo_val), "own_equity": int(own_ipo_val),
+        "shorts": int(short_val),
     }
     gross = sum(assets.values())
     net = gross - int(debt)

@@ -56,6 +56,8 @@ from golden_econ import (
     loan_status, take_loan, repay_loan, check_liquidations,
     central_rate, cb_status, buy_insurance, liq_feed,
     ipo_launch, ipo_list, ipo_buy, portfolio,
+    short_status, short_open, short_close,
+    golden_index, tick_index,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1249,6 +1251,47 @@ async def pulse_ipo_buy(request):
     return web.json_response(result)
 
 
+# ---- SHORT SELLING (profit on drops; phi margin; squeeze risk) ----
+async def handle_shorts(request):
+    """GET a player's open short positions (?uid= or /api/shorts/<uid>)."""
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    result = short_status(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_short_open(request):
+    """Pulse: open a short position (reserve phi-margin)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = short_open(STATE, uid, d.get("symbol", ""), d.get("size", 1))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_short_close(request):
+    """Pulse: close a short (payout margin+PnL, or lose margin on squeeze)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = short_close(STATE, uid, d.get("id"))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- GOLDEN-500 INDEX (phi-weighted composite + candles) ----
+async def handle_index(request):
+    """GET the Golden-500 index value + candlestick history."""
+    result = golden_index(STATE)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ---- PORTFOLIO (unified phi net-worth breakdown) ----
 async def handle_portfolio(request):
     """GET a unified breakdown of all a player's assets and net worth."""
@@ -1358,6 +1401,10 @@ refresh();setInterval(refresh,3000);
 async def market_loop():
     while True:
         STATE.tick_market()
+        try:
+            tick_index(STATE)
+        except Exception:
+            pass
         await asyncio.sleep(MARKET_TICK_SEC)
 
 async def health_loop():
@@ -1501,6 +1548,11 @@ def make_unified_app():
     app.router.add_post("/pulse/ipo/buy", pulse_ipo_buy)
     app.router.add_get("/api/portfolio", handle_portfolio)
     app.router.add_get("/api/portfolio/{uid}", handle_portfolio)
+    app.router.add_get("/api/shorts", handle_shorts)
+    app.router.add_get("/api/shorts/{uid}", handle_shorts)
+    app.router.add_post("/pulse/short/open", pulse_short_open)
+    app.router.add_post("/pulse/short/close", pulse_short_close)
+    app.router.add_get("/api/index", handle_index)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

@@ -64,6 +64,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-bank" style="border-color:#FF9B00;color:#FF9B00">🏛 BANK</button>
 <button id="btn-cb" style="border-color:#B14BFF;color:#B14BFF">🏦 CENTRAL BANK</button>
 <button id="btn-ipo" style="border-color:#00E5FF;color:#00E5FF">📈 IPO</button>
+<button id="btn-short" style="border-color:#FF3B3B;color:#FF3B3B">📉 SHORT</button>
+<button id="btn-index" style="border-color:#FFC800;color:#FFC800">📊 GOLDEN-500</button>
 <button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
@@ -2875,7 +2877,7 @@ async function buyIPO(founder){
     }catch(e){}
 }
 // ---- PORTFOLIO (unified phi net-worth breakdown) ----
-const PF_COL={gold:'#FFE24B',loot:'#B14BFF',stocks:'#00E5FF',bonds:'#00FF8C',hedge:'#FF9B00',derivatives:'#FF3B3B',ma_stakes:'#FFC800',ipo_shares:'#4BC0FF',own_equity:'#FFD700'};
+const PF_COL={gold:'#FFE24B',loot:'#B14BFF',stocks:'#00E5FF',bonds:'#00FF8C',hedge:'#FF9B00',derivatives:'#FF3B3B',ma_stakes:'#FFC800',ipo_shares:'#4BC0FF',own_equity:'#FFD700',shorts:'#FF6B6B'};
 async function showPortfolio(){
     try{
         openPanel('<b>💼 PORTFOLIO</b><div id="pf-body" style="color:#555">loading...</div>',24000);
@@ -2898,6 +2900,88 @@ async function showPortfolio(){
            '<div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
         p.innerHTML=h;
     }catch(e){showOverlay('Portfolio','offline');}
+}
+// ---- SHORT SELLING (profit on drops; phi margin; squeeze risk) ----
+async function showShort(){
+    try{
+        openPanel('<b>📉 SHORT DESK</b><div id="sh-body" style="color:#555">loading...</div>',26000);
+        const paint=async()=>{
+            const p=document.getElementById('sh-body');if(!p)return;
+            const [mk,st]=await Promise.all([
+                fetch(API+'/api/market').then(r=>r.json()),
+                fetch(API+'/api/shorts/'+_uid()).then(r=>r.json())
+            ]);
+            let opt='';for(const s of mk.slice(0,12))opt+='<option value="'+s.name+'">'+s.name+' ('+s.price.toFixed(1)+'g)</option>';
+            let h='<div style="border:1px dashed #FF3B3B;border-radius:5px;padding:6px;margin:6px 0">'+
+                '<select id="sh-sym" style="background:#111;border:1px solid #333;color:#FF9B9B;font-size:10px">'+opt+'</select>'+
+                '<input id="sh-size" type="number" value="10" style="width:44px;background:#111;border:1px solid #333;color:#FFE24B;font-size:10px;padding:2px">'+
+                '<button onclick="openShort()" style="border:1px solid #FF3B3B;color:#FF3B3B;background:#1a0a0a;font-size:10px;padding:2px 6px;cursor:pointer">SHORT</button>'+
+                '<div style="color:#555;font-size:7px;margin-top:2px">margin = notional/φ · squeeze if price → entry×φ</div></div>';
+            h+='<table style="width:100%;font-size:9px;font-family:monospace">';
+            for(const q of (st.positions||[])){
+                const pc=q.pnl>=0?'#00FF8C':'#FF3B3B';
+                h+='<tr style="border-top:1px solid #1a1a2e'+(q.danger?';background:#2a0a0a':'')+'">'+
+                   '<td style="color:#FF9B9B">'+q.symbol+' ×'+q.size+'<div style="color:#555;font-size:7px">e '+q.entry+' → '+q.spot+(q.danger?' ⚠':'')+'</div></td>'+
+                   '<td style="color:'+pc+';text-align:right">'+(q.pnl>=0?'+':'')+fmt(q.pnl)+'g<div style="color:#555;font-size:7px">sq '+q.squeeze_at+'</div></td>'+
+                   '<td style="text-align:right"><button onclick="closeShort('+q.id+')" style="border:1px solid #FFC800;color:#FFC800;background:#181400;font-size:9px;padding:1px 5px;cursor:pointer">COVER</button></td></tr>';
+            }
+            h+='</table><div style="color:#555;font-size:8px;margin-top:4px">'+st.note+'</div>';
+            p.innerHTML=h;
+        };
+        paint();
+    }catch(e){showOverlay('Short','offline');}
+}
+async function openShort(){
+    const sym=(document.getElementById('sh-sym')||{}).value;
+    const sz=parseInt((document.getElementById('sh-size')||{}).value||'10',10);
+    try{
+        const r=await fetch(API+'/pulse/short/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),symbol:sym,size:sz})});
+        const d=await r.json();
+        if(d.error){showOverlay('📉 SHORT',d.error+(d.need?(' (need '+fmt(d.need)+'g)'):''));return;}
+        SND.click();showOverlay('📉 SHORTED',d.symbol+' ×'+d.size+'\nentry '+d.entry+'g margin '+fmt(d.margin)+'g\nsqueeze @ '+d.squeeze_at+'g');
+        showShort();loadPlayer(_uid());
+    }catch(e){}
+}
+async function closeShort(id){
+    try{
+        const r=await fetch(API+'/pulse/short/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),id:id})});
+        const d=await r.json();
+        if(d.error){showOverlay('📉 COVER',d.error);return;}
+        if(d.squeezed){SND.duelHit&&SND.duelHit();showOverlay('💥 SQUEEZED',d.symbol+' '+d.entry+'→'+d.spot+'\nmargin lost '+fmt(d.margin_lost)+'g');}
+        else{SND.promo();showOverlay('📉 COVERED',d.symbol+' pnl '+(d.pnl>=0?'+':'')+fmt(d.pnl)+'g\nreturned '+fmt(d.returned)+'g'+(d.golden?'\n⚡ GOLDEN HOUR':''));}
+        showShort();loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- GOLDEN-500 INDEX (phi-weighted composite + candles) ----
+let _idxTimer=null;
+async function showIndex(){
+    try{
+        openPanel('<b>📊 GOLDEN-500</b><div id="ix-body" style="color:#555">loading...</div><canvas id="ix-cv" width="256" height="120" style="margin-top:6px;background:#05060d;border:1px solid #222;border-radius:4px"></canvas>',24000);
+        const paint=async()=>{
+            const body=document.getElementById('ix-body');const cv=document.getElementById('ix-cv');
+            if(!body||!cv){if(_idxTimer)clearInterval(_idxTimer);return;}
+            const d=await fetch(API+'/api/index').then(r=>r.json());
+            const col=d.change>=0?'#00FF8C':'#FF3B3B';
+            body.innerHTML='<div style="text-align:center"><span style="color:'+col+';font-size:22px;text-shadow:0 0 12px '+col+'">'+d.value+'</span> '+
+                '<span style="color:'+col+';font-size:11px">'+(d.change>=0?'▲':'▼')+' '+Math.abs(d.change)+' ('+d.change_pct+'%)</span></div>';
+            drawCandles(cv,d.candles);
+        };
+        paint();if(_idxTimer)clearInterval(_idxTimer);_idxTimer=setInterval(paint,4000);
+    }catch(e){showOverlay('Index','offline');}
+}
+function drawCandles(cv,candles){
+    const X=cv.getContext('2d');const W=cv.width,H=cv.height;X.clearRect(0,0,W,H);
+    if(!candles||!candles.length)return;
+    let lo=Infinity,hi=-Infinity;for(const c of candles){lo=Math.min(lo,c.l);hi=Math.max(hi,c.h);}
+    if(hi<=lo)hi=lo+1;const pad=6;
+    const y=v=>H-pad-(v-lo)/(hi-lo)*(H-2*pad);
+    const n=candles.length;const cw=Math.max(2,(W-2*pad)/n);
+    candles.forEach((c,i)=>{
+        const cx=pad+i*cw+cw/2;const up=c.c>=c.o;const col=up?'#00FF8C':'#FF3B3B';
+        X.strokeStyle=col;X.beginPath();X.moveTo(cx,y(c.h));X.lineTo(cx,y(c.l));X.stroke();
+        X.fillStyle=col;const yo=y(c.o),yc=y(c.c);
+        X.fillRect(cx-cw*0.32,Math.min(yo,yc),Math.max(1,cw*0.64),Math.max(1,Math.abs(yc-yo)));
+    });
 }
 // ---- LIQUIDATION overlay + notifications (global poll) ----
 let _liqSeen=0,_liqInit=false;
@@ -2995,6 +3079,8 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bbk=document.getElementById('btn-bank');if(bbk)bbk.onclick=showBank;}
 {const bcb=document.getElementById('btn-cb');if(bcb)bcb.onclick=showCB;}
 {const bip=document.getElementById('btn-ipo');if(bip)bip.onclick=showIPO;}
+{const bsh=document.getElementById('btn-short');if(bsh)bsh.onclick=showShort;}
+{const bix=document.getElementById('btn-index');if(bix)bix.onclick=showIndex;}
 {const bpf=document.getElementById('btn-portfolio');if(bpf)bpf.onclick=showPortfolio;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
