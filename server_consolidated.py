@@ -62,6 +62,7 @@ from golden_econ import (
     trader_leaderboard, award_trader_of_day,
     maybe_flash_crash,
     mm_place, mm_status, mm_cancel, tick_market_making,
+    tick_bots, tick_stock_candles, stock_candles,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1300,6 +1301,16 @@ async def handle_index(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- PER-STOCK CANDLES (candlestick history for any ticker) ----
+async def handle_stock_candles(request):
+    """GET candlestick history for a single stock (/api/candles/<SYMBOL>)."""
+    name = request.match_info.get("sym", request.query.get("sym", ""))
+    result = stock_candles(STATE, name)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ---- GOLDEN-500 INDEX OPTIONS (calls/puts, phi strikes) ----
 async def handle_idxopt(request):
     """GET the index option chain, or a player's positions (?uid=)."""
@@ -1361,7 +1372,8 @@ async def pulse_mm_place(request):
     """Pulse: post a market-making order (park gold at bid, sell at bid*phi)."""
     d = await request.json()
     uid = d.get("uid", 1000)
-    result = mm_place(STATE, uid, d.get("symbol", ""), d.get("bid", 0), d.get("size", 1))
+    result = mm_place(STATE, uid, d.get("symbol", ""), d.get("bid", 0),
+                      d.get("size", 1), d.get("leverage", 1.0))
     if "error" in result:
         return web.json_response(result, status=400)
     STATE.save_char(uid)
@@ -1490,12 +1502,14 @@ async def market_loop():
     while True:
         STATE.tick_market()
         try:
+            tick_bots(STATE)
             fc = maybe_flash_crash(STATE)
             if fc.get("crashed"):
                 for cid in range(len(CORPS)):
                     _post_system_chat(cid, f"FLASH CRASH! Golden-500 -> {fc['index']:,.0f}. Shorts feast, the leveraged bleed!")
             tick_market_making(STATE)
             tick_index(STATE)
+            tick_stock_candles(STATE)
         except Exception:
             pass
         await asyncio.sleep(MARKET_TICK_SEC)
@@ -1646,6 +1660,7 @@ def make_unified_app():
     app.router.add_post("/pulse/short/open", pulse_short_open)
     app.router.add_post("/pulse/short/close", pulse_short_close)
     app.router.add_get("/api/index", handle_index)
+    app.router.add_get("/api/candles/{sym}", handle_stock_candles)
     app.router.add_get("/api/idxopt", handle_idxopt)
     app.router.add_post("/pulse/idxopt/open", pulse_idxopt_open)
     app.router.add_post("/pulse/idxopt/settle", pulse_idxopt_settle)

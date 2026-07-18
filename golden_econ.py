@@ -2262,6 +2262,48 @@ def idx_option_settle(state, uid, pos_id, now=None):
             "spot": round(spot, 2), "payout": payout,
             "golden": res.get("golden", False), "gold": me["gold"]}
 
+N_BOTS = 8                               # phi-agents that trade the tape
+BOT_AGGRO = PHI - 1                       # ~0.618 base price nudge magnitude
+
+def _bots(state):
+    """Persistent phi-agents, each with a target stock, bias and horizon."""
+    if not hasattr(state, "bots"):
+        stocks = getattr(state, "stocks", [])
+        n = len(stocks)
+        state.bots = []
+        for i in range(N_BOTS):
+            # alternate momentum-chasers and mean-reverters, phi-scaled size
+            state.bots.append({
+                "id": i, "sym_idx": (i * 3) % max(1, n),
+                "style": "momentum" if i % 2 == 0 else "revert",
+                "size": PHI ** (i % 4), "anchor": None})
+    return state.bots
+
+def tick_bots(state, now=None):
+    """Bots push prices around: momentum bots chase the last delta, mean-
+    reverters fade extremes toward a phi-anchor. This animates the tape so
+    player market-making, shorts and derivatives get organic fills."""
+    stocks = getattr(state, "stocks", [])
+    if not stocks:
+        return
+    bots = _bots(state)
+    n = len(stocks)
+    for b in bots:
+        s = stocks[b["sym_idx"] % n]
+        if b["anchor"] is None:
+            b["anchor"] = s["price"]
+        b["anchor"] = round(b["anchor"] * (1 / PHI) + s["price"] * (1 - 1 / PHI), 4)
+        if b["style"] == "momentum":
+            push = s.get("delta", 0) * BOT_AGGRO * 0.15 * b["size"]
+        else:
+            push = (b["anchor"] - s["price"]) * (BOT_AGGRO / PHI) * 0.1 * b["size"]
+        s["price"] = round(max(0.01, s["price"] + push), 2)
+        s["volume"] = max(100, int(s.get("volume", 1000) + abs(push) * 500 * b["size"]))
+        # occasionally a bot rotates to a new target
+        if random.random() < (1 / (PHI ** 5)):
+            b["sym_idx"] = random.randrange(n)
+            b["anchor"] = None
+
 FLASH_CRASH_CHANCE = 1.0 / (PHI ** 12)   # ~0.0031 per market tick (rare)
 FLASH_CRASH_DROP = 1.0 / PHI             # prices multiplied by 1/phi (~0.618)
 
@@ -2286,6 +2328,50 @@ def maybe_flash_crash(state, now=None):
                    "text": f"FLASH CRASH! The Golden-500 plunged to {idx:,.0f} — shorts feast, the leveraged bleed!"})
     del events[:-30]
     return {"crashed": True, "index": idx}
+
+def _stock_hist(state):
+    if not hasattr(state, "stock_hist"):
+        state.stock_hist = {}       # name -> list of candles
+        state._stock_candle_last = {}
+    return state.stock_hist
+
+STOCK_CANDLE_SECS = int(60 * PHI)
+
+def tick_stock_candles(state, now=None):
+    """Roll a candle series for every stock (call each market tick)."""
+    now = now or int(time.time())
+    hist = _stock_hist(state)
+    last = state._stock_candle_last
+    for s in getattr(state, "stocks", []):
+        name = s["name"]
+        v = s["price"]
+        series = hist.setdefault(name, [])
+        cur = last.get(name)
+        if cur is None or now - cur["t0"] >= STOCK_CANDLE_SECS:
+            candle = {"t": now, "o": v, "h": v, "l": v, "c": v, "t0": now}
+            series.append(candle)
+            last[name] = candle
+            if len(series) > 90:
+                del series[:len(series) - 90]
+        else:
+            cur["h"] = max(cur["h"], v)
+            cur["l"] = min(cur["l"], v)
+            cur["c"] = v
+
+def stock_candles(state, name):
+    hist = _stock_hist(state)
+    s = _stock_by_name(state, name)
+    cur = s["price"] if s else 0
+    series = hist.get(name, [])
+    candles = [{"t": c["t"], "o": round(c["o"], 2), "h": round(c["h"], 2),
+                "l": round(c["l"], 2), "c": round(c["c"], 2)} for c in series]
+    prev = candles[0]["c"] if candles else cur
+    chg = round(cur - prev, 2)
+    return {"symbol": name, "price": round(cur, 2), "change": chg,
+            "change_pct": round((chg / prev * 100) if prev else 0, 2),
+            "delta": round(s.get("delta", 0), 2) if s else 0,
+            "volume": s.get("volume", 0) if s else 0,
+            "candles": candles, "count": len(candles)}
 
 def golden_index(state):
     hist = _index_hist(state)
@@ -2312,9 +2398,13 @@ def _mm_orders(char):
         char["mm_orders"] = []
     return char["mm_orders"]
 
-def mm_place(state, uid, symbol, bid, size, now=None):
+MM_MAX_LEVERAGE = PHI                     # up to phi-x leverage on market making
+MM_LIQ_RATIO = 1.0 / PHI                  # inventory < debt/phi => margin call
+
+def mm_place(state, uid, symbol, bid, size, leverage=1.0, now=None):
     """Post a market-making order: park gold at a bid; auto-buy when the
-    market dips to it, auto-sell at bid*phi for the spread."""
+    market dips to it, auto-sell at bid*phi for the spread. Leverage borrows
+    the extra notional (cascade liquidation risk on a crash)."""
     now = now or int(time.time())
     me = state.chars.get(uid)
     if not me:
@@ -2326,21 +2416,26 @@ def mm_place(state, uid, symbol, bid, size, now=None):
         return {"error": f"max {MM_MAX_ORDERS} open orders"}
     bid = round(float(bid), 2)
     size = max(1, int(size))
+    lev = max(1.0, min(float(leverage or 1.0), MM_MAX_LEVERAGE))
     if bid <= 0:
         return {"error": "bid must be positive"}
-    cost = int(bid * size)
-    if me.get("gold", 0) < cost:
-        return {"error": "not enough gold to fund bid", "need": cost}
-    me["gold"] -= cost
+    notional = int(bid * size)
+    equity = int(notional / lev)          # own gold posted
+    debt = notional - equity              # borrowed
+    if me.get("gold", 0) < equity:
+        return {"error": "not enough gold for margin", "need": equity}
+    me["gold"] -= equity
     seq = getattr(state, "_mm_seq", 0) + 1
     state._mm_seq = seq
     ask = round(bid * MM_SPREAD, 2)
     order = {"id": seq, "symbol": symbol, "bid": bid, "ask": ask,
-             "size": size, "reserved": cost, "state": "resting", "opened": now}
+             "size": size, "reserved": notional, "equity": equity, "debt": debt,
+             "leverage": round(lev, 4), "state": "resting", "opened": now}
     _mm_orders(me).append(order)
     state.mark_dirty(uid)
     return {"ok": True, "id": seq, "symbol": symbol, "bid": bid, "ask": ask,
-            "size": size, "reserved": cost, "gold": me["gold"]}
+            "size": size, "reserved": notional, "equity": equity, "debt": debt,
+            "leverage": round(lev, 4), "gold": me["gold"]}
 
 def mm_status(state, uid):
     me = state.chars.get(uid)
@@ -2350,9 +2445,13 @@ def mm_status(state, uid):
     for o in _mm_orders(me):
         s = _stock_by_name(state, o["symbol"])
         spot = s["price"] if s else o["bid"]
-        out.append({**o, "spot": round(spot, 2)})
+        debt = o.get("debt", 0)
+        danger = (o["state"] == "filled" and debt > 0 and
+                  spot * o["size"] <= debt * (1 + MM_LIQ_RATIO) * PHI)
+        out.append({**o, "spot": round(spot, 2), "danger": danger})
     return {"orders": out, "spread": round(MM_SPREAD, 4),
-            "note": "Buy at your bid, auto-sell at bid*phi. Fills happen as the market crosses. In-game gold only."}
+            "max_leverage": round(MM_MAX_LEVERAGE, 4),
+            "note": "Buy at your bid, auto-sell at bid*phi. Leverage borrows notional (crash = margin call). In-game gold only."}
 
 def mm_cancel(state, uid, order_id):
     me = state.chars.get(uid)
@@ -2363,14 +2462,16 @@ def mm_cancel(state, uid, order_id):
     if not o:
         return {"error": "no such order"}
     refund = 0
+    debt = o.get("debt", 0)
     if o["state"] == "resting":
-        refund = o["reserved"]           # unfilled bid: return parked gold
+        refund = o.get("equity", o["reserved"])   # return posted margin (debt never drawn)
         me["gold"] = me.get("gold", 0) + refund
     elif o["state"] == "filled":
-        # sell inventory back at current spot (no spread if not crossed)
+        # sell inventory at spot, repay borrowed debt first
         s = _stock_by_name(state, o["symbol"])
         spot = s["price"] if s else o["bid"]
-        refund = int(spot * o["size"])
+        proceeds = int(spot * o["size"])
+        refund = max(0, proceeds - debt)
         me["gold"] = me.get("gold", 0) + refund
     orders.remove(o)
     state.mark_dirty(uid)
@@ -2384,24 +2485,42 @@ def tick_market_making(state, now=None):
         if not orders:
             continue
         keep = []
+        events = _liq_events(state)
         for o in orders:
             s = _stock_by_name(state, o["symbol"])
             spot = s["price"] if s else o["bid"]
+            debt = o.get("debt", 0)
             if o["state"] == "resting":
                 if spot <= o["bid"]:
                     o["state"] = "filled"      # bought inventory at bid
                 keep.append(o)
             elif o["state"] == "filled":
+                inv_val = spot * o["size"]
+                # leveraged margin call: inventory can't cover the borrowed debt
+                if debt > 0 and inv_val <= debt * (1 + MM_LIQ_RATIO):
+                    # margin call: inventory seized to repay debt, equity wiped
+                    name = me.get("name", f"Player_{uid}")
+                    corp = me.get("corp_id", 0) % len(CORPS)
+                    state._liq_seq += 1
+                    events.append({"id": state._liq_seq, "ts": now, "uid": uid,
+                                   "name": name, "corp": corp, "type": "mm_liquidated",
+                                   "collateral_lost": o.get("equity", 0),
+                                   "text": f"{name}'s leveraged {o['symbol']} MM book got MARGIN-CALLED — {o.get('equity',0):,}g equity wiped!"})
+                    record_trade_pnl(state, uid, -o.get("equity", 0), now=now)
+                    state.mark_dirty(uid)
+                    continue  # order removed
                 if spot >= o["ask"]:
                     proceeds = int(o["ask"] * o["size"])
+                    net = max(0, proceeds - debt)      # repay borrowed first
                     profit = proceeds - o["reserved"]
-                    award_gold(state, uid, proceeds, now=now)
+                    award_gold(state, uid, net, now=now)
                     if profit != 0:
                         record_trade_pnl(state, uid, profit, now=now)
                     state.mark_dirty(uid)
                     # order completes (removed)
                 else:
                     keep.append(o)
+        del events[:-30]
         me["mm_orders"] = keep
 
 
@@ -2553,15 +2672,15 @@ def portfolio(state, uid, now=None):
         s = _stock_by_name(state, p["symbol"])
         spot = s["price"] if s else p["entry"]
         short_val += max(0, p["margin"] + _short_pnl(p, spot))
-    # market-making orders (parked bid gold or held inventory)
+    # market-making orders (posted equity, or inventory net of borrowed debt)
     mm_val = 0
     for o in me.get("mm_orders", []):
         if o["state"] == "resting":
-            mm_val += o["reserved"]
+            mm_val += o.get("equity", o["reserved"])
         else:
             s = _stock_by_name(state, o["symbol"])
             spot = s["price"] if s else o["bid"]
-            mm_val += int(spot * o["size"])
+            mm_val += max(0, int(spot * o["size"]) - o.get("debt", 0))
     # index options (premium-at-risk, mark to intrinsic)
     idxopt_val = 0
     for p in me.get("idx_opts", []):

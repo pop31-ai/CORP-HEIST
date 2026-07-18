@@ -66,6 +66,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-ipo" style="border-color:#00E5FF;color:#00E5FF">📈 IPO</button>
 <button id="btn-short" style="border-color:#FF3B3B;color:#FF3B3B">📉 SHORT</button>
 <button id="btn-index" style="border-color:#FFC800;color:#FFC800">📊 GOLDEN-500</button>
+<button id="btn-chart" style="border-color:#00E5FF;color:#00E5FF">📈 CHARTS</button>
 <button id="btn-idxopt" style="border-color:#00E5FF;color:#00E5FF">🎯 500-OPTIONS</button>
 <button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
 <button id="btn-mm" style="border-color:#00FF8C;color:#00FF8C">⚖ MARKET MAKE</button>
@@ -2986,6 +2987,28 @@ function drawCandles(cv,candles){
         X.fillRect(cx-cw*0.32,Math.min(yo,yc),Math.max(1,cw*0.64),Math.max(1,Math.abs(yc-yo)));
     });
 }
+// ---- PER-STOCK CANDLE CHARTS (reuse drawCandles) ----
+let _chartSym=null,_chartTimer=null;
+async function showChart(){
+    try{
+        const mk=await fetch(API+'/api/market').then(r=>r.json());
+        if(!_chartSym)_chartSym=mk[0].name;
+        let opt='';for(const s of mk.slice(0,20))opt+='<option value="'+s.name+'"'+(s.name===_chartSym?' selected':'')+'>'+s.name+'</option>';
+        openPanel('<b>📈 STOCK CHARTS</b> <select id="ch-sym" onchange="_chartSym=this.value;drawChartNow()" style="background:#111;border:1px solid #333;color:#00E5FF;font-size:10px">'+opt+'</select>'+
+            '<div id="ch-body" style="color:#555;font-size:10px">loading...</div>'+
+            '<canvas id="ch-cv" width="256" height="120" style="margin-top:6px;background:#05060d;border:1px solid #222;border-radius:4px"></canvas>',26000);
+        drawChartNow();
+        if(_chartTimer)clearInterval(_chartTimer);_chartTimer=setInterval(drawChartNow,4000);
+    }catch(e){showOverlay('Charts','offline');}
+}
+async function drawChartNow(){
+    const body=document.getElementById('ch-body');const cv=document.getElementById('ch-cv');
+    if(!body||!cv){if(_chartTimer)clearInterval(_chartTimer);return;}
+    const d=await fetch(API+'/api/candles/'+encodeURIComponent(_chartSym)).then(r=>r.json());
+    const col=d.change>=0?'#00FF8C':'#FF3B3B';
+    body.innerHTML='<span style="color:#FFE24B">'+d.symbol+'</span> <span style="color:'+col+'">'+d.price+'g '+(d.change>=0?'▲':'▼')+Math.abs(d.change)+' ('+d.change_pct+'%)</span> <span style="color:#555">vol '+fmt(d.volume)+'</span>';
+    drawCandles(cv,d.candles);
+}
 // ---- GOLDEN-500 INDEX OPTIONS (calls/puts, phi strikes) ----
 async function showIdxOpt(){
     try{
@@ -3078,12 +3101,14 @@ async function showMM(){
                 '<select id="mm-sym" style="background:#111;border:1px solid #333;color:#7CFFB0;font-size:10px">'+opt+'</select>'+
                 '<input id="mm-bid" type="number" step="0.1" placeholder="bid" style="width:50px;background:#111;border:1px solid #333;color:#FFE24B;font-size:10px;padding:2px">'+
                 '<input id="mm-size" type="number" value="10" style="width:42px;background:#111;border:1px solid #333;color:#FFE24B;font-size:10px;padding:2px">'+
+                '<select id="mm-lev" style="background:#111;border:1px solid #333;color:#FF9B00;font-size:10px" title="leverage"><option value="1">1×</option><option value="1.618">φ×</option></select>'+
                 '<button onclick="placeMM()" style="border:1px solid #00FF8C;color:#00FF8C;background:#0a1a10;font-size:10px;padding:2px 6px;cursor:pointer">POST</button>'+
-                '<div style="color:#555;font-size:7px;margin-top:2px">buy at bid, auto-sell at bid×φ ('+st.spread+'×)</div></div>';
+                '<div style="color:#555;font-size:7px;margin-top:2px">buy at bid, auto-sell at bid×φ ('+st.spread+'×) · lev up to '+st.max_leverage+'× (crash=margin call)</div></div>';
             h+='<table style="width:100%;font-size:9px;font-family:monospace">';
             for(const o of (st.orders||[])){
-                const sc=o.state==='filled'?'#FFC800':'#00FF8C';
-                h+='<tr style="border-top:1px solid #1a1a2e"><td style="color:'+sc+'">'+o.symbol+' ×'+o.size+'<div style="color:#555;font-size:7px">'+o.state+' · spot '+o.spot+'</div></td>'+
+                const sc=o.danger?'#FF3B3B':(o.state==='filled'?'#FFC800':'#00FF8C');
+                const lev=(o.leverage&&o.leverage>1)?(' · '+o.leverage+'× debt '+fmt(o.debt||0)):'';
+                h+='<tr style="border-top:1px solid #1a1a2e'+(o.danger?';background:#2a0a0a':'')+'"><td style="color:'+sc+'">'+o.symbol+' ×'+o.size+(o.danger?' ⚠':'')+'<div style="color:#555;font-size:7px">'+o.state+' · spot '+o.spot+lev+'</div></td>'+
                    '<td style="color:#7CFFB0;text-align:right">'+o.bid+' → '+o.ask+'</td>'+
                    '<td style="text-align:right"><button onclick="cancelMM('+o.id+')" style="border:1px solid #FF6B6B;color:#FF6B6B;background:#1a0a0a;font-size:9px;padding:1px 5px;cursor:pointer">✕</button></td></tr>';
             }
@@ -3099,11 +3124,12 @@ async function placeMM(){
     let bid=parseFloat((document.getElementById('mm-bid')||{}).value||'0');
     if(!bid&&sel){const o=sel.options[sel.selectedIndex];bid=Math.round(parseFloat(o.getAttribute('data-p'))/PHI*100)/100;}
     const size=parseInt((document.getElementById('mm-size')||{}).value||'10',10);
+    const lev=parseFloat((document.getElementById('mm-lev')||{}).value||'1');
     try{
-        const r=await fetch(API+'/pulse/mm/place',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),symbol:sym,bid:bid,size:size})});
+        const r=await fetch(API+'/pulse/mm/place',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),symbol:sym,bid:bid,size:size,leverage:lev})});
         const d=await r.json();
         if(d.error){showOverlay('⚖ MM',d.error+(d.need?(' (need '+fmt(d.need)+'g)'):''));return;}
-        SND.click();showOverlay('⚖ POSTED',d.symbol+' ×'+d.size+'\nbid '+d.bid+' → ask '+d.ask+'\nparked '+fmt(d.reserved)+'g');
+        SND.click();showOverlay('⚖ POSTED',d.symbol+' ×'+d.size+' @'+d.leverage+'×\nbid '+d.bid+' → ask '+d.ask+'\nequity '+fmt(d.equity)+'g'+(d.debt?(' + debt '+fmt(d.debt)+'g'):''));
         showMM();loadPlayer(_uid());
     }catch(e){}
 }
@@ -3126,6 +3152,7 @@ async function pollLiquidations(){
             _liqSeen=Math.max(_liqSeen,ev.id);
             if(ev.type==='liquidated')liquidationOverlay(ev,'LIQUIDATED','seized');
             else if(ev.type==='squeezed')liquidationOverlay(ev,'SQUEEZED','margin wiped');
+            else if(ev.type==='mm_liquidated')liquidationOverlay(ev,'MARGIN CALL','equity wiped');
             else if(ev.type==='flashcrash')flashCrashOverlay(ev);
             else flashToast('🛡 '+ev.text,'#00FF8C');
         }
@@ -3243,6 +3270,7 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bip=document.getElementById('btn-ipo');if(bip)bip.onclick=showIPO;}
 {const bsh=document.getElementById('btn-short');if(bsh)bsh.onclick=showShort;}
 {const bix=document.getElementById('btn-index');if(bix)bix.onclick=showIndex;}
+{const bch=document.getElementById('btn-chart');if(bch)bch.onclick=showChart;}
 {const bio=document.getElementById('btn-idxopt');if(bio)bio.onclick=showIdxOpt;}
 {const btr=document.getElementById('btn-traders');if(btr)btr.onclick=showTraders;}
 {const bmm=document.getElementById('btn-mm');if(bmm)bmm.onclick=showMM;}
