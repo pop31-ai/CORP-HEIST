@@ -6486,6 +6486,562 @@ class StockPrediction:
         }
 
 
+# ============================================================
+# REPUTATION SYSTEM — moral choices shape world standing
+# ============================================================
+
+class ReputationSystem:
+    """Репутация = результат моральных выборов в квестах.
+    Ось: corruption ↔ honor. Высокая corruption → доступ к тёмным сделкам.
+    Высокая honor → доступ к легальным бонусам. Нейтральный → баланс.
+    Репутация влияет на: цены в магазинах, NPC-отношение, доступ к квестам."""
+
+    TIERS = [
+        {"min": -100, "max": -50, "name": "Изгой", "name_en": "Outcast",
+         "desc": "Все знают твоё имя — и ненавидят", "discount": 1.3, "unlock": "black_market_premium"},
+        {"min": -49, "max": -10, "name": "Сомнительный", "name_en": "Shady",
+         "desc": "Делами пахнет, но пока терпят", "discount": 1.15, "unlock": "shady_contacts"},
+        {"min": -9, "max": 9, "name": "Нейтральный", "name_en": "Neutral",
+         "desc": "Никто не знает, на чьей ты стороне", "discount": 1.0, "unlock": None},
+        {"min": 10, "max": 49, "name": "Уважаемый", "name_en": "Respected",
+         "desc": "За тобой считают", "discount": 0.9, "unlock": "honor_discounts"},
+        {"min": 50, "max": 100, "name": "Легенда", "name_en": "Legend",
+         "desc": "Имя, которое помнят поколения", "discount": 0.75, "unlock": "legend_perks"},
+        {"min": 101, "max": 999, "name": "Φ-Master", "name_en": "PHI Master",
+         "desc": "Ты — сам фи-баланс", "discount": 0.6, "unlock": "phi_master_abilities"},
+    ]
+
+    @staticmethod
+    def get_tier(reputation):
+        for t in ReputationSystem.TIERS:
+            if t["min"] <= reputation <= t["max"]:
+                return t
+        return ReputationSystem.TIERS[2]  # neutral
+
+    @staticmethod
+    def status(state, uid):
+        c = state.chars.get(uid, {})
+        rep = c.get("reputation", 0)
+        choices = c.get("_quest_consequences", [])
+        tier = ReputationSystem.get_tier(rep)
+        return {
+            "reputation": rep,
+            "tier": tier["name"],
+            "tier_en": tier["name_en"],
+            "desc": tier["desc"],
+            "shop_discount": tier["discount"],
+            "unlock": tier["unlock"],
+            "choice_count": len(choices),
+            "recent_choices": choices[-5:],
+        }
+
+    @staticmethod
+    def apply_reputation_change(state, uid, delta):
+        c = state.chars.get(uid)
+        if not c:
+            return
+        c["reputation"] = max(-100, min(100, c.get("reputation", 0) + delta))
+        state.mark_dirty(uid)
+
+    @staticmethod
+    def get_price_modifier(state, uid):
+        """Price modifier based on reputation tier."""
+        c = state.chars.get(uid, {})
+        rep = c.get("reputation", 0)
+        tier = ReputationSystem.get_tier(rep)
+        return tier["discount"]
+
+
+# ============================================================
+# TREASURE HUNT — random map events, phi-riddles, dig for loot
+# ============================================================
+
+class TreasureHunt:
+    """Сокровища появляются случайно на карте. Игроки ищут их:
+    -phi-загадки (ответ = число, phi-based)
+    - Случайные сундуки на территории
+    - Ежедневный бесплатный поиск (1 раз)
+    - Раритетные находки при захвате территорий"""
+
+    DAILY_FREE_SEARCHES = 3
+    SEARCH_COST = 200
+
+    RIDDLES = [
+        {"q": "Сколько будет PHI^0 + PHI^1 + PHI^2?", "a": 5, "reward_gold": 5000},
+        {"q": "Первое простое число大于100, которое является частью Фибоначчи?", "a": 89, "reward_gold": 3000},
+        {"q": "Сколько минут в ФИ-дне (86400 / PHI)?", "a": 53440, "reward_gold": 8000},
+        {"q": "PHI^3 (округлённо)?", "a": 4, "reward_gold": 2000},
+        {"q": "sqrt(5) + 1, округлено?", "a": 3, "reward_gold": 4000},
+        {"q": "PHI * 1000, целая часть?", "a": 1618, "reward_gold": 10000},
+        {"q": "10-е число Фибоначчи?", "a": 55, "reward_gold": 6000},
+        {"q": "PHI^PHI (округлённо)?", "a": 3, "reward_gold": 15000},
+    ]
+
+    @staticmethod
+    def daily_searches(state, uid, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        day = t // 86400
+        key = f"_treasure_day_{day}"
+        used = c.get(key, 0)
+        return {
+            "remaining": max(0, TreasureHunt.DAILY_FREE_SEARCHES - used),
+            "cost": TreasureHunt.SEARCH_COST,
+        }
+
+    @staticmethod
+    def search(state, uid, now=None):
+        """Search for treasure. Returns riddle or loot."""
+        t = now or int(time.time())
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        day = t // 86400
+        key = f"_treasure_day_{day}"
+        used = c.get(key, 0)
+        free = used < TreasureHunt.DAILY_FREE_SEARCHES
+        if not free:
+            gold = int(c.get("gold", 0))
+            if gold < TreasureHunt.SEARCH_COST:
+                return {"error": "not enough gold for search"}
+            c["gold"] = gold - TreasureHunt.SEARCH_COST
+        c[key] = used + 1
+        # random event
+        rng = random.Random(int(time.time() * PHI) + uid + used)
+        roll = rng.random()
+        if roll < 0.3:
+            # riddle
+            riddle = rng.choice(TreasureHunt.RIDDLES)
+            return {"type": "riddle", "question": riddle["q"],
+                    "answer_hint": "Числовой ответ", "reward": riddle["reward_gold"],
+                    "riddle_id": TreasureHunt.RIDDLES.index(riddle)}
+        elif roll < 0.6:
+            # gold find
+            amount = int(rng.uniform(500, 5000) * PHI)
+            c["gold"] = c.get("gold", 0) + amount
+            state.mark_dirty(uid)
+            return {"type": "gold", "amount": amount, "gold_left": c["gold"]}
+        elif roll < 0.8:
+            # loot find
+            rarity = rng.choices([1, 2, 3, 4, 5], weights=[50, 30, 15, 4, 1])[0]
+            item = {"code": rng.randint(0, 65535), "name": f"Сокровище Lv.{rarity}",
+                    "cat": 11, "rarity": rarity, "qty": 1,
+                    "value": int(100 * PHI ** rarity)}
+            c.setdefault("loot", []).append(item)
+            state.mark_dirty(uid)
+            return {"type": "loot", "item": item}
+        else:
+            # nothing
+            return {"type": "empty", "message": "Ничего не найдено. Попробуйте снова."}
+
+    @staticmethod
+    def solve_riddle(state, uid, riddle_id, answer, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        if riddle_id < 0 or riddle_id >= len(TreasureHunt.RIDDLES):
+            return {"error": "invalid riddle"}
+        riddle = TreasureHunt.RIDDLES[riddle_id]
+        correct = abs(int(answer) - riddle["a"]) <= 1  # ±1 tolerance
+        if correct:
+            prize = riddle["reward"]
+            c["gold"] = c.get("gold", 0) + prize
+            state.mark_dirty(uid)
+            return {"ok": True, "correct": True, "prize": prize, "gold_left": c["gold"]}
+        return {"ok": True, "correct": False, "answer": riddle["a"]}
+
+
+# ============================================================
+# HERO TRAINING — send heroes on timed missions
+# ============================================================
+
+class HeroTraining:
+    """Отправь героя на миссию (1-24 часа). Вернётся с XP + loot.
+    Чем длиннее миссия — тем лучше награда.
+    Можно отправить максимум 3 героя."""
+
+    MAX_MISSIONS = 3
+    MISSIONS = [
+        {"id": "scout", "name": "Разведка", "duration": 3600,
+         "xp": 1000, "loot_chance": 0.3, "loot_rarity": 2},
+        {"id": "patrol", "name": "Патрулирование", "duration": 7200,
+         "xp": 2500, "loot_chance": 0.5, "loot_rarity": 3},
+        {"id": "expedition", "name": "Экспедиция", "duration": 14400,
+         "xp": 6000, "loot_chance": 0.7, "loot_rarity": 4},
+        {"id": "crusade", "name": "Крестовый поход", "duration": 28800,
+         "xp": 15000, "loot_chance": 0.85, "loot_rarity": 5},
+        {"id": "pilgrimage", "name": "Паломничество", "duration": 43200,
+         "xp": 25000, "loot_chance": 0.95, "loot_rarity": 5},
+    ]
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        missions = c.get("_training_missions", [])
+        active = []
+        ready = []
+        for m in missions:
+            if t >= m["finish_at"]:
+                ready.append(m)
+            else:
+                m["remaining"] = m["finish_at"] - t
+                active.append(m)
+        return {
+            "active": active,
+            "ready": ready,
+            "slots_used": len(missions) - len(ready),
+            "max_slots": HeroTraining.MAX_MISSIONS,
+            "available_missions": HeroTraining.MISSIONS,
+        }
+
+    @staticmethod
+    def start_mission(state, uid, mission_id, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        missions = c.get("_training_missions", [])
+        # count active (not ready)
+        active = [m for m in missions if t < m["finish_at"]]
+        if len(active) >= HeroTraining.MAX_MISSIONS:
+            return {"error": "all mission slots occupied"}
+        # find mission template
+        template = next((m for m in HeroTraining.MISSIONS if m["id"] == mission_id), None)
+        if not template:
+            return {"error": "mission not found"}
+        # check if already doing this mission
+        if any(m["id"] == mission_id and t < m["finish_at"] for m in missions):
+            return {"error": "already on this mission"}
+        mission = {
+            "id": template["id"], "name": template["name"],
+            "finish_at": t + template["duration"],
+            "xp": template["xp"], "loot_chance": template["loot_chance"],
+            "loot_rarity": template["loot_rarity"],
+            "started": t,
+        }
+        missions.append(mission)
+        c["_training_missions"] = missions
+        state.mark_dirty(uid)
+        return {"ok": True, "mission": template["name"],
+                "duration": template["duration"], "returns_at": mission["finish_at"]}
+
+    @staticmethod
+    def collect_mission(state, uid, mission_idx, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        missions = c.get("_training_missions", [])
+        ready = [(i, m) for i, m in enumerate(missions) if t >= m["finish_at"]]
+        if mission_idx < 0 or mission_idx >= len(ready):
+            return {"error": "mission not ready"}
+        idx, mission = ready[mission_idx]
+        # give rewards
+        c["xp"] = c.get("xp", 0) + mission["xp"]
+        loot = None
+        rng = random.Random(int(time.time() * PHI) + uid + mission["started"])
+        if rng.random() < mission["loot_chance"]:
+            loot = {"code": rng.randint(0, 65535),
+                    "name": f"Training Loot [{mission['loot_rarity']}]",
+                    "cat": 11, "rarity": mission["loot_rarity"], "qty": 1,
+                    "value": int(100 * PHI ** mission["loot_rarity"])}
+            c.setdefault("loot", []).append(loot)
+        del missions[idx]
+        c["_training_missions"] = missions
+        state.mark_dirty(uid)
+        return {"ok": True, "xp": mission["xp"], "loot": loot,
+                "name": mission["name"]}
+
+
+# ============================================================
+# AUCTION HOUSE — timed bid-based trading
+# ============================================================
+
+class AuctionHouse:
+    """Аукцион: игроки выставляют предметы с начальной ценой и временем.
+    Другие делают ставки. По истечении времени побеждает лучшая ставка.
+    Комиссия 3% победителю."""
+
+    DURATIONS = [1800, 3600, 7200]  # 30min, 1h, 2h
+    MAX_AUCTIONS = 50
+
+    _auctions = []  # [{id, seller_uid, item, start_price, bids: [{uid, amount, ts}], ends_at}]
+    _next_id = 1
+
+    @classmethod
+    def create(cls, state, uid, item_index, start_price, duration, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        loot = c.get("loot", [])
+        if item_index < 0 or item_index >= len(loot):
+            return {"error": "invalid item index"}
+        if len(cls._auctions) >= cls.MAX_AUCTIONS:
+            return {"error": "auction house full"}
+        if start_price <= 0:
+            return {"error": "price must be positive"}
+        item = loot[item_index]
+        del loot[item_index]
+        t = now or int(time.time())
+        auction = {
+            "id": cls._next_id,
+            "seller_uid": uid,
+            "item": item,
+            "start_price": start_price,
+            "bids": [],
+            "ends_at": t + duration,
+            "created": t,
+        }
+        cls._auctions.append(auction)
+        cls._next_id += 1
+        state.mark_dirty(uid)
+        return {"ok": True, "auction_id": auction["id"], "item": item,
+                "ends_in": duration}
+
+    @classmethod
+    def bid(cls, state, uid, auction_id, amount, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        auction = next((a for a in cls._auctions if a["id"] == auction_id), None)
+        if not auction:
+            return {"error": "auction not found"}
+        if t >= auction["ends_at"]:
+            return {"error": "auction ended"}
+        if auction["seller_uid"] == uid:
+            return {"error": "cannot bid on own auction"}
+        current_bid = auction["bids"][-1]["amount"] if auction["bids"] else auction["start_price"]
+        if amount <= current_bid:
+            return {"error": "bid must be higher than current", "current": current_bid}
+        gold = int(c.get("gold", 0))
+        if gold < amount:
+            return {"error": "not enough gold"}
+        # refund previous bidder
+        if auction["bids"]:
+            prev_uid = auction["bids"][-1]["uid"]
+            prev = state.chars.get(prev_uid)
+            if prev:
+                prev["gold"] = int(prev.get("gold", 0)) + auction["bids"][-1]["amount"]
+                state.mark_dirty(prev_uid)
+        c["gold"] = gold - amount
+        auction["bids"].append({"uid": uid, "amount": amount, "ts": t})
+        state.mark_dirty(uid)
+        return {"ok": True, "bid": amount, "gold_left": c["gold"]}
+
+    @classmethod
+    def settle(cls, state, auction_id, now=None):
+        t = now or int(time.time())
+        auction = next((a for a in cls._auctions if a["id"] == auction_id), None)
+        if not auction:
+            return {"error": "auction not found"}
+        if t < auction["ends_at"]:
+            return {"error": "auction not ended yet"}
+        if not auction["bids"]:
+            # no bids — return item to seller
+            seller = state.chars.get(auction["seller_uid"])
+            if seller:
+                seller.setdefault("loot", []).append(auction["item"])
+                state.mark_dirty(auction["seller_uid"])
+            cls._auctions = [a for a in cls._auctions if a["id"] != auction_id]
+            return {"ok": True, "result": "no_bids", "item_returned": True}
+        # winner
+        winner_bid = auction["bids"][-1]
+        winner = state.chars.get(winner_bid["uid"])
+        seller = state.chars.get(auction["seller_uid"])
+        commission = int(winner_bid["amount"] * 0.03)
+        seller_payout = winner_bid["amount"] - commission
+        if winner:
+            winner.setdefault("loot", []).append(auction["item"])
+            state.mark_dirty(winner_bid["uid"])
+        if seller:
+            seller["gold"] = int(seller.get("gold", 0)) + seller_payout
+            state.mark_dirty(auction["seller_uid"])
+        cls._auctions = [a for a in cls._auctions if a["id"] != auction_id]
+        return {"ok": True, "result": "sold",
+                "winner": winner_bid["uid"], "price": winner_bid["amount"],
+                "commission": commission}
+
+    @classmethod
+    def list_all(cls, now=None):
+        t = now or int(time.time())
+        return [{"id": a["id"], "item": a["item"],
+                 "current_bid": a["bids"][-1]["amount"] if a["bids"] else a["start_price"],
+                 "bids": len(a["bids"]),
+                 "ends_in": max(0, a["ends_at"] - t),
+                 "seller": a["seller_uid"]}
+                for a in cls._auctions if a["ends_at"] > t]
+
+
+# ============================================================
+# ENERGY SYSTEM — stamina for actions, phi-regen
+# ============================================================
+
+class EnergySystem:
+    """Усталость: каждое действие тратит энергию.
+    Максимум: 100 + level * 2. Регенерация: 1 energy / PHI сек (~0.62 sec).
+    PHI-зелья: восстанавливают энергию мгновенно.
+    Без энергии = нельзя торговать, дуэли, крафт."""
+
+    BASE_MAX = 100
+    REGEN_SEC = PHI  # 1 energy per PHI seconds
+    POTION_RESTORE = 50
+
+    @staticmethod
+    def max_energy(level):
+        return int(EnergySystem.BASE_MAX + level * 2)
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        level = c.get("level", 1)
+        max_e = EnergySystem.max_energy(level)
+        last_use = c.get("_energy_last_use", t)
+        elapsed = t - last_use
+        regen = int(elapsed / EnergySystem.REGEN_SEC)
+        current = min(max_e, c.get("_energy", max_e) + regen)
+        potions = c.get("_energy_potions", 0)
+        return {
+            "current": current,
+            "max": max_e,
+            "potions": potions,
+            "regen_rate": f"1 per {EnergySystem.REGEN_SEC:.1f}s",
+        }
+
+    @staticmethod
+    def use_energy(state, uid, amount, action=""):
+        """Use energy for an action. Returns True if successful."""
+        c = state.chars.get(uid)
+        if not c:
+            return False
+        t = int(time.time())
+        level = c.get("level", 1)
+        max_e = EnergySystem.max_energy(level)
+        last_use = c.get("_energy_last_use", t)
+        elapsed = t - last_use
+        regen = int(elapsed / EnergySystem.REGEN_SEC)
+        current = min(max_e, c.get("_energy", max_e) + regen)
+        if current < amount:
+            return False
+        c["_energy"] = current - amount
+        c["_energy_last_use"] = t
+        state.mark_dirty(uid)
+        return True
+
+    @staticmethod
+    def use_potion(state, uid):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        potions = c.get("_energy_potions", 0)
+        if potions <= 0:
+            return {"error": "no potions"}
+        level = c.get("level", 1)
+        max_e = EnergySystem.max_energy(level)
+        current = c.get("_energy", max_e)
+        restored = min(EnergySystem.POTION_RESTORE, max_e - current)
+        c["_energy"] = current + restored
+        c["_energy_potions"] = potions - 1
+        state.mark_dirty(uid)
+        return {"ok": True, "restored": restored, "current": c["_energy"],
+                "potions_left": c["_energy_potions"]}
+
+    @staticmethod
+    def grant_potions(state, uid, amount):
+        c = state.chars.get(uid)
+        if not c:
+            return
+        c["_energy_potions"] = c.get("_energy_potions", 0) + amount
+        state.mark_dirty(uid)
+
+
+# ============================================================
+# CO-OP RAID — multi-player boss encounters
+# ============================================================
+
+class CoopRaid:
+    """Совместные рейды: несколько игроков бьют одного босса.
+    Босс = phi-scaled HP. Урон = hero power. Награды = phi-split по уроню.
+    Каждые 4 часа новый босс."""
+
+    BOSS_TEMPLATES = [
+        {"name": "ФИ-Левиафан", "hp": 500000, "emoji": "🐉"},
+        {"name": "Корпоративный Дракон", "hp": 750000, "emoji": "🐲"},
+        {"name": "Теневой Магнат", "hp": 1000000, "emoji": "👤"},
+        {"name": "Фрактальный Страж", "hp": 1500000, "emoji": "🔮"},
+        {"name": "Квантовый Паразит", "hp": 2000000, "emoji": "👾"},
+    ]
+
+    _boss = None
+    _boss_spawn_time = 0
+    BOSS_INTERVAL = 14400  # 4 hours
+    _damage_log = []  # [{uid, damage, ts}]
+
+    @classmethod
+    def _spawn_boss(cls, now=None):
+        t = now or int(time.time())
+        if cls._boss and t - cls._boss_spawn_time < cls.BOSS_INTERVAL:
+            return
+        rng = random.Random(t // cls.BOSS_INTERVAL)
+        template = rng.choice(cls.BOSS_TEMPLATES)
+        cls._boss = {
+            "name": template["name"], "emoji": template["emoji"],
+            "max_hp": template["hp"], "hp": template["hp"],
+        }
+        cls._boss_spawn_time = t
+        cls._damage_log = []
+
+    @classmethod
+    def status(cls, now=None):
+        cls._spawn_boss(now)
+        t = now or int(time.time())
+        remaining = max(0, cls.BOSS_INTERVAL - (t - cls._boss_spawn_time))
+        # top damage dealers
+        dealer_damage = {}
+        for entry in cls._damage_log:
+            dealer_damage[entry["uid"]] = dealer_damage.get(entry["uid"], 0) + entry["damage"]
+        top = sorted(dealer_damage.items(), key=lambda x: -x[1])[:10]
+        return {
+            "boss": cls._boss["name"] if cls._boss else "None",
+            "emoji": cls._boss["emoji"] if cls._boss else "",
+            "hp": cls._boss["hp"] if cls._boss else 0,
+            "max_hp": cls._boss["max_hp"] if cls._boss else 0,
+            "pct": round((cls._boss["hp"] / cls._boss["max_hp"]) * 100, 1) if cls._boss else 0,
+            "remaining": remaining,
+            "top_dealers": [{"uid": uid, "damage": dmg} for uid, dmg in top],
+        }
+
+    @classmethod
+    def attack(cls, state, uid, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        cls._spawn_boss(now)
+        if not cls._boss or cls._boss["hp"] <= 0:
+            return {"error": "no active boss"}
+        # calculate damage
+        power = hero_power(100 + c.get("level", 1) * 10,
+                           c.get("hero_levels", [0] * 12)[c.get("hero_id", 0) % 12])
+        rng = random.Random(int(time.time() * PHI) + uid)
+        damage = int(power * rng.uniform(0.5, 1.5))
+        cls._boss["hp"] = max(0, cls._boss["hp"] - damage)
+        cls._damage_log.append({"uid": uid, "damage": damage, "ts": now or int(time.time())})
+        killed = cls._boss["hp"] <= 0
+        # rewards if killed
+        reward = 0
+        if killed:
+            total_damage = sum(d["damage"] for d in cls._damage_log)
+            my_damage = sum(d["damage"] for d in cls._damage_log if d["uid"] == uid)
+            if total_damage > 0:
+                reward = int(cls._boss["max_hp"] * 0.1 * (my_damage / total_damage))
+                c["gold"] = c.get("gold", 0) + reward
+        state.mark_dirty(uid)
+        return {"damage": damage, "boss_hp": cls._boss["hp"],
+                "killed": killed, "reward": reward,
+                "boss_name": cls._boss["name"]}
+
 if __name__ == "__main__":
     class FakeState:
         def __init__(self):

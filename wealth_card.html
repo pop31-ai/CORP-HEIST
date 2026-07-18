@@ -106,6 +106,12 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-pets" style="border-color:#E91E63;color:#E91E63">🐾 PETS</button>
 <button id="btn-daily" style="border-color:#009688;color:#009688">📋 DAILY</button>
 <button id="btn-predict" style="border-color:#673AB7;color:#673AB7">📈 PREDICT</button>
+<button id="btn-rep" style="border-color:#CDDC39;color:#CDDC39">⚖ REP</button>
+<button id="btn-treasure" style="border-color:#FFD54F;color:#FFD54F">🗺 TREASURE</button>
+<button id="btn-training" style="border-color:#FF7043;color:#FF7043">🏋 TRAIN</button>
+<button id="btn-auction" style="border-color:#26C6DA;color:#26C6DA">🏷 AUCTION</button>
+<button id="btn-energy" style="border-color:#66BB6A;color:#66BB6A">⚡ ENERGY</button>
+<button id="btn-raid" style="border-color:#EF5350;color:#EF5350">🐉 RAID</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -4685,6 +4691,159 @@ document.getElementById('btn-predict').onclick=async()=>{
             showOverlay('LEADERBOARD',msg);
         }
     }catch(e){showOverlay('PREDICT','offline');}
+};
+
+// ====== REPUTATION ======
+document.getElementById('btn-rep').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('REP','select player first');return;}
+        const r=await fetch(API+'/api/reputation/'+uid);const d=await r.json();
+        let s='⚖ REPUTATION\n\n';
+        s+='Rep: '+d.reputation+' ('+d.tier+' / '+d.tier_en+')\n';
+        s+='"'+d.desc+'"\n';
+        s+='Shop discount: x'+d.shop_discount+'\n';
+        if(d.unlock)s+='Unlock: '+d.unlock+'\n';
+        s+='Choices made: '+d.choice_count+'\n';
+        if(d.recent_choices.length)s+='\nRecent:\n'+d.recent_choices.join('\n');
+        showOverlay('REPUTATION',s);
+    }catch(e){showOverlay('REP','offline');}
+};
+
+// ====== TREASURE HUNT ======
+document.getElementById('btn-treasure').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('TREASURE','select player first');return;}
+        const r=await fetch(API+'/api/treasure/'+uid);const d=await r.json();
+        let s='🗺 TREASURE HUNT\n\n';
+        s+='Free searches today: '+d.remaining+'\n';
+        s+='Search cost: '+d.cost+'g (if no free)';
+        const action=prompt(s+'\n\n1=Search, 0=Cancel','1');
+        if(!action||action==='0')return;
+        const r2=await fetch(API+'/pulse/treasure/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+        if(d2.error){showOverlay('TREASURE',d2.error);return;}
+        if(d2.type==='riddle'){
+            const ans=prompt('🧩 '+d2.question+'\nAnswer:','');
+            if(ans){
+                const r3=await fetch(API+'/pulse/treasure/solve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,riddle_id:d2.riddle_id,answer:parseInt(ans)})});const d3=await r3.json();
+                if(d3.correct){SND.promo();showOverlay('CORRECT','★ +'+d3.prize+'g');}else{showOverlay('WRONG','Answer was: '+d3.answer);}
+                loadPlayer(uid);
+            }
+        }else if(d2.type==='gold'){SND.promo();showOverlay('FOUND','+'+d2.amount+'g!');loadPlayer(uid);}
+        else if(d2.type==='loot'){SND.promo();showOverlay('FOUND',d2.item.name+' ['+d2.item.rarity+'] value:'+d2.item.value+'g');loadPlayer(uid);}
+        else{showOverlay('SEARCH',d2.message);}
+    }catch(e){showOverlay('TREASURE','offline');}
+};
+
+// ====== HERO TRAINING ======
+document.getElementById('btn-training').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('TRAIN','select player first');return;}
+        const r=await fetch(API+'/api/training/'+uid);const d=await r.json();
+        let s='🏋 HERO TRAINING\n\n';
+        s+='Slots: '+d.slots_used+'/'+d.max_slots+'\n';
+        if(d.active.length){
+            s+='Active missions:\n';
+            d.active.forEach((m,i)=>{s+='  '+(i+1)+'. '+m.name+' ('+Math.floor(m.remaining/60)+'min left)\n';});
+        }
+        if(d.ready.length){
+            s+='Ready to collect:\n';
+            d.ready.forEach((m,i)=>{s+='  ★ '+m.name+'\n';});
+            if(confirm(s+'\nCollect ready missions?')){
+                for(let i=0;i<d.ready.length;i++){
+                    await fetch(API+'/pulse/training/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,mission_idx:i})});
+                }
+                SND.promo();showOverlay('TRAINING','Missions collected!');loadPlayer(uid);
+                return;
+            }
+        }
+        s+='\nAvailable missions:\n';
+        d.available_missions.forEach((m,i)=>{s+=(i+1)+'. '+m.name+' ('+Math.floor(m.duration/60)+'min, '+m.xp+'xp)\n';});
+        const choice=prompt(s+'\nStart mission #: (0=cancel)','0');
+        if(!choice||choice==='0')return;
+        const m=d.available_missions[parseInt(choice)-1];
+        const r2=await fetch(API+'/pulse/training/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,mission_id:m.id})});const d2=await r2.json();
+        if(d2.error){showOverlay('TRAIN',d2.error);}else{showOverlay('TRAINING',d2.mission+' started! Returns in '+Math.floor(d2.duration/60)+'min');}
+    }catch(e){showOverlay('TRAIN','offline');}
+};
+
+// ====== AUCTION HOUSE ======
+document.getElementById('btn-auction').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('AUCTION','select player first');return;}
+        const action=prompt('🏷 AUCTION\n\n1=Browse, 2=Sell, 3=Bid','1');
+        if(!action)return;
+        if(action==='1'){
+            const r=await fetch(API+'/api/auction');const auctions=await r.json();
+            let s='AUCTION HOUSE\n\n';
+            auctions.slice(0,10).forEach((a,i)=>{
+                s+=(i+1)+'. '+a.item.name+' ['+a.item.rarity+'] — '+a.current_bid+'g ('+a.bids+' bids, '+Math.floor(a.ends_in/60)+'min left)\n';
+            });
+            if(!auctions.length)s+='Empty!';
+            const bid=prompt(s+'\nBid on # (0=cancel):','0');
+            if(bid&&bid!=='0'){
+                const a=auctions[parseInt(bid)-1];
+                const amt=prompt('Your bid (current: '+a.current_bid+'g):',a.current_bid+100);
+                if(!amt)return;
+                const r2=await fetch(API+'/pulse/auction/bid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,auction_id:a.id,amount:parseInt(amt)})});const d2=await r2.json();
+                if(d2.error){showOverlay('BID',d2.error);}else{SND.promo();showOverlay('BID PLACED','Bid: '+d2.bid+'g');loadPlayer(uid);}
+            }
+        }else if(action==='2'){
+            const r=await fetch(API+'/api/char/'+uid);const ch=await r.json();
+            let s='Your loot:\n';
+            (ch.loot||[]).slice(0,10).forEach((l,i)=>{s+=(i+1)+'. '+l.name+' ('+l.value+'g)\n';});
+            const idx=prompt(s+'\nSell item #:','1');if(!idx)return;
+            const price=prompt('Start price:','500');if(!price)return;
+            const dur=prompt('Duration (1800/3600/7200 sec):','3600');if(!dur)return;
+            const r2=await fetch(API+'/pulse/auction/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_idx:parseInt(idx)-1,price:parseInt(price),duration:parseInt(dur)})});const d2=await r2.json();
+            if(d2.error){showOverlay('AUCTION',d2.error);}else{showOverlay('LISTED','Item on auction for '+Math.floor(d2.ends_in/60)+'min');loadPlayer(uid);}
+        }else{
+            const r=await fetch(API+'/api/auction');const auctions=await r.json();
+            let s='Your active auctions:\n';
+            const mine=auctions.filter(a=>a.seller===uid);
+            mine.forEach((a,i)=>{s+=(i+1)+'. '+a.item.name+' — '+a.current_bid+'g ('+a.bids+' bids)\n';});
+            if(!mine.length)s+='None';
+            showOverlay('AUCTIONS',s);
+        }
+    }catch(e){showOverlay('AUCTION','offline');}
+};
+
+// ====== ENERGY ======
+document.getElementById('btn-energy').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('ENERGY','select player first');return;}
+        const r=await fetch(API+'/api/energy/'+uid);const d=await r.json();
+        let s='⚡ ENERGY\n\n';
+        s+='Energy: '+d.current+'/'+d.max+'\n';
+        s+='Potions: '+d.potions+'\n';
+        s+='Regen: '+d.regen_rate;
+        if(d.potions>0&&confirm(s+'\n\nUse potion? (+50 energy)')){
+            const r2=await fetch(API+'/pulse/energy/potion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+            if(d2.error){showOverlay('ENERGY',d2.error);}else{SND.promo();showOverlay('ENERGY RESTORED','+'+d2.restored+' energy\nCurrent: '+d2.current);loadPlayer(uid);}
+        }else{showOverlay('ENERGY',s);}
+    }catch(e){showOverlay('ENERGY','offline');}
+};
+
+// ====== CO-OP RAID ======
+document.getElementById('btn-raid').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('RAID','select player first');return;}
+        const r=await fetch(API+'/api/raid');const d=await r.json();
+        let s='🐉 CO-OP RAID\n\n';
+        s+=d.emoji+' '+d.boss+'\n';
+        s+='HP: '+d.hp+'/'+d.max_hp+' ('+d.pct+'%)\n';
+        s+='Time left: '+Math.floor(d.remaining/60)+'min\n';
+        if(d.top_dealers.length){
+            s+='\nTop damage:\n';
+            d.top_dealers.slice(0,5).forEach((e,i)=>{s+=(i+1)+'. UID '+e.uid+' — '+e.damage+'\n';});
+        }
+        if(d.hp>0&&confirm(s+'\nAttack boss?')){
+            const r2=await fetch(API+'/pulse/raid/attack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+            if(d2.error){showOverlay('RAID',d2.error);return;}
+            let msg='⚔ '+d2.damage+' damage dealt!\nBoss HP: '+d2.boss_hp;
+            if(d2.killed){SND.promo();msg+='\n\n★ BOSS KILLED! Reward: '+d2.reward+'g';}
+            showOverlay('RAID',msg);loadPlayer(uid);
+        }else{showOverlay('RAID',s);}
+    }catch(e){showOverlay('RAID','offline');}
 };
 
 render();

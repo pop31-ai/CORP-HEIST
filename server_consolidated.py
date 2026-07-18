@@ -76,6 +76,7 @@ from golden_econ import (
     PlayerSession, StateSnapshot, ActivityWatchdog,
     SkillPvP, QuestChains, CraftingSystem, PlayerTrading, StrategyMap,
     GuildSystem2, TournamentSystem, PetSystem, DailyChallenges, StockPrediction,
+    ReputationSystem, TreasureHunt, HeroTraining, AuctionHouse, EnergySystem, CoopRaid,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -2570,6 +2571,132 @@ async def handle_prediction_lb(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- REPUTATION / TREASURE / TRAINING / AUCTION / ENERGY / RAID ----
+
+async def handle_reputation(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(ReputationSystem.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_treasure_status(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(TreasureHunt.daily_searches(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_treasure_search(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = TreasureHunt.search(STATE, uid)
+    _hb(uid, "treasure_search", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_treasure_solve(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    riddle_id = int(d.get("riddle_id", 0))
+    answer = int(d.get("answer", 0))
+    result = TreasureHunt.solve_riddle(STATE, uid, riddle_id, answer)
+    _hb(uid, "treasure_riddle", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_training(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(HeroTraining.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_training_start(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    mission_id = d.get("mission_id", "scout")
+    result = HeroTraining.start_mission(STATE, uid, mission_id)
+    _hb(uid, f"train_{mission_id}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_training_collect(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    mission_idx = int(d.get("mission_idx", 0))
+    result = HeroTraining.collect_mission(STATE, uid, mission_idx)
+    _hb(uid, "train_collect", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_auction(request):
+    body = json.dumps(AuctionHouse.list_all()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_auction_create(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    item_idx = int(d.get("item_idx", 0))
+    price = int(d.get("price", 100))
+    duration = int(d.get("duration", 3600))
+    result = AuctionHouse.create(STATE, uid, item_idx, price, duration)
+    _hb(uid, f"auction_create_{price}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_auction_bid(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    auction_id = int(d.get("auction_id", 0))
+    amount = int(d.get("amount", 0))
+    result = AuctionHouse.bid(STATE, uid, auction_id, amount)
+    _hb(uid, f"auction_bid_{amount}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_auction_settle(request):
+    d = await request.json()
+    auction_id = int(d.get("auction_id", 0))
+    result = AuctionHouse.settle(STATE, auction_id)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_energy(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(EnergySystem.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_energy_potion(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = EnergySystem.use_potion(STATE, uid)
+    _hb(uid, "energy_potion", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_raid(request):
+    body = json.dumps(CoopRaid.status()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_raid_attack(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = CoopRaid.attack(STATE, uid)
+    _hb(uid, "raid_attack", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 def make_card_app():
     app = web.Application()
     app.router.add_get("/", handle_card_index)
@@ -2811,6 +2938,22 @@ def make_unified_app():
     app.router.add_post("/pulse/predict/make", pulse_prediction_make)
     app.router.add_post("/pulse/predict/settle", pulse_prediction_settle)
     app.router.add_get("/api/predict/lb", handle_prediction_lb)
+    # ---- REPUTATION / TREASURE / TRAINING / AUCTION / ENERGY / RAID ----
+    app.router.add_get("/api/reputation/{uid}", handle_reputation)
+    app.router.add_get("/api/treasure/{uid}", handle_treasure_status)
+    app.router.add_post("/pulse/treasure/search", pulse_treasure_search)
+    app.router.add_post("/pulse/treasure/solve", pulse_treasure_solve)
+    app.router.add_get("/api/training/{uid}", handle_training)
+    app.router.add_post("/pulse/training/start", pulse_training_start)
+    app.router.add_post("/pulse/training/collect", pulse_training_collect)
+    app.router.add_get("/api/auction", handle_auction)
+    app.router.add_post("/pulse/auction/create", pulse_auction_create)
+    app.router.add_post("/pulse/auction/bid", pulse_auction_bid)
+    app.router.add_post("/pulse/auction/settle", pulse_auction_settle)
+    app.router.add_get("/api/energy/{uid}", handle_energy)
+    app.router.add_post("/pulse/energy/potion", pulse_energy_potion)
+    app.router.add_get("/api/raid", handle_raid)
+    app.router.add_post("/pulse/raid/attack", pulse_raid_attack)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
