@@ -46,6 +46,9 @@ from golden_econ import (
     chest_status, open_chest, WorldBoss,
     Auction, GuildWar,
     bond_tiers, buy_bond, bond_status, claim_bonds,
+    deriv_quote, open_position, deriv_status, settle_derivs,
+    sky_status, sky_fund,
+    golden_hour, golden_multiplier,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -910,6 +913,81 @@ async def pulse_bond_claim(request):
     return web.json_response(result)
 
 
+# ---- DERIVATIVES (phi options/futures on corp stocks) ----
+async def handle_derivs(request):
+    """GET a quote chain (?sym=) or a player's positions (?uid=)."""
+    STATE.tick_market()
+    uid = request.match_info.get("uid", request.query.get("uid"))
+    sym = request.query.get("sym")
+    if uid is not None and not sym:
+        result = deriv_status(STATE, int(uid))
+    else:
+        name = (sym or STATE.stocks[0]["name"]).upper()
+        result = deriv_quote(STATE, name)
+        result["symbols"] = [s["name"] for s in STATE.stocks[:12]]
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_deriv_open(request):
+    """Pulse: open a derivative position (pay premium/margin in gold)."""
+    STATE.tick_market()
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = open_position(STATE, uid, str(d.get("sym", "")).upper(),
+                           d.get("kind", "call"), d.get("strike", 0),
+                           d.get("qty", 1))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_deriv_settle(request):
+    """Pulse: settle expired derivative positions (in-game gold)."""
+    STATE.tick_market()
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = settle_derivs(STATE, uid)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- GUILD SKYSCRAPER (collective build; corp-wide phi bonus) ----
+async def handle_skyscraper(request):
+    """GET skyscraper status for a corp (?corp= or ?uid=)."""
+    corp = request.query.get("corp")
+    if corp is None:
+        uid = int(request.query.get("uid", 1000))
+        c = STATE.chars.get(uid)
+        corp = (c["corp_id"] if c else 0)
+    result = sky_status(STATE, int(corp))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_sky_fund(request):
+    """Pulse: fund your corp skyscraper (gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = sky_fund(STATE, uid, d.get("amount", 0))
+    if "error" in result and "floors" not in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- GOLDEN HOUR (timed x-phi rewards window) ----
+async def handle_golden_hour(request):
+    """GET current Golden Hour status/countdown."""
+    result = golden_hour()
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -1123,6 +1201,13 @@ def make_unified_app():
     app.router.add_get("/api/bonds/{uid}", handle_bonds)
     app.router.add_post("/pulse/bond/buy", pulse_bond_buy)
     app.router.add_post("/pulse/bond/claim", pulse_bond_claim)
+    app.router.add_get("/api/derivs", handle_derivs)
+    app.router.add_get("/api/derivs/{uid}", handle_derivs)
+    app.router.add_post("/pulse/deriv/open", pulse_deriv_open)
+    app.router.add_post("/pulse/deriv/settle", pulse_deriv_settle)
+    app.router.add_get("/api/skyscraper", handle_skyscraper)
+    app.router.add_post("/pulse/skyscraper", pulse_sky_fund)
+    app.router.add_get("/api/golden-hour", handle_golden_hour)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

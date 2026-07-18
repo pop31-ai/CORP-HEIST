@@ -1066,6 +1066,211 @@ def claim_bonds(state, uid, now=None):
 
 
 # ============================================================
+# DERIVATIVES EXCHANGE (phi options & futures on corp stocks)
+# ============================================================
+
+# Contract expires after a phi-scaled window; strike/premium follow phi.
+DERIV_EXPIRY = int(1800 * PHI)     # ~48.5 min lock
+DERIV_PREMIUM_RATE = PHI - 1       # 0.618 of intrinsic-ish, scales premium
+
+def _stock_by_name(state, name):
+    for s in getattr(state, "stocks", []):
+        if s["name"] == name:
+            return s
+    return None
+
+def deriv_quote(state, name):
+    """Quote a phi option/future chain for a stock."""
+    s = _stock_by_name(state, name)
+    if not s:
+        return {"error": "unknown symbol"}
+    spot = s["price"]
+    # phi-laddered strikes around spot
+    strikes = [round(spot / PHI, 2), round(spot, 2), round(spot * PHI, 2)]
+    chain = []
+    for k in strikes:
+        # premium scales with distance and phi
+        call_prem = round(max(spot - k, 0) + spot * DERIV_PREMIUM_RATE / PHI, 2)
+        put_prem = round(max(k - spot, 0) + spot * DERIV_PREMIUM_RATE / PHI, 2)
+        chain.append({"strike": k, "call_premium": call_prem, "put_premium": put_prem})
+    return {"symbol": name, "spot": spot, "delta": s.get("delta", 0),
+            "chain": chain, "future_price": round(spot * (1 + DERIV_PREMIUM_RATE / (PHI ** 3)), 2),
+            "expiry_seconds": DERIV_EXPIRY,
+            "note": "Derivatives settle in in-game gold only."}
+
+def open_position(state, uid, name, kind, strike, qty, now=None):
+    """kind: 'call' | 'put' | 'future'. Pay premium/margin in gold."""
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    s = _stock_by_name(state, name)
+    if not s:
+        return {"error": "unknown symbol"}
+    kind = str(kind).lower()
+    qty = max(1, int(qty))
+    spot = s["price"]
+    if kind == "future":
+        entry = round(spot * (1 + DERIV_PREMIUM_RATE / (PHI ** 3)), 2)
+        cost = round(entry * qty / PHI, 2)      # margin = 1/phi of notional
+        strike = entry
+    elif kind in ("call", "put"):
+        strike = round(float(strike), 2)
+        prem = (max(spot - strike, 0) if kind == "call" else max(strike - spot, 0)) + spot * DERIV_PREMIUM_RATE / PHI
+        cost = round(prem * qty, 2)
+    else:
+        return {"error": "bad kind"}
+    if me.get("gold", 0) < cost:
+        return {"error": "not enough gold", "cost": cost}
+    me["gold"] -= int(math.ceil(cost))
+    pos = {"id": now * 1000 + random.randint(0, 999), "symbol": name,
+           "kind": kind, "strike": strike, "qty": qty,
+           "entry_spot": spot, "cost": int(math.ceil(cost)),
+           "expires": now + DERIV_EXPIRY}
+    me.setdefault("derivs", []).append(pos)
+    state.mark_dirty(uid)
+    return {"ok": True, "position": pos, "gold": me["gold"]}
+
+def _settle_value(pos, spot):
+    q = pos["qty"]
+    if pos["kind"] == "call":
+        return max(spot - pos["strike"], 0) * q
+    if pos["kind"] == "put":
+        return max(pos["strike"] - spot, 0) * q
+    # future: profit vs entry + return margin
+    return (spot - pos["strike"]) * q / PHI + pos["cost"]
+
+def deriv_status(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    out = []
+    for p in me.get("derivs", []):
+        s = _stock_by_name(state, p["symbol"])
+        spot = s["price"] if s else p["entry_spot"]
+        val = round(_settle_value(p, spot), 2)
+        out.append({**p, "spot": spot, "settle_value": val,
+                    "pnl": round(val - (0 if p["kind"] == "future" else p["cost"]), 2),
+                    "expired": now >= p["expires"],
+                    "seconds_left": max(0, p["expires"] - now)})
+    return {"positions": out, "gold": me.get("gold", 0),
+            "note": "Derivatives settle in in-game gold only."}
+
+def settle_derivs(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    derivs = me.get("derivs", [])
+    due = [p for p in derivs if now >= p["expires"]]
+    total = 0
+    for p in due:
+        s = _stock_by_name(state, p["symbol"])
+        spot = s["price"] if s else p["entry_spot"]
+        total += int(max(0, _settle_value(p, spot)))
+    me["derivs"] = [p for p in derivs if now < p["expires"]]
+    if total:
+        me["gold"] = me.get("gold", 0) + total
+        state.mark_dirty(uid)
+    return {"settled_count": len(due), "payout": total, "gold": me.get("gold", 0),
+            "note": "Derivatives settle in in-game gold only."}
+
+
+# ============================================================
+# GUILD SKYSCRAPER (collective build; each floor gives phi bonus)
+# ============================================================
+
+FLOOR_BASE_COST = 100_000          # gold to fund floor 1
+SKY_MAX_FLOORS = 34                # fibonacci-ish cap
+
+def _sky(state, corp_id):
+    if not hasattr(state, "skyscrapers"):
+        state.skyscrapers = {}
+    c = corp_id % len(CORPS)
+    if c not in state.skyscrapers:
+        state.skyscrapers[c] = {"corp": c, "floors": 0, "progress": 0, "contributions": {}}
+    return state.skyscrapers[c]
+
+def floor_cost(floor):
+    """Cost of the NEXT floor scales by phi."""
+    return int(FLOOR_BASE_COST * (PHI ** (floor / PHI)))
+
+def sky_bonus_pct(floors):
+    """Total corp-wide bonus % from built floors (phi-diminishing sum)."""
+    total = 0.0
+    for f in range(floors):
+        total += (PHI - 1) * (1 / (PHI ** (f / (PHI * 2))))
+    return round(total, 2)
+
+def sky_status(state, corp_id):
+    sk = _sky(state, corp_id)
+    nxt = floor_cost(sk["floors"])
+    top = sorted(sk["contributions"].items(), key=lambda x: -x[1])[:5]
+    return {"corp": CORPS[sk["corp"]], "floors": sk["floors"],
+            "max_floors": SKY_MAX_FLOORS,
+            "next_floor_cost": nxt, "progress": sk["progress"],
+            "progress_pct": round(100 * sk["progress"] / nxt, 2) if nxt else 100,
+            "bonus_pct": sky_bonus_pct(sk["floors"]),
+            "top_builders": [{"uid": int(u), "gold": g} for u, g in top],
+            "note": "Skyscraper bonus applies to the whole corp; funded in gold."}
+
+def sky_fund(state, uid, amount):
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    amount = int(amount)
+    if amount <= 0:
+        return {"error": "bad amount"}
+    if me.get("gold", 0) < amount:
+        return {"error": "not enough gold"}
+    sk = _sky(state, me["corp_id"])
+    if sk["floors"] >= SKY_MAX_FLOORS:
+        return {"error": "skyscraper complete", **sky_status(state, me["corp_id"])}
+    me["gold"] -= amount
+    sk["progress"] += amount
+    sk["contributions"][str(uid)] = sk["contributions"].get(str(uid), 0) + amount
+    built = 0
+    while sk["floors"] < SKY_MAX_FLOORS and sk["progress"] >= floor_cost(sk["floors"]):
+        sk["progress"] -= floor_cost(sk["floors"])
+        sk["floors"] += 1
+        built += 1
+    state.mark_dirty(uid)
+    res = sky_status(state, me["corp_id"])
+    res["ok"] = True
+    res["funded"] = amount
+    res["floors_built"] = built
+    res["gold"] = me["gold"]
+    return res
+
+
+# ============================================================
+# GOLDEN HOUR (timed x-phi rewards window with countdown)
+# ============================================================
+
+GH_CYCLE = int(3600 * PHI)         # a golden hour every ~97 min
+GH_DURATION = int(600 * PHI)       # lasts ~16 min
+GH_MULT = PHI                      # rewards x phi during the window
+
+def golden_hour(now=None):
+    now = now or int(time.time())
+    phase = now % GH_CYCLE
+    active = phase < GH_DURATION
+    if active:
+        return {"active": True, "multiplier": round(GH_MULT, 6),
+                "seconds_left": GH_DURATION - phase,
+                "next_in": 0,
+                "note": "All gold rewards are multiplied by phi during Golden Hour."}
+    return {"active": False, "multiplier": 1.0,
+            "seconds_left": 0,
+            "next_in": GH_CYCLE - phase,
+            "note": "Golden Hour arrives on a phi cycle."}
+
+def golden_multiplier(now=None):
+    return GH_MULT if golden_hour(now)["active"] else 1.0
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 

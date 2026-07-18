@@ -53,6 +53,9 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-auction" style="border-color:#FF9B00;color:#FF9B00">🔨 AUCTION</button>
 <button id="btn-guildwar" style="border-color:#FF4B4B;color:#FF4B4B">⚔ GUILD WAR</button>
 <button id="btn-bonds" style="border-color:#00FF8C;color:#00FF8C">💰 φ-BONDS</button>
+<button id="btn-derivs" style="border-color:#00E5FF;color:#00E5FF">📈 DERIVATIVES</button>
+<button id="btn-sky" style="border-color:#FFC800;color:#FFC800">🏗 SKYSCRAPER</button>
+<button id="btn-golden" style="border-color:#FFE24B;color:#FFE24B">⏳ GOLDEN HOUR</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -2434,6 +2437,135 @@ async function claimBonds(){
         showBonds();loadPlayer(_uid());
     }catch(e){}
 }
+// ---- DERIVATIVES (phi options/futures) ----
+let _dvSym=null;
+async function showDerivs(sym){
+    try{
+        const q=sym?('?sym='+sym):'';
+        const r=await fetch(API+'/api/derivs'+q);const d=await r.json();
+        if(d.error){showOverlay('Derivatives',d.error);return;}
+        _dvSym=d.symbol;
+        const syms=d.symbols.map(s=>'<button onclick="showDerivs(\''+s+'\')" style="background:'+(s===d.symbol?'#FFC800':'#1a1a2e')+';color:'+(s===d.symbol?'#05060c':'#FFC800')+';border:1px solid #FFC800;font-size:8px;padding:1px 4px;margin:1px;cursor:pointer;font-family:monospace">'+s+'</button>').join('');
+        const rows=d.chain.map(c=>
+            '<tr><td style="text-align:center">'+
+              '<button onclick="openDeriv(\''+d.symbol+'\',\'call\','+c.strike+')" style="background:#00FF8C;color:#05060c;border:0;font-size:8px;padding:1px 4px;cursor:pointer;font-family:monospace">C '+c.call_premium+'</button></td>'+
+            '<td style="color:#FFC800;text-align:center;font-weight:bold">'+c.strike+'</td>'+
+            '<td style="text-align:center">'+
+              '<button onclick="openDeriv(\''+d.symbol+'\',\'put\','+c.strike+')" style="background:#FF3B3B;color:#fff;border:0;font-size:8px;padding:1px 4px;cursor:pointer;font-family:monospace">P '+c.put_premium+'</button></td></tr>'
+        ).join('');
+        openPanel('<b>📈 DERIVATIVES · '+d.symbol+'</b>'+
+            '<div style="margin:3px 0">'+syms+'</div>'+
+            '<div style="color:#888;font-size:9px">spot $'+d.spot+' · Δ'+d.delta+' · future $'+d.future_price+' · expiry '+_fmtLeft(d.expiry_seconds)+'</div>'+
+            '<table style="width:100%;font-size:9px;font-family:monospace;margin-top:4px">'+
+            '<tr style="color:#555"><td style="text-align:center">CALL</td><td style="text-align:center">STRIKE</td><td style="text-align:center">PUT</td></tr>'+rows+'</table>'+
+            '<div style="margin-top:5px"><button onclick="openDeriv(\''+d.symbol+'\',\'future\',0)" style="background:#00E5FF;color:#05060c;border:0;font-size:9px;padding:2px 8px;cursor:pointer;font-family:monospace">BUY FUTURE $'+d.future_price+'</button> '+
+            '<button onclick="showDerivPositions()" style="background:#1a1a2e;color:#00E5FF;border:1px solid #00E5FF;font-size:9px;padding:2px 8px;cursor:pointer;font-family:monospace">MY POSITIONS</button></div>'+
+            '<div style="color:#555;font-size:8px;margin-top:3px">'+(d.note||'')+'</div>',
+            14000);
+    }catch(e){showOverlay('Derivatives','offline');}
+}
+async function openDeriv(sym,kind,strike){
+    const qty=parseInt(prompt(kind.toUpperCase()+' '+sym+' — quantity:','1')||'0',10);
+    if(!qty)return;
+    try{
+        const r=await fetch(API+'/pulse/deriv/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),sym:sym,kind:kind,strike:strike,qty:qty})});
+        const d=await r.json();
+        if(d.error){showOverlay('📈 '+kind.toUpperCase(),d.error+(d.cost?(' (cost '+d.cost+')'):''));return;}
+        SND.click();showOverlay('📈 POSITION OPEN',kind.toUpperCase()+' '+sym+' x'+qty+'\ncost '+fmt(d.position.cost)+'g\ngold '+fmt(d.gold)+'g');
+        loadPlayer(_uid());
+    }catch(e){}
+}
+async function showDerivPositions(){
+    try{
+        const r=await fetch(API+'/api/derivs/'+_uid());const d=await r.json();
+        let rows=(d.positions||[]).map(p=>
+            '<tr><td style="color:#FFC800">'+p.kind.toUpperCase()+' '+p.symbol+'</td>'+
+            '<td style="color:#888;text-align:right">x'+p.qty+' @'+p.strike+'</td>'+
+            '<td style="color:'+(p.pnl>=0?'#00FF8C':'#FF3B3B')+';text-align:right">'+(p.pnl>=0?'+':'')+fmt(Math.round(p.pnl))+'g</td>'+
+            '<td style="color:'+(p.expired?'#00FF8C':'#888')+';text-align:right">'+(p.expired?'DUE':_fmtLeft(p.seconds_left))+'</td></tr>'
+        ).join('');
+        if(!rows)rows='<tr><td colspan="4" style="color:#555">no open positions</td></tr>';
+        const hasDue=(d.positions||[]).some(p=>p.expired);
+        openPanel('<b>📈 MY POSITIONS</b>'+
+            '<div style="color:#888;font-size:9px">gold '+fmt(d.gold)+'g</div>'+
+            '<table style="width:100%;font-size:9px;font-family:monospace;margin-top:3px">'+
+            '<tr style="color:#555"><td>CONTRACT</td><td style="text-align:right">POS</td><td style="text-align:right">PnL</td><td style="text-align:right">EXP</td></tr>'+rows+'</table>'+
+            (hasDue?'<div style="margin-top:5px"><button onclick="settleDerivs()" style="background:#FFC800;color:#05060c;border:0;font-size:10px;padding:3px 10px;cursor:pointer;font-family:monospace">SETTLE EXPIRED</button></div>':''),
+            13000);
+    }catch(e){showOverlay('Positions','offline');}
+}
+async function settleDerivs(){
+    try{
+        const r=await fetch(API+'/pulse/deriv/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        SND.promo();triggerWaterfall();
+        showOverlay('📈 SETTLED','+'+fmt(d.payout)+'g from '+d.settled_count+' contract(s)\ngold '+fmt(d.gold)+'g');
+        loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- GUILD SKYSCRAPER ----
+function _skyDraw(floors,max){
+    let bars='';
+    for(let i=max-1;i>=0;i--){
+        const on=i<floors;
+        const w=38-Math.floor(i*(20/max));
+        bars+='<div style="margin:0 auto;width:'+w+'px;height:4px;background:'+(on?'linear-gradient(90deg,#FFC800,#FF9B00)':'#1a1a2e')+';border:1px solid '+(on?'#FFC800':'#222')+'"></div>';
+    }
+    return '<div style="text-align:center;margin:4px 0">'+bars+'<div style="width:52px;height:3px;background:#333;margin:2px auto"></div></div>';
+}
+async function showSky(){
+    try{
+        const r=await fetch(API+'/api/skyscraper?uid='+_uid());const d=await r.json();
+        const top=(d.top_builders||[]).map((b,i)=>'#'+(i+1)+' P'+b.uid+' '+fmt(b.gold)+'g').join('  ');
+        openPanel('<b>🏗 '+d.corp+' TOWER</b>'+
+            _skyDraw(d.floors,d.max_floors)+
+            '<div style="color:#FFC800;text-align:center;font-size:11px">'+d.floors+' / '+d.max_floors+' floors</div>'+
+            '<div style="color:#00FF8C;text-align:center;font-size:10px">corp bonus +'+d.bonus_pct+'%</div>'+
+            '<div style="color:#888;font-size:9px;margin-top:4px">next floor: '+fmt(d.next_floor_cost)+'g  ('+d.progress_pct+'% funded)</div>'+
+            '<div style="background:#1a1a2e;height:6px;border-radius:3px;overflow:hidden;margin:2px 0"><div style="width:'+d.progress_pct+'%;height:100%;background:#FFC800"></div></div>'+
+            '<div style="color:#555;font-size:8px">'+(top||'no builders yet')+'</div>'+
+            '<div style="margin-top:6px;text-align:center">'+
+            [10000,100000,1000000].map(a=>'<button onclick="fundSky('+a+')" style="background:#1a1a2e;color:#FFC800;border:1px solid #FFC800;font-size:9px;padding:2px 7px;margin:1px;cursor:pointer;font-family:monospace">+'+fmt(a)+'g</button>').join('')+
+            '</div><div style="color:#555;font-size:8px;margin-top:3px">'+(d.note||'')+'</div>',
+            15000);
+    }catch(e){showOverlay('Skyscraper','offline');}
+}
+async function fundSky(amount){
+    try{
+        const r=await fetch(API+'/pulse/skyscraper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),amount:amount})});
+        const d=await r.json();
+        if(d.error&&d.floors===undefined){showOverlay('🏗 FUND',d.error);return;}
+        SND.click();
+        if(d.floors_built>0){SND.promo();triggerWaterfall();}
+        showSky();loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- GOLDEN HOUR ----
+let _ghTimer=null;
+async function showGoldenHour(){
+    try{
+        const r=await fetch(API+'/api/golden-hour');const d=await r.json();
+        openPanel('<div id="gh-body">'+_ghInner(d)+'</div>',20000);
+        if(_ghTimer)clearInterval(_ghTimer);
+        _ghTimer=setInterval(async()=>{
+            const p=document.getElementById('gh-body');if(!p){clearInterval(_ghTimer);return;}
+            try{const rr=await fetch(API+'/api/golden-hour');p.innerHTML=_ghInner(await rr.json());}catch(e){}
+        },1000);
+    }catch(e){showOverlay('Golden Hour','offline');}
+}
+function _ghInner(d){
+    if(d.active){
+        return '<b style="color:#FFE24B">⏳ GOLDEN HOUR ACTIVE</b>'+
+        '<div style="color:#FFC800;font-size:22px;text-align:center;margin:8px 0;text-shadow:0 0 12px #FFC800">×'+d.multiplier.toFixed(3)+' GOLD</div>'+
+        '<div style="color:#00FF8C;text-align:center;font-size:12px">ends in '+_fmtCd(d.seconds_left)+'</div>'+
+        '<div style="color:#555;font-size:8px;margin-top:6px">'+d.note+'</div>';
+    }
+    return '<b>⏳ GOLDEN HOUR</b>'+
+    '<div style="color:#888;text-align:center;margin:8px 0">next window in</div>'+
+    '<div style="color:#FFC800;font-size:20px;text-align:center">'+_fmtCd(d.next_in)+'</div>'+
+    '<div style="color:#555;font-size:8px;margin-top:6px">'+d.note+'</div>';
+}
+function _fmtCd(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;return (h?h+':':'')+String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');}
 function showOverlay(title,text){
     _applyPanel('<b>'+title+'</b><pre>'+text+'</pre>',6000);
 }
@@ -2474,6 +2606,9 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bau=document.getElementById('btn-auction');if(bau)bau.onclick=showAuction;}
 {const bgw=document.getElementById('btn-guildwar');if(bgw)bgw.onclick=showGuildWar;}
 {const bbo=document.getElementById('btn-bonds');if(bbo)bbo.onclick=showBonds;}
+{const bdv=document.getElementById('btn-derivs');if(bdv)bdv.onclick=()=>showDerivs();}
+{const bsk=document.getElementById('btn-sky');if(bsk)bsk.onclick=showSky;}
+{const bgh=document.getElementById('btn-golden');if(bgh)bgh.onclick=showGoldenHour;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
 {const ci=document.getElementById('chat-in');if(ci)ci.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});}
