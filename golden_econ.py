@@ -790,6 +790,282 @@ class WorldBoss:
 
 
 # ============================================================
+# AUCTION HOUSE (list an item, others outbid; in-game gold only)
+# ============================================================
+
+AUCTION_DURATION = 3600          # seconds a listing stays open
+AUCTION_MIN_INCREMENT = PHI       # each bid must beat current by * phi-ish
+
+class Auction:
+    """Player auctions. State on state.auctions (list of dicts).
+    Bids and payouts are in-game gold only."""
+
+    def __init__(self, state):
+        self.state = state
+        if not hasattr(state, "auctions"):
+            state.auctions = []
+        if not hasattr(state, "_auction_seq"):
+            state._auction_seq = 0
+
+    def _expire(self, now):
+        """Settle auctions that ran out of time."""
+        for a in self.state.auctions:
+            if a["status"] == "open" and now >= a["ends"]:
+                self._settle(a)
+
+    def _settle(self, a):
+        a["status"] = "sold" if a.get("top_bidder") else "expired"
+        seller = self.state.chars.get(a["seller"])
+        if a.get("top_bidder"):
+            # gold already escrowed from bidder at bid time -> pay seller
+            if seller is not None:
+                seller["gold"] = seller.get("gold", 0) + a["top_bid"]
+                self.state.mark_dirty(a["seller"])
+            # give item to winner
+            winner = self.state.chars.get(a["top_bidder"])
+            if winner is not None:
+                winner.setdefault("loot", []).append(dict(a["item"]))
+                winner["net_worth"] = winner.get("net_worth", 0) + a["item"].get("value", 0)
+                self.state.mark_dirty(a["top_bidder"])
+        else:
+            # no bids: return item to seller
+            if seller is not None:
+                seller.setdefault("loot", []).append(dict(a["item"]))
+                seller["net_worth"] = seller.get("net_worth", 0) + a["item"].get("value", 0)
+                self.state.mark_dirty(a["seller"])
+
+    def list_item(self, uid, code, start_price, now=None):
+        now = now or int(time.time())
+        self._expire(now)
+        me = self.state.chars.get(uid)
+        if not me or not me.get("loot"):
+            return {"error": "no loot"}
+        item = next((l for l in me["loot"] if l["code"] == code), None)
+        if not item:
+            return {"error": "item not found"}
+        me["loot"].remove(item)
+        me["net_worth"] = me.get("net_worth", 0) - item.get("value", 0)
+        self.state._auction_seq += 1
+        start = max(1, int(start_price or int(item.get("value", 10) / PHI)))
+        a = {"id": self.state._auction_seq, "seller": uid, "item": dict(item),
+             "start_price": start, "top_bid": 0, "top_bidder": None,
+             "ends": now + AUCTION_DURATION, "status": "open"}
+        self.state.auctions.append(a)
+        self.state.mark_dirty(uid)
+        return {"ok": True, "auction": self._public(a, now)}
+
+    def bid(self, uid, auction_id, amount, now=None):
+        now = now or int(time.time())
+        self._expire(now)
+        me = self.state.chars.get(uid)
+        if not me:
+            return {"error": "no char"}
+        a = next((x for x in self.state.auctions if x["id"] == auction_id), None)
+        if not a or a["status"] != "open":
+            return {"error": "auction closed"}
+        if a["seller"] == uid:
+            return {"error": "cannot bid on your own listing"}
+        min_bid = max(a["start_price"], int(a["top_bid"] * AUCTION_MIN_INCREMENT) + 1)
+        amount = int(amount)
+        if amount < min_bid:
+            return {"error": f"bid must be >= {min_bid}", "min_bid": min_bid}
+        if me.get("gold", 0) < amount:
+            return {"error": "not enough gold"}
+        # refund previous top bidder
+        prev = self.state.chars.get(a["top_bidder"]) if a["top_bidder"] else None
+        if prev is not None:
+            prev["gold"] = prev.get("gold", 0) + a["top_bid"]
+            self.state.mark_dirty(a["top_bidder"])
+        # escrow new bid
+        me["gold"] -= amount
+        a["top_bid"] = amount
+        a["top_bidder"] = uid
+        self.state.mark_dirty(uid)
+        return {"ok": True, "auction": self._public(a, now), "gold": me["gold"]}
+
+    def _public(self, a, now):
+        return {"id": a["id"], "seller": a["seller"],
+                "item": a["item"], "start_price": a["start_price"],
+                "top_bid": a["top_bid"], "top_bidder": a["top_bidder"],
+                "seconds_left": max(0, a["ends"] - now),
+                "min_next": max(a["start_price"], int(a["top_bid"] * AUCTION_MIN_INCREMENT) + 1),
+                "status": a["status"]}
+
+    def listings(self, now=None):
+        now = now or int(time.time())
+        self._expire(now)
+        return {"auctions": [self._public(a, now) for a in self.state.auctions
+                             if a["status"] == "open"],
+                "note": "Bids are in-game gold only. No real money."}
+
+
+# ============================================================
+# GUILD WARS (two corps race to beat a shared war-boss)
+# ============================================================
+
+WAR_BASE_HP = 20_000_000
+
+class GuildWar:
+    """Two corps race to deal the most damage to a shared war boss
+    within a phi-week. Winner corp splits a phi prize pool (in-game gold)."""
+
+    def __init__(self, state):
+        self.state = state
+        if not hasattr(state, "guild_war"):
+            state.guild_war = None
+
+    def _war(self):
+        season, week = current_season()
+        gw = self.state.guild_war
+        if not gw or gw.get("season_week") != [season, week]:
+            # pair corps 0v1 rotating by week
+            a = (week * 2) % len(CORPS)
+            b = (a + 1) % len(CORPS)
+            hp = int(WAR_BASE_HP * (PHI ** (week / PHI)))
+            gw = {
+                "corp_a": a, "corp_b": b,
+                "name_a": CORPS[a], "name_b": CORPS[b],
+                "hp": hp, "max_hp": hp,
+                "dmg_a": 0, "dmg_b": 0,
+                "season_week": [season, week],
+                "prize_pool": int(500_000 * (PHI ** (week / PHI))),
+                "contributions": {},   # uid -> dmg
+            }
+            self.state.guild_war = gw
+        return gw
+
+    def status(self):
+        gw = self._war()
+        total = gw["dmg_a"] + gw["dmg_b"] or 1
+        return {
+            "boss": "War Titan",
+            "corp_a": gw["name_a"], "corp_b": gw["name_b"],
+            "dmg_a": gw["dmg_a"], "dmg_b": gw["dmg_b"],
+            "share_a": round(100 * gw["dmg_a"] / total, 2),
+            "share_b": round(100 * gw["dmg_b"] / total, 2),
+            "hp": gw["hp"], "max_hp": gw["max_hp"],
+            "pct": round(100 * gw["hp"] / gw["max_hp"], 2),
+            "leader": (gw["name_a"] if gw["dmg_a"] >= gw["dmg_b"] else gw["name_b"]),
+            "prize_pool": gw["prize_pool"],
+            "defeated": gw["hp"] <= 0,
+            "note": "Guild war rewards are in-game gold only.",
+        }
+
+    def attack(self, uid):
+        me = self.state.chars.get(uid)
+        if not me:
+            return {"error": "no char"}
+        gw = self._war()
+        corp = me["corp_id"] % len(CORPS)
+        if corp not in (gw["corp_a"], gw["corp_b"]):
+            return {"error": "your corp is not in this war",
+                    "corp_a": gw["name_a"], "corp_b": gw["name_b"]}
+        if gw["hp"] <= 0:
+            return {"error": "war already decided", **self.status()}
+        mults = passive_bonus(me.get("passives", [0] * 12))
+        pres = prestige_multiplier(me.get("prestige", 0))
+        base = hero_power(100 + me.get("level", 1) * 10,
+                          me.get("hero_levels", [1] * 12)[me.get("hero_id", 0) % 12])
+        dmg = int(base * mults.get("power_mult", 1.0) * pres *
+                  random.uniform(1 / PHI, PHI))
+        gw["hp"] = max(0, gw["hp"] - dmg)
+        if corp == gw["corp_a"]:
+            gw["dmg_a"] += dmg
+        else:
+            gw["dmg_b"] += dmg
+        gw["contributions"][str(uid)] = gw["contributions"].get(str(uid), 0) + dmg
+        self.state.mark_dirty(uid)
+        result = {"damage": dmg, "for_corp": CORPS[corp], **self.status()}
+        if gw["hp"] <= 0:
+            win_corp = gw["corp_a"] if gw["dmg_a"] >= gw["dmg_b"] else gw["corp_b"]
+            # payout winners by phi-share of their contribution
+            winners = [(int(u), d) for u, d in gw["contributions"].items()
+                       if self.state.chars.get(int(u), {}).get("corp_id", -1) % len(CORPS) == win_corp]
+            winners.sort(key=lambda x: -x[1])
+            pool = gw["prize_pool"]
+            for rank, (u, _d) in enumerate(winners):
+                share = int(pool * (PHI - 1) / (PHI ** rank))
+                ch = self.state.chars.get(u)
+                if ch is not None:
+                    ch["gold"] = ch.get("gold", 0) + share
+                    self.state.mark_dirty(u)
+            result["winner"] = CORPS[win_corp]
+            result["winners_paid"] = len(winners)
+        return result
+
+
+# ============================================================
+# INVESTMENT BONDS (phi-yield on a timer; in-game gold)
+# ============================================================
+
+BOND_TIERS = [
+    # name, min_principal, phi_power (yield=principal*(phi**power)-principal), lock_seconds
+    ("Bronze φ-Bond",   1_000,   0.15, 3600),
+    ("Silver φ-Bond",   10_000,  0.30, 4 * 3600),
+    ("Gold φ-Bond",     100_000, 0.50, 12 * 3600),
+    ("Platinum φ-Bond", 1_000_000, 0.80, 24 * 3600),
+]
+
+def bond_tiers():
+    out = []
+    for name, minp, power, lock in BOND_TIERS:
+        yld = round((PHI ** power) - 1, 4)
+        out.append({"name": name, "min_principal": minp,
+                    "yield_pct": round(yld * 100, 2), "lock_seconds": lock})
+    return {"tiers": out, "note": "Bond yields are in-game gold only."}
+
+def buy_bond(state, uid, tier_idx, principal, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    if tier_idx < 0 or tier_idx >= len(BOND_TIERS):
+        return {"error": "bad tier"}
+    name, minp, power, lock = BOND_TIERS[tier_idx]
+    principal = int(principal)
+    if principal < minp:
+        return {"error": f"minimum principal is {minp}"}
+    if me.get("gold", 0) < principal:
+        return {"error": "not enough gold"}
+    me["gold"] -= principal
+    payout = int(principal * (PHI ** power))
+    bond = {"id": now * 1000 + random.randint(0, 999), "tier": tier_idx,
+            "name": name, "principal": principal, "payout": payout,
+            "matures": now + lock}
+    me.setdefault("bonds", []).append(bond)
+    state.mark_dirty(uid)
+    return {"ok": True, "bond": bond, "gold": me["gold"]}
+
+def bond_status(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    bonds = me.get("bonds", [])
+    out = []
+    for b in bonds:
+        out.append({**b, "matured": now >= b["matures"],
+                    "seconds_left": max(0, b["matures"] - now)})
+    return {"bonds": out, "gold": me.get("gold", 0), **bond_tiers()}
+
+def claim_bonds(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    bonds = me.get("bonds", [])
+    matured = [b for b in bonds if now >= b["matures"]]
+    total = sum(b["payout"] for b in matured)
+    me["bonds"] = [b for b in bonds if now < b["matures"]]
+    if total:
+        me["gold"] = me.get("gold", 0) + total
+        state.mark_dirty(uid)
+    return {"claimed_count": len(matured), "payout": total,
+            "gold": me.get("gold", 0),
+            "note": "Bond payouts are in-game gold only."}
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 

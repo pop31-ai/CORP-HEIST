@@ -50,6 +50,9 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-chat" style="border-color:#00FF8C;color:#00FF8C">💬 CORP CHAT</button>
 <button id="btn-craft" style="border-color:#B14BFF;color:#B14BFF">⚗ CRAFT</button>
 <button id="btn-orderbook" style="border-color:#FFC800;color:#FFC800">📖 ORDER BOOK</button>
+<button id="btn-auction" style="border-color:#FF9B00;color:#FF9B00">🔨 AUCTION</button>
+<button id="btn-guildwar" style="border-color:#FF4B4B;color:#FF4B4B">⚔ GUILD WAR</button>
+<button id="btn-bonds" style="border-color:#00FF8C;color:#00FF8C">💰 φ-BONDS</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -2297,6 +2300,140 @@ function _applyPanel(html,ttl){
         setTimeout(paint,180);
     }else paint();
 }
+// ---- AUCTION HOUSE (list / outbid; in-game gold only) ----
+function _fmtLeft(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h+'h'+String(m).padStart(2,'0')+'m';}
+async function showAuction(){
+    try{
+        const r=await fetch(API+'/api/auctions');const d=await r.json();
+        const RN=['C','U','R','E','L','◆'];
+        let rows=d.auctions.map(a=>{
+            const it=a.item;
+            const mine=(String(a.seller)===String(_uid()));
+            return '<tr>'+
+              '<td style="color:#FFC800">'+RN[it.rarity||0]+' '+(it.code||'item')+'</td>'+
+              '<td style="color:#00FF8C;text-align:right">'+fmt(a.top_bid||a.start_price)+'g</td>'+
+              '<td style="color:#888;text-align:right">'+_fmtLeft(a.seconds_left)+'</td>'+
+              '<td>'+(mine?'<span style="color:#555">yours</span>':
+                 '<button onclick="bidAuction('+a.id+','+a.min_next+')" style="background:#FF9B00;color:#05060c;border:0;font-size:8px;padding:1px 5px;cursor:pointer;font-family:monospace">BID '+fmt(a.min_next)+'</button>')+'</td>'+
+              '</tr>';
+        }).join('');
+        if(!rows)rows='<tr><td colspan="4" style="color:#555">no open listings</td></tr>';
+        openPanel('<b>🔨 AUCTION HOUSE</b>'+
+            '<div style="color:#888;font-size:9px;margin:2px 0">bids in gold only · +φ min increment</div>'+
+            '<table style="width:100%;font-size:9px;font-family:monospace">'+
+            '<tr style="color:#555"><td>ITEM</td><td style="text-align:right">BID</td><td style="text-align:right">LEFT</td><td></td></tr>'+
+            rows+'</table>'+
+            '<div style="margin-top:6px"><button onclick="listAuctionPrompt()" style="background:#1a1a2e;color:#FF9B00;border:1px solid #FF9B00;font-size:9px;padding:3px 8px;cursor:pointer;font-family:monospace">+ LIST YOUR ITEM</button></div>',
+            15000);
+    }catch(e){showOverlay('Auction','offline');}
+}
+async function bidAuction(id,amount){
+    try{
+        const r=await fetch(API+'/pulse/auction/bid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),auction_id:id,amount:amount})});
+        const d=await r.json();
+        if(d.error){showOverlay('🔨 BID',d.error);return;}
+        SND.click();showAuction();loadPlayer(_uid());
+    }catch(e){}
+}
+async function listAuctionPrompt(){
+    try{
+        const pr=await fetch(API+'/api/char/'+_uid());const pd=await pr.json();
+        const loot=(pd.loot||[]);
+        if(!loot.length){showOverlay('🔨 LIST','no loot to sell');return;}
+        const code=prompt('Item code to auction:\n'+loot.map(l=>l.code).join(', '),loot[0].code);
+        if(!code)return;
+        const sp=parseInt(prompt('Starting price (gold):','100')||'0',10);
+        const r=await fetch(API+'/pulse/auction/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),code:code,start_price:sp})});
+        const d=await r.json();
+        if(d.error){showOverlay('🔨 LIST',d.error);return;}
+        SND.promo();showAuction();loadPlayer(_uid());
+    }catch(e){showOverlay('Auction','offline');}
+}
+// ---- GUILD WAR (two corps race a shared war boss) ----
+let _gwTimer=null;
+async function showGuildWar(){
+    try{
+        const r=await fetch(API+'/api/guildwar');const d=await r.json();
+        openPanel(_gwHtml(d),20000);
+        if(_gwTimer)clearInterval(_gwTimer);
+        _gwTimer=setInterval(async()=>{
+            const p=document.getElementById('gw-body');if(!p){clearInterval(_gwTimer);return;}
+            try{const rr=await fetch(API+'/api/guildwar');const dd=await rr.json();p.innerHTML=_gwInner(dd);}catch(e){}
+        },3000);
+    }catch(e){showOverlay('Guild War','offline');}
+}
+function _gwHtml(d){return '<b>⚔ GUILD WAR</b><div id="gw-body">'+_gwInner(d)+'</div>';}
+function _gwInner(d){
+    const bar=(pct,col)=>'<div style="background:#1a1a2e;height:8px;border-radius:4px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+col+'"></div></div>';
+    return '<div style="font-size:9px;color:#888;margin:2px 0">War Titan · HP '+fmt(d.hp)+' / '+fmt(d.max_hp)+' ('+d.pct+'%)</div>'+
+        bar(d.pct,'#FF4B4B')+
+        '<div style="display:flex;justify-content:space-between;font-size:10px;margin-top:6px">'+
+        '<span style="color:'+(d.leader===d.corp_a?'#FFC800':'#888')+'">'+d.corp_a+' '+d.share_a+'%</span>'+
+        '<span style="color:'+(d.leader===d.corp_b?'#FFC800':'#888')+'">'+d.corp_b+' '+d.share_b+'%</span></div>'+
+        bar(d.share_a,'#00E5FF')+
+        '<div style="font-size:9px;color:#00FF8C;margin-top:4px">prize pool '+fmt(d.prize_pool)+'g · winner-take (φ-split)</div>'+
+        (d.defeated?'<div style="color:#FFC800;margin-top:4px">🏆 '+(d.winner||d.leader)+' WINS</div>':
+         '<div style="margin-top:6px"><button onclick="strikeWar()" style="background:#FF4B4B;color:#fff;border:0;font-size:11px;padding:4px 12px;cursor:pointer;font-family:monospace">⚔ STRIKE FOR '+ (d.leader) +'</button></div>')+
+        '<div style="color:#555;font-size:8px;margin-top:4px">'+(d.note||'')+'</div>';
+}
+async function strikeWar(){
+    try{
+        const r=await fetch(API+'/pulse/guildwar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error&&d.hp===undefined){showOverlay('⚔ WAR',d.error);return;}
+        SND.click();
+        const p=document.getElementById('gw-body');if(p)p.innerHTML=_gwInner(d);
+        if(d.winner){SND.promo();triggerWaterfall();}
+        loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- INVESTMENT BONDS (phi-yield on a timer) ----
+async function showBonds(){
+    try{
+        const r=await fetch(API+'/api/bonds/'+_uid());const d=await r.json();
+        const tiers=d.tiers.map((t,i)=>
+            '<tr><td style="color:#FFC800">'+t.name+'</td>'+
+            '<td style="color:#888;text-align:right">min '+fmt(t.min_principal)+'</td>'+
+            '<td style="color:#00FF8C;text-align:right">+'+t.yield_pct+'%</td>'+
+            '<td style="color:#888;text-align:right">'+_fmtLeft(t.lock_seconds)+'</td>'+
+            '<td><button onclick="buyBond('+i+','+t.min_principal+')" style="background:#00FF8C;color:#05060c;border:0;font-size:8px;padding:1px 5px;cursor:pointer;font-family:monospace">BUY</button></td></tr>'
+        ).join('');
+        let active=(d.bonds||[]).map(b=>
+            '<tr><td style="color:#FFC800">'+b.name+'</td>'+
+            '<td style="color:#888;text-align:right">'+fmt(b.principal)+'g</td>'+
+            '<td style="color:#00FF8C;text-align:right">→'+fmt(b.payout)+'g</td>'+
+            '<td style="color:'+(b.matured?'#00FF8C':'#888')+';text-align:right">'+(b.matured?'READY':_fmtLeft(b.seconds_left))+'</td><td></td></tr>'
+        ).join('');
+        const hasMatured=(d.bonds||[]).some(b=>b.matured);
+        openPanel('<b>💰 φ-BONDS</b>'+
+            '<div style="color:#888;font-size:9px;margin:2px 0">yields in gold only · gold '+fmt(d.gold)+'g</div>'+
+            '<table style="width:100%;font-size:9px;font-family:monospace">'+
+            '<tr style="color:#555"><td>TIER</td><td style="text-align:right">MIN</td><td style="text-align:right">YIELD</td><td style="text-align:right">LOCK</td><td></td></tr>'+
+            tiers+'</table>'+
+            (active?'<div style="color:#555;font-size:8px;margin-top:6px">ACTIVE BONDS</div><table style="width:100%;font-size:9px;font-family:monospace">'+active+'</table>':'')+
+            (hasMatured?'<div style="margin-top:6px"><button onclick="claimBonds()" style="background:#FFC800;color:#05060c;border:0;font-size:10px;padding:3px 10px;cursor:pointer;font-family:monospace">CLAIM MATURED</button></div>':''),
+            15000);
+    }catch(e){showOverlay('Bonds','offline');}
+}
+async function buyBond(tier,minp){
+    const amt=parseInt(prompt('Principal to invest (gold, min '+minp+'):',String(minp))||'0',10);
+    if(!amt)return;
+    try{
+        const r=await fetch(API+'/pulse/bond/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),tier:tier,principal:amt})});
+        const d=await r.json();
+        if(d.error){showOverlay('💰 BOND',d.error);return;}
+        SND.click();showBonds();loadPlayer(_uid());
+    }catch(e){}
+}
+async function claimBonds(){
+    try{
+        const r=await fetch(API+'/pulse/bond/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        SND.promo();triggerWaterfall();
+        showOverlay('💰 BONDS CLAIMED','+'+fmt(d.payout)+'g from '+d.claimed_count+' bond(s)\ngold '+fmt(d.gold)+'g');
+        showBonds();loadPlayer(_uid());
+    }catch(e){}
+}
 function showOverlay(title,text){
     _applyPanel('<b>'+title+'</b><pre>'+text+'</pre>',6000);
 }
@@ -2334,6 +2471,9 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bch=document.getElementById('btn-chat');if(bch)bch.onclick=openChat;}
 {const bcr=document.getElementById('btn-craft');if(bcr)bcr.onclick=doCraft;}
 {const bob=document.getElementById('btn-orderbook');if(bob)bob.onclick=()=>showOrderBook();}
+{const bau=document.getElementById('btn-auction');if(bau)bau.onclick=showAuction;}
+{const bgw=document.getElementById('btn-guildwar');if(bgw)bgw.onclick=showGuildWar;}
+{const bbo=document.getElementById('btn-bonds');if(bbo)bbo.onclick=showBonds;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
 {const ci=document.getElementById('chat-in');if(ci)ci.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});}

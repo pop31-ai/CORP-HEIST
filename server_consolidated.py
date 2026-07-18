@@ -44,6 +44,8 @@ from golden_econ import (
     evaluate_achievements, claim_achievements,
     referral_code, referral_status, accept_referral,
     chest_status, open_chest, WorldBoss,
+    Auction, GuildWar,
+    bond_tiers, buy_bond, bond_status, claim_bonds,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -231,6 +233,8 @@ ARENA = Arena(STATE)
 PRESTIGE = Prestige(STATE)
 RAID = Raid(STATE)
 WORLDBOSS = WorldBoss(STATE)
+AUCTION = Auction(STATE)
+GUILDWAR = GuildWar(STATE)
 
 
 # ============================================================
@@ -821,6 +825,91 @@ async def handle_orderbook(request):
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
 
+
+# ---- AUCTION HOUSE (list / bid; in-game gold only) ----
+async def handle_auctions(request):
+    """GET open auction listings."""
+    result = AUCTION.listings()
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_auction_list(request):
+    """Pulse: list a loot item for auction."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = AUCTION.list_item(uid, d.get("code"), d.get("start_price", 0))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_auction_bid(request):
+    """Pulse: bid on an auction (in-game gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = AUCTION.bid(uid, int(d.get("auction_id", 0)), d.get("amount", 0))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- GUILD WARS (two corps race a shared war boss) ----
+async def handle_guildwar(request):
+    """GET current guild-war status."""
+    result = GUILDWAR.status()
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_guildwar(request):
+    """Pulse: attack the shared war boss for your corp."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = GUILDWAR.attack(uid)
+    if "error" in result and "hp" not in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- INVESTMENT BONDS (phi-yield on a timer; in-game gold) ----
+async def handle_bonds(request):
+    """GET bond tiers + a player's active bonds (?uid=)."""
+    uid = request.match_info.get("uid", request.query.get("uid"))
+    if uid is not None:
+        result = bond_status(STATE, int(uid))
+    else:
+        result = bond_tiers()
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_bond_buy(request):
+    """Pulse: buy a phi-bond with in-game gold."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = buy_bond(STATE, uid, int(d.get("tier", 0)), d.get("principal", 0))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_bond_claim(request):
+    """Pulse: claim matured bond payouts (in-game gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = claim_bonds(STATE, uid)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -1025,6 +1114,15 @@ def make_unified_app():
     app.router.add_post("/pulse/worldboss", pulse_worldboss)
     app.router.add_post("/pulse/chat", pulse_chat)
     app.router.add_post("/pulse/craft", pulse_craft)
+    app.router.add_get("/api/auctions", handle_auctions)
+    app.router.add_post("/pulse/auction/list", pulse_auction_list)
+    app.router.add_post("/pulse/auction/bid", pulse_auction_bid)
+    app.router.add_get("/api/guildwar", handle_guildwar)
+    app.router.add_post("/pulse/guildwar", pulse_guildwar)
+    app.router.add_get("/api/bonds", handle_bonds)
+    app.router.add_get("/api/bonds/{uid}", handle_bonds)
+    app.router.add_post("/pulse/bond/buy", pulse_bond_buy)
+    app.router.add_post("/pulse/bond/claim", pulse_bond_claim)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
