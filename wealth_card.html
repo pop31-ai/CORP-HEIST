@@ -4214,10 +4214,10 @@ document.getElementById('btn-bounty').onclick=async()=>{
     const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
     try{
         const r=await fetch(API+'/api/bounty/'+uid);const d=await r.json();
-        let s='BOUNTY BOARD — Today\\'s Contracts\n\n';
+        let s='BOUNTY BOARD — Today\'s Contracts\n\n';
         d.forEach((b,i)=>{
             s+='['+i+'] '+b.name+' ('+b.name_en+')\n';
-            s+='    '+b.desc+' ['+('+'+b.difficulty+')+']\n';
+            s+='    '+b.desc+' ['+b.difficulty+']\n';
             s+='    Reward: '+b.reward+'g '+(b.completed?'DONE':'pending')+'\n\n';
         });
         s+='Claim completed bounties? (0/1/2)';
