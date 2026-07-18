@@ -67,6 +67,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-short" style="border-color:#FF3B3B;color:#FF3B3B">📉 SHORT</button>
 <button id="btn-index" style="border-color:#FFC800;color:#FFC800">📊 GOLDEN-500</button>
 <button id="btn-chart" style="border-color:#00E5FF;color:#00E5FF">📈 CHARTS</button>
+<button id="btn-sectors" style="border-color:#B14BFF;color:#B14BFF">🧭 SECTORS</button>
+<button id="btn-badges" style="border-color:#00FF8C;color:#00FF8C">🏅 BADGES</button>
 <button id="btn-idxopt" style="border-color:#00E5FF;color:#00E5FF">🎯 500-OPTIONS</button>
 <button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
 <button id="btn-mm" style="border-color:#00FF8C;color:#00FF8C">⚖ MARKET MAKE</button>
@@ -88,6 +90,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
     <button id="cu-close" style="background:#1a1a2e;color:#ccc;border:1px solid #333;padding:5px 12px;border-radius:3px;cursor:pointer;font-family:inherit">CLOSE</button>
   </div>
 </div>
+<div id="tape-bar" style="position:fixed;left:0;bottom:0;width:100%;height:22px;background:#05060c;border-top:1px solid #FFC80044;overflow:hidden;z-index:60;font-family:monospace;font-size:11px;white-space:nowrap"><div id="tape-scroll" style="display:inline-block;padding-left:100%;color:#FFC800;line-height:22px"></div></div>
 <div id="chat-panel" style="display:none;position:fixed;top:60px;right:16px;width:280px;background:#0a0b16;border:1px solid #00FF8C;border-radius:6px;padding:10px;z-index:50;font-size:11px;color:#ccc;box-shadow:0 0 24px #00FF8C33">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
     <b id="chat-title" style="color:#00FF8C">💬 CORP CHAT</b>
@@ -120,6 +123,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
     box-shadow:0 0 28px rgba(255,200,0,.25);
 }
 #overlay pre{white-space:pre;margin:6px 0 0}
+@keyframes tapescroll{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
+#tape-scroll{animation:tapescroll 40s linear infinite}
 </style>
 <div class="info" id="info"></div>
 
@@ -3009,6 +3014,49 @@ async function drawChartNow(){
     body.innerHTML='<span style="color:#FFE24B">'+d.symbol+'</span> <span style="color:'+col+'">'+d.price+'g '+(d.change>=0?'▲':'▼')+Math.abs(d.change)+' ('+d.change_pct+'%)</span> <span style="color:#555">vol '+fmt(d.volume)+'</span>';
     drawCandles(cv,d.candles);
 }
+// ---- MARKET SECTORS (phi-sectors + rotation) ----
+function miniSpark(vals,col){
+    if(!vals||vals.length<2)return '';
+    let lo=Math.min(...vals),hi=Math.max(...vals);if(hi<=lo)hi=lo+1;
+    const W=60,H=16;let pts='';
+    vals.forEach((v,i)=>{const x=i/(vals.length-1)*W;const y=H-(v-lo)/(hi-lo)*H;pts+=(i?' ':'')+x.toFixed(1)+','+y.toFixed(1);});
+    return '<svg width="'+W+'" height="'+H+'"><polyline points="'+pts+'" fill="none" stroke="'+col+'" stroke-width="1.2"/></svg>';
+}
+async function showSectors(){
+    try{
+        openPanel('<b>🧭 MARKET SECTORS</b><div id="sec-body" style="color:#555">loading...</div>',22000);
+        const paint=async()=>{
+            const p=document.getElementById('sec-body');if(!p)return;
+            const d=await fetch(API+'/api/sectors').then(r=>r.json());
+            let h='<div style="text-align:center;font-size:9px;margin:2px 0"><span style="color:#00FF8C">🔥 hot '+d.rotation.hot+'</span> · <span style="color:#FF6B6B">❄ cold '+d.rotation.cold+'</span></div>';
+            for(const s of d.sectors){
+                const col=s.change>=0?'#00FF8C':'#FF3B3B';
+                h+='<div style="border-top:1px solid #1a1a2e;padding:4px 0;display:flex;align-items:center;justify-content:space-between">'+
+                   '<div><span style="color:#FFE24B">'+s.emoji+' '+s.name+'</span> <span style="color:'+col+';font-size:9px">'+(s.change>=0?'▲':'▼')+Math.abs(s.change_pct)+'%</span>'+
+                   '<div style="color:#555;font-size:7px">'+s.members.map(m=>m.name).join(' ')+'</div></div>'+
+                   '<div>'+miniSpark(s.spark,col)+'</div></div>';
+            }
+            h+='<div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
+            p.innerHTML=h;
+        };
+        paint();
+    }catch(e){showOverlay('Sectors','offline');}
+}
+// ---- TRADER BADGES (phi-milestone honors) ----
+async function showBadges(){
+    try{
+        const d=await fetch(API+'/api/badges/'+_uid()).then(r=>r.json());
+        let h='<b>🏅 TRADER BADGES</b> <span style="color:#00FF8C;font-size:10px">'+d.earned_count+'/'+d.total+'</span>'+
+              '<div style="color:#FFC800;font-size:9px">lifetime PnL '+fmt(d.lifetime_pnl)+'g</div>';
+        for(const b of d.badges){
+            h+='<div style="border-top:1px solid #1a1a2e;padding:3px 0;color:'+(b.earned?'#FFE24B':'#444')+'">'+
+               '<span style="font-size:13px">'+b.emoji+'</span> '+b.name+(b.earned?' ✓':'')+
+               '<div style="color:'+(b.earned?'#888':'#333')+';font-size:8px">'+b.desc+'</div></div>';
+        }
+        h+='<div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
+        openPanel(h,20000);
+    }catch(e){showOverlay('Badges','offline');}
+}
 // ---- GOLDEN-500 INDEX OPTIONS (calls/puts, phi strikes) ----
 async function showIdxOpt(){
     try{
@@ -3159,6 +3207,21 @@ async function pollLiquidations(){
     }catch(e){}
 }
 setInterval(pollLiquidations,5000);setTimeout(pollLiquidations,1500);
+// ---- BOT TICKER TAPE (scrolling marquee) ----
+let _tapeSeen=0;const _tapeLines=[];
+const TAPE_COL={bot:'#FFC800',crash:'#FF3B3B',badge:'#00FF8C'};
+async function pollTape(){
+    try{
+        const d=await fetch(API+'/api/tape?since='+_tapeSeen).then(r=>r.json());
+        for(const l of (d.lines||[])){_tapeSeen=Math.max(_tapeSeen,l.id);_tapeLines.push(l);}
+        while(_tapeLines.length>30)_tapeLines.shift();
+        const el=document.getElementById('tape-scroll');
+        if(el&&_tapeLines.length){
+            el.innerHTML=_tapeLines.map(l=>'<span style="color:'+(TAPE_COL[l.kind]||'#FFC800')+';margin-right:32px">'+(l.kind==='crash'?'💥 ':l.kind==='badge'?'🏅 ':'▸ ')+l.text+'</span>').join('');
+        }
+    }catch(e){}
+}
+setInterval(pollTape,6000);setTimeout(pollTape,900);
 function flashToast(text,col){
     const t=document.createElement('div');
     t.style.cssText='position:fixed;left:50%;top:14%;transform:translateX(-50%);z-index:10000;background:#0d0d18;border:1px solid '+col+';color:'+col+';font-family:monospace;font-size:11px;padding:6px 12px;border-radius:4px;box-shadow:0 0 16px '+col;
@@ -3271,6 +3334,8 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bsh=document.getElementById('btn-short');if(bsh)bsh.onclick=showShort;}
 {const bix=document.getElementById('btn-index');if(bix)bix.onclick=showIndex;}
 {const bch=document.getElementById('btn-chart');if(bch)bch.onclick=showChart;}
+{const bse=document.getElementById('btn-sectors');if(bse)bse.onclick=showSectors;}
+{const bba=document.getElementById('btn-badges');if(bba)bba.onclick=showBadges;}
 {const bio=document.getElementById('btn-idxopt');if(bio)bio.onclick=showIdxOpt;}
 {const btr=document.getElementById('btn-traders');if(btr)btr.onclick=showTraders;}
 {const bmm=document.getElementById('btn-mm');if(bmm)bmm.onclick=showMM;}

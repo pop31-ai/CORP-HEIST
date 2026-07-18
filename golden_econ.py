@@ -1861,6 +1861,7 @@ def check_short_squeezes(state, now=None):
                 events.append(ev)
                 squeezed.append(ev)
                 record_trade_pnl(state, uid, -p["margin"], now=now)
+                grant_badge(state, uid, "SQUEEZE_SURVIVOR", now=now)
                 state.mark_dirty(uid)
             else:
                 keep.append(p)
@@ -2104,6 +2105,7 @@ def short_close(state, uid, pos_id, now=None):
     if squeezed:
         # margin wiped on a squeeze; no return
         record_trade_pnl(state, uid, -pos["margin"], now=now)
+        grant_badge(state, uid, "SQUEEZE_SURVIVOR", now=now)
         state.mark_dirty(uid)
         return {"ok": True, "squeezed": True, "symbol": pos["symbol"],
                 "entry": round(pos["entry"], 2), "spot": round(spot, 2),
@@ -2111,6 +2113,8 @@ def short_close(state, uid, pos_id, now=None):
     payout = max(0, pos["margin"] + pnl)
     res = award_gold(state, uid, payout, now=now) if payout > 0 else {"gained": 0}
     record_trade_pnl(state, uid, pnl, now=now)
+    if pnl > 0:
+        grant_badge(state, uid, "SHORT_SELLER", now=now)
     state.mark_dirty(uid)
     return {"ok": True, "squeezed": False, "symbol": pos["symbol"],
             "entry": round(pos["entry"], 2), "spot": round(spot, 2),
@@ -2257,6 +2261,8 @@ def idx_option_settle(state, uid, pos_id, now=None):
     opts.remove(pos)
     res = award_gold(state, uid, payout, now=now) if payout > 0 else {"gained": 0, "golden": False}
     record_trade_pnl(state, uid, payout - pos["premium"], now=now)
+    if payout >= pos["premium"] * PHI:
+        grant_badge(state, uid, "PHI_OPTION", now=now)
     state.mark_dirty(uid)
     return {"ok": True, "kind": pos["kind"], "strike": pos["strike"],
             "spot": round(spot, 2), "payout": payout,
@@ -2279,10 +2285,33 @@ def _bots(state):
                 "size": PHI ** (i % 4), "anchor": None})
     return state.bots
 
+BOT_NAMES = ["PhiQuant", "GoldenAlgo", "FibBot", "AurumAI",
+             "RatioTrader", "SpiralFund", "NautilusHF", "VectorX"]
+
+def _tape(state):
+    if not hasattr(state, "tape"):
+        state.tape = []          # ring buffer of ticker lines
+        state._tape_seq = 0
+    return state.tape
+
+def push_tape(state, text, kind="bot", now=None):
+    now = now or int(time.time())
+    tape = _tape(state)
+    state._tape_seq += 1
+    tape.append({"id": state._tape_seq, "ts": now, "kind": kind, "text": text})
+    if len(tape) > 40:
+        del tape[:-40]
+
+def tape_feed(state, since=0):
+    tape = _tape(state)
+    return {"lines": [t for t in tape if t["id"] > since][-40:],
+            "last_id": tape[-1]["id"] if tape else 0}
+
 def tick_bots(state, now=None):
     """Bots push prices around: momentum bots chase the last delta, mean-
     reverters fade extremes toward a phi-anchor. This animates the tape so
     player market-making, shorts and derivatives get organic fills."""
+    now = now or int(time.time())
     stocks = getattr(state, "stocks", [])
     if not stocks:
         return
@@ -2299,6 +2328,13 @@ def tick_bots(state, now=None):
             push = (b["anchor"] - s["price"]) * (BOT_AGGRO / PHI) * 0.1 * b["size"]
         s["price"] = round(max(0.01, s["price"] + push), 2)
         s["volume"] = max(100, int(s.get("volume", 1000) + abs(push) * 500 * b["size"]))
+        # occasionally a bot narrates its trade on the tape
+        if random.random() < (1 / (PHI ** 4)):
+            name = BOT_NAMES[b["id"] % len(BOT_NAMES)]
+            act = "BUY" if push >= 0 else "SELL"
+            verb = "chasing momentum" if b["style"] == "momentum" else "fading the move"
+            push_tape(state, f"{name} {act} {s['name']} @ {s['price']:.1f} — {verb}",
+                      kind="bot", now=now)
         # occasionally a bot rotates to a new target
         if random.random() < (1 / (PHI ** 5)):
             b["sym_idx"] = random.randrange(n)
@@ -2327,7 +2363,79 @@ def maybe_flash_crash(state, now=None):
                    "collateral_lost": 0, "index": idx,
                    "text": f"FLASH CRASH! The Golden-500 plunged to {idx:,.0f} — shorts feast, the leveraged bleed!"})
     del events[:-30]
+    push_tape(state, f"*** FLASH CRASH *** Golden-500 -> {idx:,.0f}", kind="crash", now=now)
     return {"crashed": True, "index": idx}
+
+# --- Market sectors: 20 tickers grouped into 4 phi-sectors ---
+SECTORS = [
+    {"name": "TECH",   "emoji": "🧠", "idx": [0, 1, 2, 3, 4]},
+    {"name": "FINANCE","emoji": "🏦", "idx": [5, 6, 7, 8, 9]},
+    {"name": "ENERGY", "emoji": "⚡", "idx": [10, 11, 12, 13, 14]},
+    {"name": "LUXURY", "emoji": "💎", "idx": [15, 16, 17, 18, 19]},
+]
+
+def sector_of(stock_index):
+    for sec in SECTORS:
+        if stock_index in sec["idx"]:
+            return sec["name"]
+    return "MISC"
+
+def _sector_value(state, sec):
+    stocks = getattr(state, "stocks", [])
+    total = 0.0
+    wsum = 0.0
+    for j, i in enumerate(sec["idx"]):
+        if i < len(stocks):
+            w = PHI ** (-(j % 5))
+            total += stocks[i]["price"] * w
+            wsum += w
+    return round((total / wsum) if wsum else 0.0, 2)
+
+def _sector_hist(state):
+    if not hasattr(state, "sector_hist"):
+        state.sector_hist = {}
+        state._sector_last = {}
+    return state.sector_hist
+
+def tick_sectors(state, now=None):
+    now = now or int(time.time())
+    hist = _sector_hist(state)
+    last = state._sector_last
+    for sec in SECTORS:
+        v = _sector_value(state, sec)
+        series = hist.setdefault(sec["name"], [])
+        cur = last.get(sec["name"])
+        if cur is None or now - cur["t0"] >= STOCK_CANDLE_SECS:
+            candle = {"t": now, "c": v, "t0": now}
+            series.append(candle)
+            last[sec["name"]] = candle
+            if len(series) > 60:
+                del series[:len(series) - 60]
+        else:
+            cur["c"] = v
+
+def sectors_status(state):
+    hist = _sector_hist(state)
+    stocks = getattr(state, "stocks", [])
+    out = []
+    for sec in SECTORS:
+        v = _sector_value(state, sec)
+        series = hist.get(sec["name"], [])
+        prev = series[0]["c"] if series else v
+        chg = round(v - prev, 2)
+        members = [{"name": stocks[i]["name"], "price": round(stocks[i]["price"], 2)}
+                   for i in sec["idx"] if i < len(stocks)]
+        spark = [round(c["c"], 2) for c in series[-30:]]
+        out.append({"name": sec["name"], "emoji": sec["emoji"], "value": v,
+                    "change": chg,
+                    "change_pct": round((chg / prev * 100) if prev else 0, 2),
+                    "members": members, "spark": spark})
+    hot = max(out, key=lambda x: x["change_pct"]) if out else None
+    cold = min(out, key=lambda x: x["change_pct"]) if out else None
+    return {"sectors": out,
+            "rotation": {"hot": hot["name"] if hot else None,
+                         "cold": cold["name"] if cold else None},
+            "note": "Capital rotates between phi-sectors. In-game gold only."}
 
 def _stock_hist(state):
     if not hasattr(state, "stock_hist"):
@@ -2516,6 +2624,7 @@ def tick_market_making(state, now=None):
                     award_gold(state, uid, net, now=now)
                     if profit != 0:
                         record_trade_pnl(state, uid, profit, now=now)
+                    grant_badge(state, uid, "MARKET_MAKER", now=now)
                     state.mark_dirty(uid)
                     # order completes (removed)
                 else:
@@ -2544,7 +2653,12 @@ def record_trade_pnl(state, uid, pnl, now=None):
     rec["pnl"] = int(rec.get("pnl", 0)) + int(pnl)
     rec["trades"] = int(rec.get("trades", 0)) + 1
     me["trade_day"] = rec
+    me["lifetime_pnl"] = int(me.get("lifetime_pnl", 0)) + int(pnl)
     state.mark_dirty(uid)
+    if pnl > 0:
+        grant_badge(state, uid, "FIRST_BLOOD", now=now)
+    if me["lifetime_pnl"] >= 1_000_000:
+        grant_badge(state, uid, "MOGUL", now=now)
 
 TRADER_CROWN = {"code": "TRADER_CROWN", "rarity": 5, "cat": 12,
                 "value": 618_034, "qty": 1, "name": "Golden Ticker Crown"}
@@ -2587,6 +2701,47 @@ def award_trader_of_day(state, now=None):
     tod["hall"].append(entry)
     return {"awarded": True, "champion": entry, "crown": crown,
             "hall_of_fame": tod["hall"][-10:]}
+
+TRADER_BADGES = [
+    {"code": "FIRST_BLOOD",  "name": "First Blood",       "emoji": "🩸",
+     "desc": "Realize your first winning trade"},
+    {"code": "SHORT_SELLER", "name": "Short Seller",      "emoji": "📉",
+     "desc": "Close a short in profit"},
+    {"code": "SQUEEZE_SURVIVOR", "name": "Squeeze Survivor", "emoji": "🛡",
+     "desc": "Get squeezed and keep trading"},
+    {"code": "PHI_OPTION",   "name": "Golden Contract",   "emoji": "🎯",
+     "desc": "Settle an index option for >=phi*premium"},
+    {"code": "MARKET_MAKER", "name": "Market Maker",      "emoji": "⚖",
+     "desc": "Complete a market-making round"},
+    {"code": "MOGUL",        "name": "Golden Mogul",      "emoji": "👑",
+     "desc": "Reach 1,000,000g realized PnL lifetime"},
+]
+_BADGE_BY_CODE = {b["code"]: b for b in TRADER_BADGES}
+
+def grant_badge(state, uid, code, now=None):
+    me = state.chars.get(uid)
+    if not me or code not in _BADGE_BY_CODE:
+        return False
+    have = me.setdefault("trader_badges", [])
+    if code in have:
+        return False
+    have.append(code)
+    me["lifetime_badges"] = me.get("lifetime_badges", 0) + 1
+    state.mark_dirty(uid)
+    push_tape(state, f"{me.get('name','Player')} earned badge {_BADGE_BY_CODE[code]['emoji']} {_BADGE_BY_CODE[code]['name']}",
+              kind="badge", now=now)
+    return True
+
+def trader_badges(state, uid):
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    have = set(me.get("trader_badges", []))
+    out = [{**b, "earned": b["code"] in have} for b in TRADER_BADGES]
+    return {"badges": out, "earned_count": len(have),
+            "total": len(TRADER_BADGES),
+            "lifetime_pnl": int(me.get("lifetime_pnl", 0)),
+            "note": "Trader badges are in-game honors only."}
 
 def trader_leaderboard(state, uid=None, now=None):
     award_trader_of_day(state, now)

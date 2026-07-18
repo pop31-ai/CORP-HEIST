@@ -63,6 +63,7 @@ from golden_econ import (
     maybe_flash_crash,
     mm_place, mm_status, mm_cancel, tick_market_making,
     tick_bots, tick_stock_candles, stock_candles,
+    tape_feed, tick_sectors, sectors_status, trader_badges,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1311,6 +1312,35 @@ async def handle_stock_candles(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- BOT TICKER TAPE (scrolling feed of bot trades/events) ----
+async def handle_tape(request):
+    """GET the bot ticker tape (?since= for new lines only)."""
+    since = int(request.query.get("since", 0))
+    result = tape_feed(STATE, since)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+# ---- MARKET SECTORS (phi-sectors + rotation) ----
+async def handle_sectors(request):
+    """GET the phi-sector indices, members and hot/cold rotation."""
+    result = sectors_status(STATE)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+# ---- TRADER BADGES (phi-milestone honors) ----
+async def handle_badges(request):
+    """GET a player's trader badges (?uid= or /api/badges/<uid>)."""
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    result = trader_badges(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ---- GOLDEN-500 INDEX OPTIONS (calls/puts, phi strikes) ----
 async def handle_idxopt(request):
     """GET the index option chain, or a player's positions (?uid=)."""
@@ -1510,6 +1540,7 @@ async def market_loop():
             tick_market_making(STATE)
             tick_index(STATE)
             tick_stock_candles(STATE)
+            tick_sectors(STATE)
         except Exception:
             pass
         await asyncio.sleep(MARKET_TICK_SEC)
@@ -1661,6 +1692,10 @@ def make_unified_app():
     app.router.add_post("/pulse/short/close", pulse_short_close)
     app.router.add_get("/api/index", handle_index)
     app.router.add_get("/api/candles/{sym}", handle_stock_candles)
+    app.router.add_get("/api/tape", handle_tape)
+    app.router.add_get("/api/sectors", handle_sectors)
+    app.router.add_get("/api/badges", handle_badges)
+    app.router.add_get("/api/badges/{uid}", handle_badges)
     app.router.add_get("/api/idxopt", handle_idxopt)
     app.router.add_post("/pulse/idxopt/open", pulse_idxopt_open)
     app.router.add_post("/pulse/idxopt/settle", pulse_idxopt_settle)
