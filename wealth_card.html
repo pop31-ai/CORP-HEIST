@@ -2356,8 +2356,9 @@ async function refreshPlayers(){
 }
 
 async function loadPlayer(uid){
-    if(uid==='local'){_currentUid='local';newPortfolio();return;}
+    if(uid==='local'){_currentUid='local';localStorage.setItem('lastUid','local');newPortfolio();return;}
     try{
+        localStorage.setItem('lastUid',uid);
         const r=await fetch(API+'/api/char/'+uid);
         const d=await r.json();
         if(d.error)return;
@@ -2431,7 +2432,7 @@ async function forceRefresh(){
     try{
         await fetch(API+'/pulse/refresh/force',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_currentUid})});
         _refreshLeft=0;_refreshLocked=false;
-        location.reload();
+        loadPlayer(_currentUid);refreshPlayers();
     }catch(e){}
 }
 async function toggleDonor(on){
@@ -2467,9 +2468,11 @@ setInterval(()=>{
         if(_refreshLeft<=0)return;
     }
     if(_refreshLeft<=0&&!_refreshLocked){
-        el.textContent='ready — refreshing...';
+        el.textContent='refreshing...';
         el.style.color='#FFC800';
-        location.reload();return;
+        if(_currentUid&&_currentUid!=='local'){loadPlayer(_currentUid);refreshPlayers();syncCooldown();}
+        else{location.reload();}
+        return;
     }
     _refreshLeft--;
     const m=Math.floor(_refreshLeft/60),s=_refreshLeft%60;
@@ -2480,9 +2483,11 @@ setInterval(()=>{
 // try fetch player list on load
 refreshPlayers();
 
-// auto-load player from ?uid= in URL (used by /card/N links)
+// auto-load player from URL ?uid= or localStorage
 const _urlUid = new URLSearchParams(location.search).get('uid');
+const _savedUid = localStorage.getItem('lastUid');
 if(_urlUid){ _currentUid=_urlUid; loadPlayer(_urlUid); registerPageLoad(); }
+else if(_savedUid && _savedUid!=='local'){ _currentUid=_savedUid; loadPlayer(_savedUid); }
 else { newPortfolio(); }
 
 // ====== METAGAME PANEL (arena / guilds / leaderboard) ======
