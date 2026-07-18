@@ -392,12 +392,42 @@ async def handle_press_pdf(request):
 PRESS_BUILD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "press")
 PRESS_REGEN_HOURS = float(os.environ.get("PRESS_REGEN_HOURS", "6"))
 
+def _press_pdfs_present():
+    if not os.path.isdir(PRESS_DIR):
+        return False
+    return all(os.path.exists(os.path.join(PRESS_DIR, m[3])) for m in PRESS_META)
+
+async def press_bootstrap():
+    """If no PDFs exist yet (fresh checkout), build a synthetic set immediately
+    so /press works from second one; the live regen loop refines them later."""
+    if _press_pdfs_present():
+        return
+    log.info("press: no PDFs found, building initial synthetic set")
+    try:
+        env = dict(os.environ)
+        env["PRESS_SYNTH"] = "1"  # deterministic, no server needed
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "build_issues.py",
+            cwd=PRESS_BUILD_DIR, env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        if proc.returncode == 0:
+            log.info("press: initial synthetic set built")
+        else:
+            log.warning("press: bootstrap build failed rc=%s: %s",
+                        proc.returncode, (out or b"")[-300:])
+    except Exception as e:
+        log.warning("press: bootstrap error: %s", e)
+
 async def press_regen_loop():
     """Rebuild PHI PRESS PDFs periodically from live server data.
 
     Runs build_issues.py as a subprocess with CORP_HEIST_API pointing at this
     server; on any failure the previously built PDFs are kept untouched.
     """
+    await press_bootstrap()
     await asyncio.sleep(30)  # let the server bind first (live data available)
     interval = max(PRESS_REGEN_HOURS, 0.05) * 3600.0
     while True:

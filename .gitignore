@@ -8,3 +8,5 @@ build/
 data/chars/
 data/market.json
 id_rsa
+press/out/*.pdf
+press/charts_test.pdf
