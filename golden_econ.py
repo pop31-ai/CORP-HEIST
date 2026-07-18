@@ -5105,6 +5105,748 @@ class ActivityWatchdog:
             "active_sessions": cls.active_count() if hasattr(cls, 'active_count') else PlayerSession.active_count(),
         }
 
+
+# ============================================================
+# SKILL PVP ARENA — real timed duels with mini-games
+# ============================================================
+
+class SkillPvP:
+    """Настоящий PvP: игроки сражаются в мини-играх на реакцию.
+    Три типа челленджей: Timing (попади в зону), Pattern (повтори), Rapid (кликай быстрее).
+    Server генерирует челлендж, client присылает ответ, server считает.score.
+
+    hero_stats влияют: attack = bonus к score, defense = reduction of opponent score."""
+
+    CHALLENGE_TYPES = ["timing", "pattern", "rapid"]
+    STAKE_MIN = 100
+    STAKE_MAX = 50000
+    DUEL_TIMEOUT = 120  # 2 min to complete
+
+    _pending = {}  # uid -> {challenge, ts, stake, opponent_uid}
+
+    @classmethod
+    def create_duel(cls, state, uid, stake, now=None):
+        """Create a skill duel challenge. Returns challenge for client to solve."""
+        t = now or int(time.time())
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        stake = max(cls.STAKE_MIN, min(stake, cls.STAKE_MAX))
+        gold = int(c.get("gold", 0))
+        if gold < stake:
+            return {"error": "not enough gold", "have": gold, "need": stake}
+        # generate challenge
+        rng = random.Random(t + uid * PHI)
+        ctype = rng.choice(cls.CHALLENGE_TYPES)
+        challenge = cls._gen_challenge(ctype, rng)
+        cls._pending[uid] = {
+            "challenge": challenge, "ts": t, "stake": stake,
+            "type": ctype, "score": 0, "done": False,
+        }
+        return {
+            "challenge": challenge, "type": ctype, "stake": stake,
+            "timeout": cls.DUEL_TIMEOUT,
+        }
+
+    @classmethod
+    def _gen_challenge(cls, ctype, rng):
+        if ctype == "timing":
+            # bar moves, player must click in the sweet spot (center 20%)
+            position = rng.randint(0, 100)
+            speed = rng.uniform(0.5, 2.0)
+            return {"pos": position, "speed": round(speed, 2),
+                    "sweet_start": 40, "sweet_end": 60,
+                    "desc": "Попади в золотую зону!"}
+        elif ctype == "pattern":
+            # sequence of colors/numbers to repeat
+            length = rng.randint(3, 6)
+            seq = [rng.randint(0, 3) for _ in range(length)]
+            return {"seq": seq, "desc": "Повтори паттерн!"}
+        else:  # rapid
+            # click as many times as possible in N seconds
+            duration = rng.randint(3, 6)
+            target = rng.randint(10, 30)
+            return {"duration": duration, "target": target,
+                    "desc": "Кликай быстрее!"}
+
+    @classmethod
+    def submit_answer(cls, state, uid, answer, now=None):
+        """Submit answer to a skill challenge. Returns score + winner."""
+        t = now or int(time.time())
+        pending = cls._pending.get(uid)
+        if not pending:
+            return {"error": "no active challenge"}
+        if t - pending["ts"] > cls.DUEL_TIMEOUT:
+            del cls._pending[uid]
+            return {"error": "challenge expired"}
+        if pending["done"]:
+            return {"error": "already completed"}
+
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        stake = pending["stake"]
+        ctype = pending["type"]
+        ch = pending["challenge"]
+
+        # calculate score based on challenge type
+        score = 0
+        if ctype == "timing":
+            click_pos = int(answer.get("position", 50))
+            center = (ch["sweet_start"] + ch["sweet_end"]) / 2
+            dist = abs(click_pos - center)
+            if dist <= 10:
+                score = 100
+            elif dist <= 20:
+                score = 80
+            elif dist <= 30:
+                score = 60
+            elif dist <= 40:
+                score = 40
+            else:
+                score = 20
+        elif ctype == "pattern":
+            player_seq = answer.get("seq", [])
+            correct = ch["seq"]
+            matches = sum(1 for a, b in zip(player_seq, correct) if a == b)
+            score = int(matches / max(len(correct), 1) * 100)
+        elif ctype == "rapid":
+            clicks = int(answer.get("clicks", 0))
+            score = min(100, int(clicks / max(ch["target"], 1) * 100))
+
+        # hero bonus: attack adds to score
+        attack = int(c.get("attack", 0)) + int(c.get("level", 1)) * 2
+        score = min(100, score + int(attack / PHI))
+
+        pending["score"] = score
+        pending["done"] = True
+
+        # simulate opponent (phi-weighted random, affected by hero power)
+        opp_score = int(random.Random(t + uid).randint(30, 95) * PHI / (1 + attack / 1000))
+        opp_score = min(100, max(0, opp_score))
+
+        won = score >= opp_score
+        if won:
+            prize = int(stake * PHI)
+        else:
+            prize = -int(stake / PHI)
+
+        gold = int(c.get("gold", 0))
+        if prize > 0:
+            c["gold"] = gold + prize
+        else:
+            if gold + prize < 0:
+                prize = -gold
+            c["gold"] = gold + prize
+
+        # XP from duel
+        c["xp"] = c.get("xp", 0) + abs(score) * 10
+
+        state.mark_dirty(uid)
+        del cls._pending[uid]
+        return {
+            "won": won, "score": score, "opp_score": opp_score,
+            "prize": prize, "stake": stake, "gold_left": c["gold"],
+        }
+
+
+# ============================================================
+# QUEST CHAINS — story quests with moral choices
+# ============================================================
+
+class QuestChains:
+    """Цепочки квестов с моральным выбором. Каждый выбор меняет мир:
+    - корпоративный шпионаж vs честная конкуренция
+    - помочь гильдии vs обокрасть её
+    - инвестировать в проект vs слить деньги
+
+    Выбор фиксируется, влияет на доступные квесты в будущем."""
+
+    CHAINS = [
+        {
+            "id": "shadow_corp",
+            "name": "Тень Корпорации",
+            "name_en": "Shadow Corp",
+            "quests": [
+                {
+                    "id": "sc_1",
+                    "name": "Первый контакт",
+                    "text": "Таинственный незнакомец предлагает информацию о конкурентах. Взять?",
+                    "choices": [
+                        {"id": "spy", "text": "Взять информацию (шпионаж)",
+                         "reward_gold": 5000, "reward_item": "Шпионский чип",
+                         "consequence": "corruption +10", "unlock": "sc_2a"},
+                        {"id": "refuse", "text": "Отказать (честность)",
+                         "reward_gold": 1000, "reward_item": None,
+                         "consequence": "reputation +15", "unlock": "sc_2b"},
+                    ],
+                },
+                {
+                    "id": "sc_2a",
+                    "name": "Глубже в тень",
+                    "text": "Информация оказалась золотом. Новый контакт предлагает украсть данные.",
+                    "choices": [
+                        {"id": "steal", "text": "Красть данные (криминал)",
+                         "reward_gold": 20000, "reward_item": "Данные конкурента",
+                         "consequence": "corruption +25", "unlock": "sc_3a"},
+                        {"id": "blackmail", "text": "Шантажировать contact (хитрость)",
+                         "reward_gold": 10000, "reward_item": "Компромат",
+                         "consequence": "corruption +10, reputation +5", "unlock": "sc_3b"},
+                    ],
+                },
+                {
+                    "id": "sc_2b",
+                    "name": "Честный путь",
+                    "text": "Твоя честность привлекла внимание влиятельного инвестора.",
+                    "choices": [
+                        {"id": "invest", "text": "Принять инвестиции (рост)",
+                         "reward_gold": 8000, "reward_item": "Инвестиционный контракт",
+                         "consequence": "reputation +10", "unlock": "sc_3c"},
+                        {"id": "mentor", "text": "Стать ментором (знание)",
+                         "reward_gold": 3000, "reward_item": "ФИ-мануал",
+                         "consequence": "reputation +20, xp +5000", "unlock": "sc_3c"},
+                    ],
+                },
+                {
+                    "id": "sc_3a",
+                    "name": "Цена предательства",
+                    "text": "Корпорация знает о краже. Против тебя — армия юристов.",
+                    "choices": [
+                        {"id": "flee", "text": "Бежать (сменитьcorp)",
+                         "reward_gold": 0, "reward_item": "Фальшивый ID",
+                         "consequence": "corruption +50, lose all corp rep"},
+                        {"id": "fight", "text": "Сражаться (юридически)",
+                         "reward_gold": -10000, "reward_item": "Адвокат PHI",
+                         "consequence": "reputation +30, corruption -20"},
+                    ],
+                },
+                {
+                    "id": "sc_3b",
+                    "name": "Игра шантажистов",
+                    "text": "Контакт предлагает сделку: молчание за долю.",
+                    "choices": [
+                        {"id": "deal", "text": "Принять сделку",
+                         "reward_gold": 30000, "reward_item": "Тайный фонд",
+                         "consequence": "corruption +15"},
+                        {"id": "expose", "text": "Разоблачить всех",
+                         "reward_gold": 5000, "reward_item": "Репутация разоблачителя",
+                         "consequence": "reputation +40, corruption -30"},
+                    ],
+                },
+                {
+                    "id": "sc_3c",
+                    "name": "Восхождение",
+                    "text": "Ты стал уважаемым игроком. Предложение стать CEO.",
+                    "choices": [
+                        {"id": "ceo", "text": "Стать CEO",
+                         "reward_gold": 50000, "reward_item": "Корона CEO",
+                         "consequence": "reputation +50, unlock CEO abilities"},
+                        {"id": "share", "text": "Поделиться властью",
+                         "reward_gold": 20000, "reward_item": "Совет директоров",
+                         "consequence": "reputation +30, unlock governance"},
+                    ],
+                },
+            ],
+        },
+        {
+            "id": "phi_crisis",
+            "name": "ФИ-Кризис",
+            "name_en": "PHI Crisis",
+            "quests": [
+                {
+                    "id": "pc_1",
+                    "name": "Предзнаменование",
+                    "text": "Рынок падает. Ты видишь паттерн, который игнорируют другие.",
+                    "choices": [
+                        {"id": "short", "text": "Зашортить всё (прибыль)",
+                         "reward_gold": 15000, "reward_item": "Bear Token",
+                         "consequence": "reputation -10, corruption +5"},
+                        {"id": "warn", "text": "Предупредить сообщество",
+                         "reward_gold": 2000, "reward_item": None,
+                         "consequence": "reputation +25"},
+                        {"id": "hedge", "text": "Хеджировать позиции (balanced)",
+                         "reward_gold": 8000, "reward_item": "Hedge Shield",
+                         "consequence": "reputation +5"},
+                    ],
+                },
+                {
+                    "id": "pc_2",
+                    "name": "Крах",
+                    "text": "Кризис наступил. Биржа рушит. Твои решения?",
+                    "choices": [
+                        {"id": "rescue", "text": "Спасти малых инвесторов",
+                         "reward_gold": -5000, "reward_item": "Народный герой",
+                         "consequence": "reputation +40"},
+                        {"id": "profit", "text": "Нажиться на хаосе",
+                         "reward_gold": 50000, "reward_item": "Золотой шторм",
+                         "consequence": "corruption +30, reputation -20"},
+                        {"id": "reform", "text": "Предложить реформы",
+                         "reward_gold": 5000, "reward_item": "Проект реформы",
+                         "consequence": "reputation +20, unlock regulatory"},
+                    ],
+                },
+            ],
+        },
+        {
+            "id": "guild_war",
+            "name": "Война Гильдий",
+            "name_en": "Guild War",
+            "quests": [
+                {
+                    "id": "gw_1",
+                    "name": "Набор",
+                    "text": "Две гильдии сражаются за территорию. Ты — ключевой игрок.",
+                    "choices": [
+                        {"id": "join_alpha", "text": "Присоединиться к Alpha Corps",
+                         "reward_gold": 3000, "reward_item": "Alpha Badge",
+                         "consequence": "guild=alpha, enemy=omega"},
+                        {"id": "join_omega", "text": "Присоединиться к Omega Syndicate",
+                         "reward_gold": 3000, "reward_item": "Omega Badge",
+                         "consequence": "guild=omega, enemy=alpha"},
+                        {"id": "freelance", "text": "Остаться независимым",
+                         "reward_gold": 1000, "reward_item": None,
+                         "consequence": "no guild, no allies"},
+                    ],
+                },
+            ],
+        },
+    ]
+
+    @staticmethod
+    def available_chains(state, uid):
+        """Get available quest chains for a player."""
+        c = state.chars.get(uid, {})
+        completed = set(c.get("_quests_completed", []))
+        active = c.get("_quests_active", {})
+        available = []
+        for chain in QuestChains.CHAINS:
+            first_q = chain["quests"][0]
+            if first_q["id"] not in completed and first_q["id"] not in active:
+                available.append({
+                    "chain_id": chain["id"],
+                    "chain_name": chain["name"],
+                    "chain_name_en": chain["name_en"],
+                    "first_quest": first_q,
+                })
+        return available
+
+    @staticmethod
+    def get_active_quest(state, uid):
+        """Get the player's current active quest."""
+        c = state.chars.get(uid, {})
+        active = c.get("_quests_active", {})
+        if not active:
+            return None
+        quest_id = list(active.keys())[0]
+        data = active[quest_id]
+        # find quest text
+        for chain in QuestChains.CHAINS:
+            for q in chain["quests"]:
+                if q["id"] == quest_id:
+                    return {"quest": q, "started_at": data.get("ts", 0),
+                            "choices_made": data.get("choices", [])}
+        return None
+
+    @staticmethod
+    def start_quest(state, uid, chain_id):
+        """Start the first quest of a chain."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        active = c.get("_quests_active", {})
+        if active:
+            return {"error": "already have active quest"}
+        for chain in QuestChains.CHAINS:
+            if chain["id"] == chain_id:
+                q = chain["quests"][0]
+                c["_quests_active"] = {q["id"]: {"ts": int(time.time()), "choices": []}}
+                state.mark_dirty(uid)
+                return {"ok": True, "quest": q}
+        return {"error": "chain not found"}
+
+    @staticmethod
+    def make_choice(state, uid, quest_id, choice_id, now=None):
+        """Make a moral choice in a quest. Returns consequences + next quest."""
+        t = now or int(time.time())
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        active = c.get("_quests_active", {})
+        if quest_id not in active:
+            return {"error": "quest not active"}
+        # find quest and choice
+        quest = None
+        for chain in QuestChains.CHAINS:
+            for q in chain["quests"]:
+                if q["id"] == quest_id:
+                    quest = q
+                    break
+        if not quest:
+            return {"error": "quest not found"}
+        choice = next((ch for ch in quest["choices"] if ch["id"] == choice_id), None)
+        if not choice:
+            return {"error": "choice not found"}
+        # apply rewards
+        gold_delta = choice.get("reward_gold", 0)
+        c["gold"] = c.get("gold", 0) + gold_delta
+        item = choice.get("reward_item")
+        if item:
+            c.setdefault("loot", []).append({"name": item, "cat": 11, "qty": 1,
+                                              "rarity": 3, "value": abs(gold_delta)})
+        # apply consequences
+        consequence = choice.get("consequence", "")
+        c["_quest_consequences"] = c.get("_quest_consequences", []) + [consequence]
+        # record choice
+        active[quest_id]["choices"].append({"choice": choice_id, "ts": t})
+        # unlock next quest
+        next_id = choice.get("unlock")
+        del active[quest_id]
+        if next_id:
+            active[next_id] = {"ts": t, "choices": []}
+            c["_quests_active"] = active
+            # find next quest data
+            for chain in QuestChains.CHAINS:
+                for q in chain["quests"]:
+                    if q["id"] == next_id:
+                        c.setdefault("_quests_completed", []).append(quest_id)
+                        state.mark_dirty(uid)
+                        return {"ok": True, "gold_delta": gold_delta, "item": item,
+                                "consequence": consequence, "next_quest": q}
+        else:
+            c["_quests_active"] = active
+            c.setdefault("_quests_completed", []).append(quest_id)
+        state.mark_dirty(uid)
+        return {"ok": True, "gold_delta": gold_delta, "item": item,
+                "consequence": consequence, "next_quest": None}
+
+
+# ============================================================
+# CRAFTING SYSTEM — combine loot into new items
+# ============================================================
+
+class CraftingSystem:
+    """Крафт: 2-3 предмета → новый предмет. Рецепты на основе phi.
+    Редкость результата зависит от редкости ингредиентов + шанс.
+    Крафт всегда даёт что-то (bicycle principle)."""
+
+    RECIPES = [
+        {"inputs": [1, 1, 1], "output_cat": 2, "output_rarity": 2,
+         "name": "Улучшенный предмет", "chance": 0.8},
+        {"inputs": [2, 2], "output_cat": 3, "output_rarity": 3,
+         "name": "Редкий крафт", "chance": 0.6},
+        {"inputs": [3, 3, 3], "output_cat": 4, "output_rarity": 4,
+         "name": "Эпический крафт", "chance": 0.4},
+        {"inputs": [4, 4], "output_cat": 5, "output_rarity": 5,
+         "name": "Легендарный крафт", "chance": 0.2},
+        {"inputs": [1, 2, 3], "output_cat": 3, "output_rarity": 3,
+         "name": "Смешанный крафт", "chance": 0.5},
+        {"inputs": [2, 3, 4], "output_cat": 4, "output_rarity": 4,
+         "name": "Продвинутый крафт", "chance": 0.3},
+    ]
+
+    @staticmethod
+    def get_recipes():
+        """List available recipes."""
+        return [{"inputs": r["inputs"], "output_name": r["name"],
+                 "output_rarity": r["output_rarity"], "chance": r["chance"]}
+                for r in CraftingSystem.RECIPES]
+
+    @staticmethod
+    def craft(state, uid, item_indices, recipe_idx=0, now=None):
+        """Craft new item from loot. item_indices = list of indices in loot array."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        loot = c.get("loot", [])
+        if any(i < 0 or i >= len(loot) for i in item_indices):
+            return {"error": "invalid item index"}
+        if len(item_indices) < 2:
+            return {"error": "need at least 2 items"}
+        if recipe_idx < 0 or recipe_idx >= len(CraftingSystem.RECIPES):
+            return {"error": "invalid recipe"}
+        recipe = CraftingSystem.RECIPES[recipe_idx]
+        # check rarity match
+        items = [loot[i] for i in item_indices]
+        input_rarities = sorted([it.get("rarity", 0) for it in items])
+        expected = sorted(recipe["inputs"][:len(items)])
+        if input_rarities != expected and len(items) != len(recipe["inputs"]):
+            # flexible: use highest rarity available
+            pass
+        # roll craft
+        rng = random.Random(int(time.time() * PHI) + uid)
+        success = rng.random() < recipe["chance"]
+        # remove used items (in reverse order)
+        for i in sorted(item_indices, reverse=True):
+            del loot[i]
+        if success:
+            # create new item
+            value = sum(it.get("value", 0) for it in items) + int(PHI * 100)
+            new_item = {
+                "code": rng.randint(0, 65535),
+                "name": recipe["name"],
+                "cat": recipe["output_cat"],
+                "rarity": recipe["output_rarity"],
+                "qty": 1,
+                "value": value,
+                "crafted": True,
+                "crafted_from": [it.get("name", "?") for it in items],
+            }
+            loot.append(new_item)
+            c["loot"] = loot
+            state.mark_dirty(uid)
+            return {"ok": True, "success": True, "item": new_item,
+                    "materials_used": [it.get("name") for it in items]}
+        else:
+            # bicycle: always return something (lower rarity)
+            fallback = {
+                "code": rng.randint(0, 65535),
+                "name": "Осколок PHI",
+                "cat": 1,
+                "rarity": 1,
+                "qty": 1,
+                "value": int(PHI * 50),
+            }
+            loot.append(fallback)
+            c["loot"] = loot
+            state.mark_dirty(uid)
+            return {"ok": True, "success": False, "item": fallback,
+                    "materials_used": [it.get("name") for it in items],
+                    "note": "Craft failed but bicycle principle: you get an Oskolok"}
+
+
+# ============================================================
+# PLAYER TRADING — marketplace between players
+# ============================================================
+
+class PlayerTrading:
+    """Рынок между игроками. Игроки выставляют предметы, другие покупают.
+    Цены формируются спросом/предложением (phi-weighted).
+    Комиссия 5% (phi/PHI^3)."""
+
+    COMMISSION_PCT = 0.05
+    MAX_LISTINGS = 100
+    _listings = []  # [{seller_uid, item, price, ts, id}]
+    _next_id = 1
+
+    @classmethod
+    def list_item(cls, state, uid, item_index, price, now=None):
+        """List an item for sale."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        loot = c.get("loot", [])
+        if item_index < 0 or item_index >= len(loot):
+            return {"error": "invalid item index"}
+        if price <= 0:
+            return {"error": "price must be positive"}
+        item = loot[item_index]
+        # remove from inventory
+        del loot[item_index]
+        c["loot"] = loot
+        listing = {
+            "id": cls._next_id,
+            "seller_uid": uid,
+            "item": item,
+            "price": price,
+            "ts": now or int(time.time()),
+        }
+        cls._listings.append(listing)
+        cls._next_id += 1
+        state.mark_dirty(uid)
+        return {"ok": True, "listing_id": listing["id"], "item": item}
+
+    @classmethod
+    def buy_listing(cls, state, uid, listing_id, now=None):
+        """Buy a listed item."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        listing = next((l for l in cls._listings if l["id"] == listing_id), None)
+        if not listing:
+            return {"error": "listing not found"}
+        if listing["seller_uid"] == uid:
+            return {"error": "cannot buy own item"}
+        price = listing["price"]
+        gold = int(c.get("gold", 0))
+        if gold < price:
+            return {"error": "not enough gold", "have": gold, "need": price}
+        # pay
+        c["gold"] = gold - price
+        commission = int(price * cls.COMMISSION_PCT)
+        seller_payout = price - commission
+        # pay seller
+        seller = state.chars.get(listing["seller_uid"])
+        if seller:
+            seller["gold"] = int(seller.get("gold", 0)) + seller_payout
+        # give item to buyer
+        c.setdefault("loot", []).append(listing["item"])
+        # remove listing
+        cls._listings = [l for l in cls._listings if l["id"] != listing_id]
+        state.mark_dirty(uid)
+        if seller:
+            state.mark_dirty(listing["seller_uid"])
+        return {"ok": True, "item": listing["item"], "price": price,
+                "commission": commission, "gold_left": c["gold"]}
+
+    @classmethod
+    def get_listings(cls, sort_by="price", limit=30):
+        """Get market listings."""
+        items = cls._listings[-limit:]
+        if sort_by == "price":
+            items.sort(key=lambda x: x["price"])
+        elif sort_by == "rarity":
+            items.sort(key=lambda x: x["item"].get("rarity", 0), reverse=True)
+        elif sort_by == "newest":
+            items.sort(key=lambda x: x["ts"], reverse=True)
+        return [{"id": l["id"], "item": l["item"], "price": l["price"],
+                 "seller": l["seller_uid"], "age_min": (int(time.time()) - l["ts"]) // 60}
+                for l in items]
+
+    @classmethod
+    def cancel_listing(cls, uid, listing_id):
+        """Cancel your own listing."""
+        listing = next((l for l in cls._listings if l["id"] == listing_id), None)
+        if not listing:
+            return {"error": "listing not found"}
+        if listing["seller_uid"] != uid:
+            return {"error": "not your listing"}
+        cls._listings = [l for l in cls._listings if l["id"] != listing_id]
+        return {"ok": True, "item": listing["item"]}
+
+
+# ============================================================
+# STRATEGY MAP — territory grid, guild wars
+# ============================================================
+
+class StrategyMap:
+    """Карта 8x8 клеток. Гильдии захватывают территории.
+    Каждая клетка даёт ресурсы (gold/sec).
+    Захват = отправить войско (hero power vs defense).
+    Territory control = passive income + strategic bonuses."""
+
+    MAP_SIZE = 8
+    TERRITORY_TYPES = [
+        {"type": "plains", "income": 10, "defense": 100, "emoji": "🟩"},
+        {"type": "mountain", "income": 25, "defense": 300, "emoji": "🏔"},
+        {"type": "river", "income": 15, "defense": 150, "emoji": "🟦"},
+        {"type": "city", "income": 50, "defense": 500, "emoji": "🏙"},
+        {"type": "ruins", "income": 40, "defense": 200, "emoji": "🏚"},
+        {"type": "forest", "income": 20, "defense": 200, "emoji": "🌲"},
+    ]
+
+    _grid = None  # 2D array of territories
+    _armies = {}  # uid -> {x, y, power}
+
+    @classmethod
+    def _init_grid(cls, seed=42):
+        if cls._grid is not None:
+            return
+        rng = random.Random(seed)
+        cls._grid = []
+        for y in range(cls.MAP_SIZE):
+            row = []
+            for x in range(cls.MAP_SIZE):
+                tt = rng.choice(cls.TERRITORY_TYPES)
+                row.append({
+                    "x": x, "y": y,
+                    "type": tt["type"], "income": tt["income"],
+                    "defense": tt["defense"], "emoji": tt["emoji"],
+                    "owner_guild": None, "owner_uid": None,
+                    "capture_time": 0,
+                })
+            cls._grid.append(row)
+
+    @classmethod
+    def status(cls, state, uid):
+        cls._init_grid()
+        c = state.chars.get(uid, {})
+        guild = c.get("guild", None)
+        my_territories = []
+        total_income = 0
+        for row in cls._grid:
+            for t in row:
+                if t["owner_uid"] == uid:
+                    my_territories.append(t)
+                    total_income += t["income"]
+        # guild territories
+        guild_territories = []
+        for row in cls._grid:
+            for t in row:
+                if t["owner_guild"] == guild:
+                    guild_territories.append(t)
+        army = cls._armies.get(uid, {})
+        return {
+            "grid": [[{"type": t["type"], "emoji": t["emoji"],
+                        "owner": t["owner_uid"], "income": t["income"],
+                        "defense": t["defense"]} for t in row] for row in cls._grid],
+            "my_territories": len(my_territories),
+            "my_income": total_income,
+            "guild_territories": len(guild_territories),
+            "army": army,
+        }
+
+    @classmethod
+    def move_army(cls, state, uid, x, y, now=None):
+        """Move your army to a territory."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        cls._init_grid()
+        if x < 0 or x >= cls.MAP_SIZE or y < 0 or y >= cls.MAP_SIZE:
+            return {"error": "out of bounds"}
+        power = hero_power(100 + c.get("level", 1) * 10,
+                           c.get("hero_levels", [0] * 12)[c.get("hero_id", 0) % 12])
+        cls._armies[uid] = {"x": x, "y": y, "power": int(power), "ts": now or int(time.time())}
+        return {"ok": True, "x": x, "y": y, "power": int(power)}
+
+    @classmethod
+    def capture(cls, state, uid, now=None):
+        """Attempt to capture the territory at your army's position."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        cls._init_grid()
+        army = cls._armies.get(uid)
+        if not army:
+            return {"error": "no army deployed"}
+        t = cls._grid[army["y"]][army["x"]]
+        if t["owner_uid"] == uid:
+            return {"error": "already yours"}
+        # battle: army power vs territory defense
+        attack = army["power"]
+        defense = t["defense"]
+        rng = random.Random(int(time.time() * PHI) + uid)
+        swing = rng.uniform(1 / PHI, PHI)
+        attack = int(attack * swing)
+        won = attack >= defense
+        if won:
+            t["owner_uid"] = uid
+            t["owner_guild"] = c.get("guild")
+            t["capture_time"] = now or int(time.time())
+            return {"ok": True, "won": True, "territory": t,
+                    "attack": attack, "defense": defense}
+        else:
+            return {"ok": True, "won": False, "attack": attack,
+                    "defense": defense, "territory_type": t["type"]}
+
+    @classmethod
+    def collect_income(cls, state, uid, now=None):
+        """Collect passive income from owned territories."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        cls._init_grid()
+        total = 0
+        for row in cls._grid:
+            for t in row:
+                if t["owner_uid"] == uid:
+                    total += t["income"]
+        if total > 0:
+            c["gold"] = c.get("gold", 0) + total
+            state.mark_dirty(uid)
+        return {"ok": True, "income": total, "gold_left": c.get("gold", 0)}
+
+
 if __name__ == "__main__":
     class FakeState:
         def __init__(self):

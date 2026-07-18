@@ -74,6 +74,7 @@ from golden_econ import (
     CrashInsurance, PhiArtifacts, MarketInsider,
     PhiCandleBet, CandleShop, CandleSettlement,
     PlayerSession, StateSnapshot, ActivityWatchdog,
+    SkillPvP, QuestChains, CraftingSystem, PlayerTrading, StrategyMap,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -2267,6 +2268,144 @@ async def handle_snapshots(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- SKILL PvP / QUESTS / CRAFTING / TRADING / MAP ----
+
+async def pulse_skill_duel(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    stake = int(d.get("stake", 100))
+    result = SkillPvP.create_duel(STATE, uid, stake)
+    _hb(uid, f"pvp_create_{stake}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_skill_answer(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    answer = d.get("answer", {})
+    result = SkillPvP.submit_answer(STATE, uid, answer)
+    _hb(uid, f"pvp_answer", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_quests(request):
+    uid = int(request.match_info.get("uid", 1000))
+    chains = QuestChains.available_chains(STATE, uid)
+    active = QuestChains.get_active_quest(STATE, uid)
+    body = json.dumps({"available": chains, "active": active}).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_quest_start(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    chain_id = d.get("chain_id", "")
+    result = QuestChains.start_quest(STATE, uid, chain_id)
+    _hb(uid, f"quest_start_{chain_id}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_quest_choice(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    quest_id = d.get("quest_id", "")
+    choice_id = d.get("choice_id", "")
+    result = QuestChains.make_choice(STATE, uid, quest_id, choice_id)
+    _hb(uid, f"quest_{quest_id}_{choice_id}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_recipes(request):
+    body = json.dumps(CraftingSystem.get_recipes()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_craft(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    item_indices = d.get("items", [])
+    recipe_idx = int(d.get("recipe", 0))
+    result = CraftingSystem.craft(STATE, uid, item_indices, recipe_idx)
+    _hb(uid, f"craft_r{recipe_idx}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_market(request):
+    sort_by = request.query.get("sort", "price")
+    body = json.dumps(PlayerTrading.get_listings(sort_by=sort_by)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_trade_list(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    item_idx = int(d.get("item_idx", 0))
+    price = int(d.get("price", 100))
+    result = PlayerTrading.list_item(STATE, uid, item_idx, price)
+    _hb(uid, f"trade_list_{price}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_trade_buy(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    listing_id = int(d.get("listing_id", 0))
+    result = PlayerTrading.buy_listing(STATE, uid, listing_id)
+    _hb(uid, f"trade_buy_{listing_id}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_trade_cancel(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    listing_id = int(d.get("listing_id", 0))
+    result = PlayerTrading.cancel_listing(uid, listing_id)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_map(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(StrategyMap.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_map_move(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    x = int(d.get("x", 0))
+    y = int(d.get("y", 0))
+    result = StrategyMap.move_army(STATE, uid, x, y)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_map_capture(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = StrategyMap.capture(STATE, uid)
+    _hb(uid, f"map_capture", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_map_income(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = StrategyMap.collect_income(STATE, uid)
+    _hb(uid, f"map_income", result.get("gold_left", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 def make_card_app():
     app = web.Application()
     app.router.add_get("/", handle_card_index)
@@ -2471,6 +2610,22 @@ def make_unified_app():
     app.router.add_get("/api/session/{uid}", handle_session)
     app.router.add_get("/api/sessionlog/{uid}", handle_session_log)
     app.router.add_get("/api/snapshots/{uid}", handle_snapshots)
+    # ---- SKILL PvP / QUESTS / CRAFTING / TRADING / MAP ----
+    app.router.add_post("/pulse/skill/duel", pulse_skill_duel)
+    app.router.add_post("/pulse/skill/answer", pulse_skill_answer)
+    app.router.add_get("/api/quests/{uid}", handle_quests)
+    app.router.add_post("/pulse/quest/start", pulse_quest_start)
+    app.router.add_post("/pulse/quest/choice", pulse_quest_choice)
+    app.router.add_get("/api/recipes", handle_recipes)
+    app.router.add_post("/pulse/craft", pulse_craft)
+    app.router.add_get("/api/market", handle_market)
+    app.router.add_post("/pulse/trade/list", pulse_trade_list)
+    app.router.add_post("/pulse/trade/buy", pulse_trade_buy)
+    app.router.add_post("/pulse/trade/cancel", pulse_trade_cancel)
+    app.router.add_get("/api/map/{uid}", handle_map)
+    app.router.add_post("/pulse/map/move", pulse_map_move)
+    app.router.add_post("/pulse/map/capture", pulse_map_capture)
+    app.router.add_post("/pulse/map/income", pulse_map_income)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
