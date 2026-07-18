@@ -9,4 +9,8 @@ data/chars/
 data/market.json
 id_rsa
 press/out/*.pdf
+press/out/me/*.pdf
 press/charts_test.pdf
+press/_broch_test.py
+press/_broch_test.pdf
+tests/cube_vector.json

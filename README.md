@@ -27,3 +27,9 @@ python main.py
 - Магазин + премиум-донат
 - JSON-сохранения
 - Предупреждения и 14-ФЗ compliance
+
+## Архитектура
+
+Устройство проекта, парадигмы (низкий трафик, единый порт, zero-dependency),
+UML-диаграммы (Mermaid) и карту файлов см. в
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).

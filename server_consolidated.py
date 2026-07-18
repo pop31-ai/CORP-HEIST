@@ -29,6 +29,8 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import market_cube as cube
+
 from aiohttp import web
 from protocol import (
     build_char_bytes, parse_char, CHAR_SIZE, CHAR_FMT,
@@ -115,27 +117,55 @@ class SharedState:
         with open(path, "w") as f:
             json.dump(self.stocks, f)
 
+    STOCK_NAMES = ["ALPHA","BETA","GAMMA","DELTA","OMEGA","SIGMA","THETA",
+                   "ZETA","PI","RHO","KAPPA","LAMBDA","MU","NU","XI",
+                   "OMIKRON","CHI","PSI","PHI","TAU"]
+    CUBE_PRICE_DIV = 5000.0   # map cube price [1..1e6] -> stock price ~[0..200]
+
+    @staticmethod
+    def cube_stock_price(name, t=None):
+        """Deterministic stock price from the market cube. Pure function of
+        (name, time). No storage, no randomness. Same value on client (JS)."""
+        if t is None:
+            t = int(time.time())
+        return round(cube.price(name, t) / SharedState.CUBE_PRICE_DIV, 2)
+
+    @staticmethod
+    def cube_stock_delta(name, t=None):
+        """Percent change vs 60s ago, straight from the cube."""
+        if t is None:
+            t = int(time.time())
+        now = cube.price(name, t)
+        prev = cube.price(name, t - 60)
+        if prev <= 0:
+            return 0.0
+        return round((now - prev) * 100.0 / prev, 2)
+
     def _init_stocks(self):
-        names = ["ALPHA","BETA","GAMMA","DELTA","OMEGA","SIGMA","THETA",
-                 "ZETA","PI","RHO","KAPPA","LAMBDA","MU","NU","XI",
-                 "OMIKRON","CHI","PSI","PHI","TAU"]
-        return [{"id":i,"name":n,"price":round(random.uniform(5,200),2),
-                 "delta":round(random.uniform(-3,3),2),
-                 "volume":random.randint(10000,500000)} for i,n in enumerate(names)]
+        t = int(time.time())
+        out = []
+        for i, n in enumerate(self.STOCK_NAMES):
+            out.append({"id": i, "name": n,
+                        "price": self.cube_stock_price(n, t),
+                        "delta": self.cube_stock_delta(n, t),
+                        "volume": int(cube.volume(n, t))})
+        return out
 
     def tick_market(self):
-        # Central Bank drift: dovish (rate<1) lifts prices, hawkish (rate>1) sinks them.
+        """Recompute all prices from the cube at the current time. Prices are a
+        pure function of time now (deterministic); trades no longer mutate them.
+        The Central Bank rate still tints the DISPLAYED delta as market mood."""
+        t = int(time.time())
         try:
             rate = central_rate()
         except Exception:
             rate = 1.0
-        cb_drift = (1.0 - rate) * PHI      # +0.618*phi at max easing, -0.618*phi at max tightening
+        mood = (1.0 - rate)   # dovish (>0) lifts sentiment, hawkish (<0) sinks
         for s in self.stocks:
-            drift = cb_drift * (s["price"] * 0.002)
-            change = random.gauss(0, 1.5) + s["delta"] * 0.1 + drift
-            s["delta"] = round(change, 2)
-            s["price"] = round(max(0.01, s["price"] + change), 2)
-            s["volume"] = max(100, s["volume"] + random.randint(-5000, 5000))
+            n = s["name"]
+            s["price"] = self.cube_stock_price(n, t)
+            s["delta"] = round(self.cube_stock_delta(n, t) + mood * 0.5, 2)
+            s["volume"] = int(cube.volume(n, t))
 
     # --- CHAR FILE I/O ---
 
@@ -205,11 +235,8 @@ class SharedState:
             art = maybe_drop_artifact(0.15)
             if art:
                 loot.append(art)
-            hist = []
-            v = nw * 0.1
-            for _ in range(150):
-                v += v * 0.02 * (random.random() - 0.48)
-                hist.append(round(v, 2))
+            # history is NOT stored: the capital curve is computed from the
+            # market cube on demand (see handle_char). Saves ~150 floats/char.
             self.chars[uid] = {
                 "user_id":uid,"gold":gold,"xp":random.randint(0,999999),
                 "level":random.randint(1,100),"hero_id":random.randint(0,9),
@@ -226,7 +253,7 @@ class SharedState:
                 "streak_days":random.randint(0,365),
                 "hero_levels":[random.randint(0,50) for _ in range(12)],
                 "passives":[random.randint(0,10) for _ in range(12)],
-                "history":hist,"stocks":stocks,"loot":loot,
+                "stocks":stocks,"loot":loot,
             }
             self.mark_dirty(uid)
         self.save_all()
@@ -325,8 +352,30 @@ def _boost_reward(uid, result, field="reward_gold"):
 async def handle_dashboard(request):
     return web.Response(text=DASHBOARD_HTML, content_type="text/html")
 
+_CARD_CACHE = {"mtime": 0, "html": None}
+
+def build_card_html():
+    """Return wealth_card.html with market_cube.js inlined before the main
+    <script>, so the client computes cube values locally (single source of
+    truth, no extra request). Cached by file mtimes to keep RAM/CPU tiny."""
+    card_m = os.path.getmtime(CARD_HTML_PATH)
+    cube_m = os.path.getmtime(CUBE_JS_PATH) if os.path.exists(CUBE_JS_PATH) else 0
+    key = card_m + cube_m
+    if _CARD_CACHE["html"] is not None and _CARD_CACHE["mtime"] == key:
+        return _CARD_CACHE["html"]
+    with open(CARD_HTML_PATH, "r", encoding="utf-8") as f:
+        html = f.read()
+    if os.path.exists(CUBE_JS_PATH):
+        with open(CUBE_JS_PATH, "r", encoding="utf-8") as f:
+            cube_js = f.read()
+        inject = "<script>/*market_cube*/\n" + cube_js + "\n</script>\n"
+        html = html.replace("<script>", inject + "<script>", 1)
+    _CARD_CACHE["html"] = html
+    _CARD_CACHE["mtime"] = key
+    return html
+
 async def handle_card_index(request):
-    return web.FileResponse(CARD_HTML_PATH)
+    return web.Response(text=build_card_html(), content_type="text/html")
 
 # ---- PRESS: PHI micro-magazines (PDF) ----
 PRESS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "press", "out")
@@ -359,6 +408,9 @@ async def handle_press_index(request):
         "almanac": {"title": "АЛЬМАНАХ", "subtitle": "Полное собрание",
                     "url": "/press/almanac.pdf",
                     "available": os.path.exists(alm_path)},
+        "brochure": {"title": "БРОШЮРА УСПЕХА",
+                     "subtitle": "Личный глянцевый экземпляр",
+                     "url": "/press/me/{uid}.pdf", "available": True},
     }).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -391,6 +443,64 @@ async def handle_press_pdf(request):
 
 PRESS_BUILD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "press")
 PRESS_REGEN_HOURS = float(os.environ.get("PRESS_REGEN_HOURS", "6"))
+
+# ---- personal "Brochure of Success" (per-player glossy 2-pager) ----
+BROCH_DIR = os.path.join(PRESS_DIR, "me")
+BROCH_TTL = float(os.environ.get("BROCH_TTL", "300"))  # seconds
+
+def _build_brochure_sync(char, badges, rank, out_path):
+    """Runs in an executor: import lives here to keep startup light."""
+    import sys
+    if PRESS_BUILD_DIR not in sys.path:
+        sys.path.insert(0, PRESS_BUILD_DIR)
+    from brochure import build_brochure
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    return build_brochure(char, badges=badges, rank=rank, out_path=out_path)
+
+async def handle_press_me(request):
+    """Serve a player's personal Brochure of Success as a fresh glossy PDF."""
+    try:
+        uid = int(request.match_info.get("uid", 1000))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "bad uid"}, status=400)
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "not found"}, status=404)
+    # sync live stock prices into the snapshot (like /api/char)
+    char = dict(c)
+    char["stocks"] = [dict(s) for s in c.get("stocks", [])]
+    for s in char["stocks"]:
+        ms = next((x for x in STATE.stocks if x["name"] == s["name"]), None)
+        if ms:
+            s["price"], s["delta"] = ms["price"], ms["delta"]
+    char.setdefault("name", "Магнат #%d" % uid)
+    try:
+        badges = trader_badges(STATE, uid)
+    except Exception:
+        badges = None
+    # rank among all players by net worth
+    ranked = sorted(STATE.chars.values(), key=lambda x: -x.get("net_worth", 0))
+    rank = next((i + 1 for i, x in enumerate(ranked)
+                 if x.get("user_id") == uid), None)
+
+    out_path = os.path.join(BROCH_DIR, "%d.pdf" % uid)
+    fresh = (os.path.exists(out_path)
+             and (time.time() - os.path.getmtime(out_path)) < BROCH_TTL)
+    if not fresh:
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None, _build_brochure_sync, char, badges, rank, out_path)
+        except Exception as e:
+            log.warning("brochure build failed for %d: %s", uid, e)
+            if not os.path.exists(out_path):
+                return web.json_response(
+                    {"error": "build failed", "detail": str(e)}, status=500)
+    STATE.track(sent=os.path.getsize(out_path))
+    return web.FileResponse(out_path, headers={
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'inline; filename="brochure-%d.pdf"' % uid,
+    })
 
 def _press_pdfs_present():
     if not os.path.isdir(PRESS_DIR):
@@ -462,7 +572,48 @@ async def handle_char(request):
         if ms:
             s["price"] = ms["price"]
             s["delta"] = ms["delta"]
+    # capital history: computed from the cube on demand (never stored). The
+    # curve shape is deterministic per uid; scaled so it ends at net_worth.
+    # Client can reproduce this exactly from market_cube.js.
+    now = int(time.time())
+    c["history"] = cube.capital_series(uid, c["net_worth"], now, 3600, 48)
     body = json.dumps(c).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_welfare(request):
+    """Welfare quote for a player: a pure function of the cube (uid + time).
+    No storage. Returns the current candle, a tape of weekly candles, the
+    full audit breakdown (explain) and a saldo ledger. The client (JS twin)
+    can reproduce every number - this endpoint is a convenience, not a source
+    of truth."""
+    try:
+        uid = int(request.match_info.get("uid", 1000))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "bad uid"}, status=400)
+    n = 8
+    try:
+        n = max(1, min(52, int(request.query.get("n", "8"))))
+    except ValueError:
+        n = 8
+    now = int(time.time())
+    payload = {
+        "uid": uid,
+        "t": now,
+        "welfare": cube.welfare(uid, now),
+        "living_tier": cube.living_tier(uid, now),
+        "floor": cube.welfare_floor(uid, now),
+        "market_trend_q16": cube.market_trend(now),
+        "sector": cube.sector_of(uid),
+        "sector_trend_q16": cube.sector_trend(cube.sector_of(uid), now),
+        "candle": cube.welfare_candle(uid, t=now),
+        "quotes": cube.welfare_quotes(uid, now, n),
+        "report": cube.welfare_report(uid, now, n),
+        "explain": cube.welfare_explain(uid, now),
+        "note": "Welfare is a deterministic function of the cube. "
+                "No real money. In-game standard-of-living metric only.",
+    }
+    body = json.dumps(payload).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
 
@@ -1697,6 +1848,7 @@ def make_card_app():
     app = web.Application()
     app.router.add_get("/", handle_card_index)
     app.router.add_get("/api/char/{uid}", handle_char)
+    app.router.add_get("/api/welfare/{uid}", handle_welfare)
     app.router.add_get("/api/chars", handle_list)
     app.router.add_get("/api/proto/{uid}", handle_proto)
     app.router.add_get("/api/market", handle_market)
@@ -1714,8 +1866,7 @@ async def handle_card_route(request):
     """Serve wealth card HTML, selecting a player via ?uid= or /card/<n>."""
     uid = request.match_info.get("n", request.query.get("uid", "local"))
     # inject selected uid into HTML via query param passthrough
-    resp = web.FileResponse(CARD_HTML_PATH)
-    return resp
+    return web.Response(text=build_card_html(), content_type="text/html")
 
 def make_dashboard_app():
     app = web.Application()
@@ -1738,9 +1889,11 @@ def make_unified_app():
     app.router.add_get("/api/press", handle_press_index)
     app.router.add_get("/press", handle_press_index)
     app.router.add_get("/press/almanac.pdf", handle_press_almanac)
+    app.router.add_get("/press/me/{uid}.pdf", handle_press_me)
     app.router.add_get("/press/{n}.pdf", handle_press_pdf)
     # char API + pulse (shared)
     app.router.add_get("/api/char/{uid}", handle_char)
+    app.router.add_get("/api/welfare/{uid}", handle_welfare)
     app.router.add_get("/api/chars", handle_list)
     app.router.add_get("/api/proto/{uid}", handle_proto)
     app.router.add_get("/api/guilds", handle_guilds)
@@ -1835,6 +1988,7 @@ def make_unified_app():
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
+CUBE_JS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "market_cube.js")
 
 async def main():
     STATE.init_chars(NUM_CHARS)

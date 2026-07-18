@@ -617,6 +617,127 @@ def bullet(c, x, y, w, h, rows, title=None):
                      size=6.5, font="UB", rgb=col)
 
 
+# --- glossy magazine effects (semi-transparent highlights) -------------
+def _alpha(c, a):
+    """Apply a transparency graphics state if a bound Doc is available."""
+    doc = _DOC[0]
+    if doc is not None:
+        try:
+            c.set_alpha_gs(doc, a)
+        except Exception:
+            pass
+
+def _alpha_reset(c):
+    _alpha(c, 1.0)
+
+def gloss(c, x, y, w, h, tint=WHITE, strength=0.16):
+    """Glossy sheen: a bright band across the top ~38% (golden third) that
+    fades out, evoking a coated-magazine highlight. Alpha-blended."""
+    band = h * INV_PHI * INV_PHI  # ~0.38h
+    bands = 22
+    for i in range(bands):
+        t = i / (bands - 1.0)
+        a = strength * (1.0 - t)
+        if a <= 0.004:
+            continue
+        _alpha(c, a)
+        by = y + h - band * (i + 1) / bands
+        c.rect(x, by, w, band / bands + 0.6, fill=tint)
+    _alpha_reset(c)
+
+def foil(c, x, y, w, h, base=GOLD, streaks=7):
+    """Metallic-foil look: base fill + diagonal bright/dark streaks (alpha)."""
+    c.rect(x, y, w, h, fill=base)
+    for i in range(streaks):
+        t = i / (streaks - 1.0)
+        a = 0.10 if i % 2 == 0 else 0.06
+        col = GOLD_LT if i % 2 == 0 else INK
+        _alpha(c, a)
+        sx = x + w * t
+        c.polyline([(sx, y), (sx + w * 0.10, y),
+                    (sx + w * 0.10 - w * 0.18, y + h),
+                    (sx - w * 0.18, y + h)],
+                   rgb=col, lw=0.3, close=True, fill=col)
+    _alpha_reset(c)
+
+def emboss_frame(c, x, y, w, h, col=GOLD, inset=3):
+    """Debossed golden frame: bright top/left, dark bottom/right for depth."""
+    hi = GOLD_LT
+    lo = (int(col[0] * 0.4), int(col[1] * 0.4), int(col[2] * 0.4))
+    c.line(x + inset, y + h - inset, x + w - inset, y + h - inset, rgb=hi, lw=0.8)
+    c.line(x + inset, y + h - inset, x + inset, y + inset, rgb=hi, lw=0.8)
+    c.line(x + inset, y + inset, x + w - inset, y + inset, rgb=lo, lw=0.8)
+    c.line(x + w - inset, y + inset, x + w - inset, y + h - inset, rgb=lo, lw=0.8)
+
+
+# --- data table (zebra rows, golden header, aligned columns) -----------
+def table(c, x, y, w, h, headers, rows, title=None, aligns=None,
+          col_weights=None, accent=GOLD):
+    """A crisp phi-styled data table.
+
+    headers: list of column titles.
+    rows:    list of row tuples (values, stringified as-is).
+    aligns:  per-column 'l' | 'r' | 'c' (default: first left, rest right).
+    col_weights: relative column widths (default: equal).
+    """
+    panel(c, x, y, w, h, fill=(12, 13, 26), border=GREY_DK, lw=0.8)
+    if title:
+        section_title(c, x + 8, y + h - 16, title, size=10)
+    ncol = len(headers)
+    if ncol == 0:
+        return
+    if aligns is None:
+        aligns = ["l"] + ["r"] * (ncol - 1)
+    if col_weights is None:
+        col_weights = [1.0] * ncol
+    wsum = sum(col_weights) or 1
+    pad = 8
+    ix = x + pad
+    iw = w - pad * 2
+    top = y + h - (26 if title else pad)
+    bottom = y + pad
+    header_h = 16
+    body_top = top - header_h
+    n = len(rows) or 1
+    row_h = min(18.0, (body_top - bottom) / n)
+    # column x positions
+    xs = [ix]
+    for cw in col_weights:
+        xs.append(xs[-1] + iw * cw / wsum)
+
+    def cell_text(s, ci, cy, size, font, rgb):
+        a = aligns[ci] if ci < len(aligns) else "r"
+        x0, x1 = xs[ci], xs[ci + 1]
+        if a == "l":
+            c.text(x0 + 4, cy, str(s), size=size, font=font, rgb=rgb)
+        elif a == "c":
+            c.text_center((x0 + x1) / 2, cy, str(s), size=size, font=font, rgb=rgb)
+        else:
+            c.text_right(x1 - 4, cy, str(s), size=size, font=font, rgb=rgb)
+
+    # header band (foil-like)
+    c.rect(ix, top - header_h, iw, header_h, fill=(30, 26, 12))
+    gloss(c, ix, top - header_h, iw, header_h, tint=accent, strength=0.10)
+    for ci, htxt in enumerate(headers):
+        cell_text(htxt, ci, top - header_h + 5, 7.5, "UB", accent)
+    c.line(ix, top - header_h, ix + iw, top - header_h, rgb=accent, lw=0.6)
+    # body rows with zebra
+    for ri, row in enumerate(rows):
+        ry = body_top - row_h * (ri + 1)
+        if ri % 2 == 1:
+            c.rect(ix, ry, iw, row_h, fill=(18, 20, 38))
+        for ci in range(ncol):
+            val = row[ci] if ci < len(row) else ""
+            # mono font for right-aligned (numeric) columns, sans for text
+            a = aligns[ci] if ci < len(aligns) else "r"
+            font = "CB" if a == "r" else "U"
+            rgb = WHITE if a != "r" else PARCH
+            cell_text(val, ci, ry + row_h * 0.3, 7, font, rgb)
+    # column separators (subtle)
+    for cx_ in xs[1:-1]:
+        c.line(cx_, bottom, cx_, top - header_h, rgb=GREY_DK, lw=0.3)
+
+
 # module-level doc handle for alpha graphics states (set by magazine.py)
 _DOC = [None]
 

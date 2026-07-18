@@ -64,6 +64,8 @@ class Magazine:
         band_h = 92
         c.vgrad(0, PAGE_H - band_h, PAGE_W, band_h,
                 (34, 28, 10), G.INK, bands=48)
+        G.gloss(c, 0, PAGE_H - band_h, PAGE_W, band_h,
+                tint=self.accent, strength=0.12)
         c.line(0, PAGE_H - band_h, PAGE_W, PAGE_H - band_h,
                rgb=self.accent, lw=1.2)
         c.text(MARGIN, PAGE_H - 46, "CORP HEIST", size=30, font="UB",
@@ -79,6 +81,7 @@ class Magazine:
         # SROCHNO stripe
         y = PAGE_H - band_h - 26
         c.rect(MARGIN, y, 78, 16, fill=G.RED)
+        G.gloss(c, MARGIN, y, 78, 16, tint=G.WHITE, strength=0.22)
         c.text(MARGIN + 6, y + 4, "SROCHNO", size=9, font="UB", rgb=G.WHITE,
                char_space=1)
         c.text(MARGIN + 88, y + 4, self.subtitle, size=9, font="UB",

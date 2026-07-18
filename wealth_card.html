@@ -568,6 +568,38 @@ function newPortfolio(){
     frame=0;
 }
 function genHist(nw){const h=[];let v=nw*0.1;for(let i=0;i<150;i++){v+=v*0.02*(Math.random()-0.48);h.push(v);}return h;}
+function cubeHist(uid,nw){if(window.MarketCube&&typeof uid==='number'){try{const now=Math.floor(Date.now()/1000);return window.MarketCube.capitalSeries(uid|0,Math.round(nw),now,3600,48);}catch(e){}}return genHist(nw);}
+function drawWelfare(x,y,w,h,tc){
+    const MC=window.MarketCube;
+    X.strokeStyle='#1a1a2e';X.lineWidth=0.5;X.strokeRect(x,y,w,h);
+    X.fillStyle='#555';X.font='7px monospace';X.textAlign='left';X.fillText('WELFARE (STANDARD OF LIVING)',x+3,y+9);
+    if(!MC||P.uid==null){X.fillStyle='#444';X.font='7px monospace';X.fillText('cube unavailable',x+3,y+h/2);return;}
+    let q,ex;try{const now=Math.floor(Date.now()/1000);q=MC.welfareQuotes(P.uid|0,now,8);ex=MC.welfareExplain(P.uid|0,now);}catch(e){return;}
+    if(!q||!q.length)return;
+    let lo=Infinity,hi=-Infinity;q.forEach(c=>{if(c.l<lo)lo=c.l;if(c.h>hi)hi=c.h;});
+    const fl=q[q.length-1].floor;if(fl<lo)lo=fl;
+    lo*=0.98;hi*=1.02;const rng=hi-lo||1;
+    const top=y+13,bh=h-20,cw=w/q.length,bw=Math.max(2,cw*0.5);
+    const yOf=v=>top+bh-((v-lo)/rng)*bh;
+    // floor line
+    X.strokeStyle='#664400';X.lineWidth=0.5;X.setLineDash([2,2]);
+    X.beginPath();X.moveTo(x+2,yOf(fl));X.lineTo(x+w-2,yOf(fl));X.stroke();X.setLineDash([]);
+    // candles
+    q.forEach((c,i)=>{
+        const cx=x+i*cw+cw/2;const up=c.c>=c.o;const col=up?'#38d66a':'#ff4b4b';
+        X.strokeStyle=col;X.lineWidth=0.8;
+        X.beginPath();X.moveTo(cx,yOf(c.h));X.lineTo(cx,yOf(c.l));X.stroke();
+        const oy=yOf(c.o),cy=yOf(c.c);const bt=Math.min(oy,cy),bb=Math.max(oy,cy);
+        X.fillStyle=col;X.fillRect(cx-bw/2,bt,bw,Math.max(1,bb-bt));
+    });
+    // labels: current welfare + tier
+    X.fillStyle=tc;X.font='7px monospace';X.textAlign='right';
+    X.fillText('LVL '+ex.living_tier+'  $'+fmt(ex.welfare),x+w-3,y+9);
+    const trUp=ex.market_trend_q16>=0;
+    X.fillStyle=trUp?'#38d66a':'#ff4b4b';X.textAlign='left';
+    X.fillText('mkt '+(trUp?'+':'')+(ex.market_trend_q16/655.36).toFixed(1)+'%',x+3,y+h-3);
+    X.fillStyle='#664400';X.textAlign='right';X.fillText('floor $'+fmt(fl),x+w-3,y+h-3);
+}
 function dropLoot(){const r=rollRarity();const v=[10,50,250,1500,10000,50000][r];P.loot.push({code:Math.floor(Math.random()*65535),rarity:r,qty:1,value:v});P.netWorth+=v;P.gold+=v;if(P.history.length)P.history.push(P.history[P.history.length-1]+v*0.3);SND.loot(r);}
 function tradeStock(){const s=P.stocks[Math.floor(Math.random()*P.stocks.length)];if(!s)return;const d=(Math.random()-0.5)*20;s.price=Math.max(1,s.price+d);s.delta=d;if(P.history.length)P.history.push(P.history[P.history.length-1]+d*s.held*0.1);SND.trade();}
 
@@ -2072,6 +2104,9 @@ function render(){
     X.fillStyle='#555';X.font='7px monospace';X.textAlign='left';X.fillText('WEALTH GROWTH',hx+3,hy+10);
     X.fillStyle=tc;X.textAlign='right';X.fillText(P.name+' ('+RNAMES[tier]+')',hx+hw-3,hy+10);
 
+    // welfare candle quotes (standard-of-living, from the cube)
+    drawWelfare(hx,hy+hh+10,hw,58,tc);
+
     // chain visualization (loot flow)
     X.fillStyle='#333';X.font='7px monospace';X.textAlign='left';
     X.fillText('LOOT CHAIN FLOW',20,by+100);
@@ -2226,12 +2261,13 @@ async function loadPlayer(uid){
         const r=await fetch(API+'/api/char/'+uid);
         const d=await r.json();
         if(d.error)return;
+        P.uid=d.user_id;
         P.name=PNAMES[d.user_id%PNAMES.length];
         P.corp=CNAMES[d.corp_id%CNAMES.length];
         setTheme(d.corp_id%CORP_THEMES.length);
         P.level=d.level;P.gold=d.gold;P.netWorth=d.net_worth;
         P.stocks=d.stocks||[];P.loot=d.loot||[];
-        P.history=d.history&&d.history.length?d.history:genHist(d.net_worth);
+        P.history=cubeHist(d.user_id,d.net_worth);
         P.prestige=d.prestige;P.streak=d.streak_days;
         P.floor=(d.floor!=null?d.floor:0);
         P.rank=d.rank_percent;frame=0;

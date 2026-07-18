@@ -6,10 +6,20 @@ magnate ladders, boss HP curves - all derived from PHI. No network, no server.
 """
 
 import math
+import os
+import sys
 
 PHI = 1.618033988749895
 INV_PHI = 1.0 / PHI
 TAU = math.pi * 2.0
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    import market_cube as _cube
+except Exception:
+    _cube = None
+
+CUBE_PRICE_DIV = 5000.0  # keep in sync with server_consolidated.SharedState
 
 TICKERS = [
     "ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON",
@@ -95,8 +105,24 @@ def candles(seed, n=34, start=100.0, vol=0.03):
 
 
 def market_snapshot(seed):
-    """20 tickers with price + phi change%."""
+    """20 tickers with price + phi change%.
+
+    Prices come from the shared market cube (single source of truth). The seed
+    selects a deterministic point in cube-time, so each issue stays fully
+    reproducible while matching the game's own prices. Falls back to the phi
+    walk if the cube module is unavailable."""
     r = PhiRng(seed)
+    if _cube is not None:
+        t = _cube.GENESIS + (int(seed) % 90) * 86400
+        rows = []
+        for tk in TICKERS:
+            price = _cube.price(tk, t) / CUBE_PRICE_DIV
+            now = _cube.price(tk, t)
+            prev = _cube.price(tk, t - 3600)
+            chg = ((now - prev) * 100.0 / prev) if prev else 0.0
+            rows.append({"sym": tk, "price": round(price, 2),
+                         "chg": round(chg, 2), "vol": int(_cube.volume(tk, t))})
+        return rows
     rows = []
     for i, t in enumerate(TICKERS):
         base = 10.0 * (PHI ** (i % 6)) * r.rng(INV_PHI, PHI)

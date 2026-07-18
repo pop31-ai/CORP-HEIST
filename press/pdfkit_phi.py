@@ -439,6 +439,12 @@ class Doc:
         return n
 
     def save(self, path):
+        pdf = self.to_bytes()
+        with open(path, "wb") as f:
+            f.write(pdf)
+        return path
+
+    def to_bytes(self):
         buf = [b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"]
         offsets = []
 
@@ -581,9 +587,7 @@ class Doc:
                 "startxref\n%d\n%%%%EOF\n"
                 % (n_obj + 1, catalog_n, info_n, xref_pos)).encode("latin-1")
 
-        with open(path, "wb") as f:
-            f.write(pdf)
-        return path
+        return pdf
 
 
 if __name__ == "__main__":
