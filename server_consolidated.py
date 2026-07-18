@@ -328,6 +328,48 @@ async def handle_dashboard(request):
 async def handle_card_index(request):
     return web.FileResponse(CARD_HTML_PATH)
 
+# ---- PRESS: PHI micro-magazines (PDF) ----
+PRESS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "press", "out")
+PRESS_META = [
+    ("01", "PHI-РЫНОК", "Запуск Golden-500", "vypusk_01_phi_rynok.pdf"),
+    ("02", "СЕКТОРА", "Ротация TECH → LUXURY", "vypusk_02_sektora.pdf"),
+    ("03", "ШОРТЫ", "Анатомия сквиза", "vypusk_03_shorty.pdf"),
+    ("04", "ЦЕНТРОБАНК", "Цикл ставки PHI", "vypusk_04_centrobank.pdf"),
+    ("05", "МАГНАТЫ", "Рейтинг богатства", "vypusk_05_magnaty.pdf"),
+    ("06", "МАГНАТ ГОДА", "Коронация сезона", "vypusk_06_magnat_goda.pdf"),
+    ("07", "ДЕРИВАТИВЫ", "Опционы на PHI-страйки", "vypusk_07_derivativy.pdf"),
+    ("08", "БОТЫ", "Живая лента рынка", "vypusk_08_boty.pdf"),
+    ("09", "ГИЛЬДИИ", "Небоскрёбы и войны", "vypusk_09_gildii.pdf"),
+    ("10", "МАРКЕТ-МЕЙКИНГ", "Спред на PHI", "vypusk_10_market_meiking.pdf"),
+]
+
+async def handle_press_index(request):
+    """JSON list of available issues (for the client PRESS panel)."""
+    items = []
+    for no, title, sub, fname in PRESS_META:
+        path = os.path.join(PRESS_DIR, fname)
+        items.append({"no": no, "title": title, "subtitle": sub,
+                      "url": "/press/%s.pdf" % no,
+                      "available": os.path.exists(path)})
+    body = json.dumps({"issues": items}).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_press_pdf(request):
+    """Serve one issue PDF by its number (01..10 or 1..10)."""
+    n = request.match_info.get("n", "").zfill(2)
+    match = next((m for m in PRESS_META if m[0] == n), None)
+    if not match:
+        return web.json_response({"error": "no such issue"}, status=404)
+    path = os.path.join(PRESS_DIR, match[3])
+    if not os.path.exists(path):
+        return web.json_response({"error": "not built"}, status=404)
+    STATE.track(sent=os.path.getsize(path))
+    return web.FileResponse(path, headers={
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'inline; filename="corp-heist-%s.pdf"' % n,
+    })
+
 async def handle_char(request):
     uid = int(request.match_info.get("uid", 1000))
     c = STATE.chars.get(uid)
@@ -1611,6 +1653,10 @@ def make_unified_app():
     # wealth card (selected player)
     app.router.add_get("/card", handle_card_route)
     app.router.add_get("/card/{n}", handle_card_route)
+    # PRESS: PHI micro-magazines
+    app.router.add_get("/api/press", handle_press_index)
+    app.router.add_get("/press", handle_press_index)
+    app.router.add_get("/press/{n}.pdf", handle_press_pdf)
     # char API + pulse (shared)
     app.router.add_get("/api/char/{uid}", handle_char)
     app.router.add_get("/api/chars", handle_list)
