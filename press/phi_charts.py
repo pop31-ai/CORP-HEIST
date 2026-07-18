@@ -354,6 +354,124 @@ def compare_bars(c, x, y, w, h, rows, title=None,
         c.text(x + 8, by + bar_h * 0.6, lab, size=8, font="UB", rgb=PARCH)
 
 
+# --- heatmap (sector x period grid, colour by value) -------------------
+def _heat_colour(t):
+    """t in [0,1] -> red(cold) .. amber .. green(hot)."""
+    t = clamp(t, 0.0, 1.0)
+    if t < 0.5:
+        u = t / 0.5
+        return (int(lerp(RED[0], AMBER[0], u)), int(lerp(RED[1], AMBER[1], u)),
+                int(lerp(RED[2], AMBER[2], u)))
+    u = (t - 0.5) / 0.5
+    return (int(lerp(AMBER[0], GREEN[0], u)), int(lerp(AMBER[1], GREEN[1], u)),
+            int(lerp(AMBER[2], GREEN[2], u)))
+
+
+def heatmap(c, x, y, w, h, rows, cols, grid, title=None):
+    """grid[r][c] in raw values; auto-normalised. rows/cols are labels."""
+    panel(c, x, y, w, h, fill=(12, 13, 26), border=GREY_DK, lw=0.8)
+    if title:
+        section_title(c, x + 8, y + h - 16, title, size=10)
+    pad = 8
+    lab_w = 58
+    top = y + h - (24 if title else pad)
+    iy = y + pad + 12
+    ih = top - iy
+    iw = w - pad * 2 - lab_w
+    nr, nc = len(rows), len(cols)
+    if nr == 0 or nc == 0:
+        return
+    flat = [v for r in grid for v in r]
+    lo, hi = min(flat), max(flat)
+    if hi <= lo:
+        hi = lo + 1
+    cw = iw / nc
+    chh = ih / nr
+    for ci, cl in enumerate(cols):
+        c.text_center(x + pad + lab_w + cw * (ci + 0.5), iy - 10, str(cl),
+                      size=6.5, font="U", rgb=GREY)
+    for ri, rl in enumerate(rows):
+        ry = iy + ih - chh * (ri + 1)
+        c.text(x + pad, ry + chh * 0.32, str(rl), size=7.5, font="UB", rgb=PARCH)
+        for ci in range(nc):
+            v = grid[ri][ci]
+            col = _heat_colour((v - lo) / (hi - lo))
+            cx = x + pad + lab_w + cw * ci
+            c.rect(cx + 1, ry + 1, cw - 2, chh - 2, fill=col)
+
+
+# --- liquidation funnel (phi-narrowing stages) -------------------------
+def funnel(c, x, y, w, h, stages, title=None, col=RED):
+    """stages: list of (label, value). Widths narrow by data, phi-styled."""
+    panel(c, x, y, w, h, fill=(12, 13, 26), border=GREY_DK, lw=0.8)
+    if title:
+        section_title(c, x + 8, y + h - 16, title, size=10)
+    pad = 10
+    top = y + h - (26 if title else pad)
+    bottom = y + pad + 10
+    n = len(stages) or 1
+    seg_h = (top - bottom) / n
+    maxv = max(v for _, v in stages) or 1
+    cx = x + w / 2
+    for i, (lab, v) in enumerate(stages):
+        frac = clamp(v / maxv, 0.06, 1.0)
+        bw = (w - pad * 2) * frac
+        sy = top - seg_h * (i + 1)
+        shade = lerp(0.55, 1.0, i / max(1, n - 1))
+        cc = (int(col[0] * shade), int(col[1] * shade), int(col[2] * shade))
+        # trapezoid via polygon
+        next_frac = frac
+        if i < n - 1:
+            next_frac = clamp(stages[i + 1][1] / maxv, 0.06, 1.0)
+        nbw = (w - pad * 2) * next_frac
+        pts = [(cx - bw / 2, sy + seg_h), (cx + bw / 2, sy + seg_h),
+               (cx + nbw / 2, sy + 2), (cx - nbw / 2, sy + 2)]
+        c.polyline(pts, rgb=INK, lw=0.4, close=True, fill=cc)
+        c.text_center(cx, sy + seg_h * 0.35, "%s  %s" % (lab, fmt_money(v)),
+                      size=7.5, font="UB", rgb=WHITE)
+
+
+# --- treemap (phi slice-and-dice of capital) ---------------------------
+def treemap(c, x, y, w, h, items, title=None):
+    """items: list of (label, value, colour). Golden slice-and-dice layout."""
+    panel(c, x, y, w, h, fill=(12, 13, 26), border=GREY_DK, lw=0.8)
+    if title:
+        section_title(c, x + 8, y + h - 16, title, size=10)
+    pad = 8
+    ix, iy = x + pad, y + pad
+    iw = w - pad * 2
+    ih = h - pad * 2 - (14 if title else 0)
+    items = sorted(items, key=lambda t: -t[1])
+    total = sum(v for _, v, _ in items) or 1
+    horiz = iw >= ih
+    cx, cy, cw, ch = ix, iy, iw, ih
+    rem = total
+    for i, (lab, v, col) in enumerate(items):
+        frac = v / rem if rem else 0
+        last = (i == len(items) - 1)
+        if horiz:
+            seg = cw if last else cw * frac
+            c.rect(cx + 1, cy + 1, seg - 2, ch - 2, fill=col)
+            _tm_label(c, cx, cy, seg, ch, lab, v)
+            cx += seg
+            cw -= seg
+        else:
+            seg = ch if last else ch * frac
+            c.rect(cx + 1, cy + ch - seg + 1, cw - 2, seg - 2, fill=col)
+            _tm_label(c, cx, cy + ch - seg, cw, seg, lab, v)
+            ch -= seg
+        rem -= v
+        horiz = not horiz
+
+
+def _tm_label(c, x, y, w, h, lab, v):
+    if w < 26 or h < 14:
+        return
+    c.text(x + 4, y + h - 12, str(lab), size=7.5, font="UB", rgb=INK)
+    if h > 26:
+        c.text(x + 4, y + h - 22, fmt_money(v), size=7, font="U", rgb=INK)
+
+
 # module-level doc handle for alpha graphics states (set by magazine.py)
 _DOC = [None]
 

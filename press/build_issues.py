@@ -8,20 +8,36 @@ import os
 from magazine import Magazine, MARGIN, CONTENT_W, COL_W
 import phi_charts as G
 import phi_data as D
+from live_data import LiveData
 
 OUT = os.path.join(os.path.dirname(__file__), "out")
 DATE = "18 июля 2026"
 
+# Shared data source: live server if reachable, else phi-synthetic fallback.
+# Force synthetic with env PRESS_SYNTH=1 (used for reproducible offline builds).
+DS = LiveData(force_synth=bool(os.environ.get("PRESS_SYNTH")))
+SRC_TAG = DS.source
+
+
+def _mk(seed):
+    return DS.market_snapshot(seed)
+def _sc(seed):
+    return DS.sector_snapshot(seed)
+def _cd(seed, n=34, start=100.0):
+    return DS.candles(seed, n, start)
+def _mg(seed, n=8):
+    return DS.magnate_ladder(seed, n)
+
 
 # ---------- chart draw factories ---------------------------------------
 def f_candles(seed, sym, title=None):
-    data = D.candles(seed, 34, 100.0 * (1 + (seed % 5) * 0.1))
+    data = _cd(seed, 34, 100.0 * (1 + (seed % 5) * 0.1))
     return lambda c, x, y, w, h: G.candlestick(c, x, y, w, h, data,
                                                title=title or (sym + " / ЗОЛОТО"))
 
 
 def f_area(seed, title):
-    s = D.phi_walk(seed, 40, 100.0, 0.04)
+    s = DS.phi_walk(seed, 40, 100.0, 0.04)
     return lambda c, x, y, w, h: G.area_chart(c, x, y, w, h, s, title=title)
 
 
@@ -30,8 +46,32 @@ def f_gauge(seed, title, label):
     return lambda c, x, y, w, h: G.gauge_panel(c, x, y, w, h, frac, title, label)
 
 
+def f_heatmap(seed, title="ТЕПЛОКАРТА СЕКТОРОВ"):
+    snap = _sc(seed)
+    rows = [s["name"] for s in snap["sectors"]]
+    cols = ["T1", "T2", "T3", "T4", "T5", "T6"]
+    grid = []
+    for r in rows:
+        rr = D.PhiRng((hash(r) % 9991) + seed)
+        grid.append([rr.next() * 100 - 40 for _ in cols])
+    return lambda c, x, y, w, h: G.heatmap(c, x, y, w, h, rows, cols, grid, title=title)
+
+
+def f_funnel(seed, title="ВОРОНКА ЛИКВИДАЦИЙ"):
+    stages = DS.liquidation_stages(seed)
+    return lambda c, x, y, w, h: G.funnel(c, x, y, w, h, stages, title=title)
+
+
+def f_treemap(seed, title="TREEMAP КАПИТАЛОВ"):
+    mags = _mg(seed, 7)
+    pal = [G.GOLD, G.AMBER, G.CYAN, G.PURPLE, G.GREEN, G.RED, G.GREY]
+    items = [(m["name"].split()[0], max(m["worth"], 1), pal[i])
+             for i, m in enumerate(mags)]
+    return lambda c, x, y, w, h: G.treemap(c, x, y, w, h, items, title=title)
+
+
 def f_donut(seed):
-    snap = D.sector_snapshot(seed)
+    snap = _sc(seed)
     cols = [G.CYAN, G.GOLD, G.AMBER, G.PURPLE]
     def _d(c, x, y, w, h):
         G.panel(c, x, y, w, h, fill=(12, 13, 26), border=G.GREY_DK, lw=0.8)
@@ -51,7 +91,7 @@ def f_donut(seed):
 
 
 def f_magnates(seed):
-    rows = D.magnate_ladder(seed, 7)
+    rows = _mg(seed, 7)
     def _d(c, x, y, w, h):
         G.panel(c, x, y, w, h, fill=(12, 13, 26), border=G.GREY_DK, lw=0.8)
         G.section_title(c, x + 8, y + h - 16, "МАГНАТЫ", size=10)
@@ -60,7 +100,7 @@ def f_magnates(seed):
 
 
 def f_sparks(seed, title="СПАРК-СЕТКА"):
-    snap = D.sector_snapshot(seed)
+    snap = _sc(seed)
     cols = [G.CYAN, G.GOLD, G.AMBER, G.PURPLE]
     def _d(c, x, y, w, h):
         G.panel(c, x, y, w, h, fill=(12, 13, 26), border=G.GREY_DK, lw=0.8)
@@ -77,7 +117,7 @@ def f_sparks(seed, title="СПАРК-СЕТКА"):
 
 
 def f_boss(seed):
-    curve = D.boss_curve(seed)
+    curve = DS.boss_curve(seed)
     def _d(c, x, y, w, h):
         G.panel(c, x, y, w, h, fill=(12, 13, 26), border=G.GREY_DK, lw=0.8)
         G.section_title(c, x + 8, y + h - 16, "БОСС: ФАЗЫ HP", size=10)
@@ -88,7 +128,7 @@ def f_boss(seed):
 
 
 def f_ladder(seed, title="PHI-СТЕПЕНИ"):
-    vals = D.phi_series(seed, 9)
+    vals = DS.phi_series(seed, 9)
     def _d(c, x, y, w, h):
         G.panel(c, x, y, w, h, fill=(12, 13, 26), border=G.GREY_DK, lw=0.8)
         G.section_title(c, x + 8, y + h - 16, title, size=10)
@@ -99,7 +139,7 @@ def f_ladder(seed, title="PHI-СТЕПЕНИ"):
 
 
 def f_compare(seed, title="ЛИДЕРЫ / АУТСАЙДЕРЫ"):
-    mk = D.market_snapshot(seed)
+    mk = _mk(seed)
     ups = sorted(mk, key=lambda r: -r["chg"])[:3]
     downs = sorted(mk, key=lambda r: r["chg"])[:3]
     rows = [(u["sym"], u["chg"], d["chg"]) for u, d in zip(ups, downs)]
@@ -111,12 +151,12 @@ def f_tiles(tiles):
 
 
 def hero_tape(seed):
-    rows = D.market_snapshot(seed)
+    rows = _mk(seed)
     def _d(c, x, y, w, h):
         G.panel(c, x, y, w, h, fill=(12, 13, 26), border=G.GREY_DK, lw=0.8)
         half = (w - 12) / 2
-        G.candlestick(c, x + 6, y + 30, half, h - 40, D.candles(seed, 30), title=rows[0]["sym"])
-        G.candlestick(c, x + 12 + half, y + 30, half, h - 40, D.candles(seed + 3, 30), title=rows[5]["sym"])
+        G.candlestick(c, x + 6, y + 30, half, h - 40, _cd(seed, 30), title=rows[0]["sym"])
+        G.candlestick(c, x + 12 + half, y + 30, half, h - 40, _cd(seed + 3, 30), title=rows[5]["sym"])
         G.tape(c, x + 6, y + 6, w - 12, rows)
     return _d
 
@@ -129,7 +169,7 @@ def hero_crown(seed, name, worth):
         c.text_center(cx, y + h * 0.40, "МАГНАТ ГОДА", size=11, font="UB", rgb=G.GOLD, char_space=3)
         c.text_center(cx, y + h * 0.28, name, size=17, font="UB", rgb=G.GOLD_LT)
         c.text_center(cx, y + h * 0.16, "капитал: %s золота" % G.fmt_money(worth), size=10, font="CB", rgb=G.WHITE)
-        G.tape(c, x + 8, y + 8, w - 16, D.market_snapshot(seed)[:12])
+        G.tape(c, x + 8, y + 8, w - 16, _mk(seed)[:12])
     return _d
 
 
@@ -144,11 +184,35 @@ GLOSSARY = [
 def make(no, title, subtitle, accent, headline, deck, hero,
          kicker, art_head, paras, charts, quote, box,
          info_kicker, info_head, info_intro, tiles, back_lines):
-    m = Magazine(no, title, subtitle, "Журнал корпоративного грабежа", DATE, accent=accent)
-    m.cover(headline, deck, hero_draw=hero)
-    m.article(kicker, art_head, paras, charts=charts, pull_quote=quote, boxout=box)
-    m.infographic_page(info_kicker, info_head, tiles, intro=info_intro)
-    m.back_cover(back_lines, glossary=GLOSSARY)
+    """Return an issue spec (data only); rendering is separate so both the
+    standalone PDFs and the combined almanac can reuse it."""
+    return dict(no=no, title=title, subtitle=subtitle, accent=accent,
+                headline=headline, deck=deck, hero=hero, kicker=kicker,
+                art_head=art_head, paras=paras, charts=charts, quote=quote,
+                box=box, info_kicker=info_kicker, info_head=info_head,
+                info_intro=info_intro, tiles=tiles, back_lines=back_lines)
+
+
+def render_issue(m, spec, with_back=True):
+    """Draw one issue's pages into an existing Magazine m."""
+    m.accent = spec["accent"]
+    m.title = spec["title"]
+    m.subtitle = spec["subtitle"]
+    m.issue_no = spec["no"]
+    m.cover(spec["headline"], spec["deck"], hero_draw=spec["hero"])
+    m.article(spec["kicker"], spec["art_head"], spec["paras"],
+              charts=spec["charts"], pull_quote=spec["quote"], boxout=spec["box"])
+    m.infographic_page(spec["info_kicker"], spec["info_head"], spec["tiles"],
+                       intro=spec["info_intro"])
+    if with_back:
+        m.back_cover(spec["back_lines"], glossary=GLOSSARY)
+
+
+def issue_magazine(spec):
+    m = Magazine(spec["no"], spec["title"], spec["subtitle"],
+                 "Журнал корпоративного грабежа",
+                 "%s · %s" % (DATE, SRC_TAG), accent=spec["accent"])
+    render_issue(m, spec, with_back=True)
     return m
 
 
@@ -191,8 +255,8 @@ def build_all():
         "Горячий сектор притягивает поток, холодный разгружается.",
         ("СЕКТОРА", ["TECH — инновации", "FINANCE — банк и ЦБ", "ENERGY — рейд-топливо", "LUXURY — артефакты"]),
         "ДАННЫЕ", "Карта четырёх PHI-секторов",
-        "Ротация видна по спаркам и весам долей.",
-        [(f_donut(2), 1), (f_sparks(2), 1), (f_area(2, "ГОРЯЧИЙ СЕКТОР"), 2),
+        "Ротация видна по спаркам, весам долей и тепловой карте.",
+        [(f_donut(2), 1), (f_sparks(2), 1), (f_heatmap(2), 2),
          (f_compare(2), 1), (f_gauge(2, "РОТАЦИЯ", "поток"), 1)],
         ["Следи за ротацией.", "Кварты золотого сечения.", "corp-heist / PHI PRESS"]))
 
@@ -204,9 +268,9 @@ def build_all():
         "Цена входа умноженная на PHI запускает сквиз.",
         ("ПАРАМЕТРЫ", ["Маржа = 1/PHI", "Сквиз-мульт = PHI", "Комиссия = (PHI-1)/100"]),
         "ДАННЫЕ", "Механика короткой позиции",
-        "Порог сквиза и кривая маржи в цифрах.",
+        "Порог сквиза, кривая маржи и воронка ликвидаций.",
         [(f_tiles([("1/PHI", "МАРЖА", G.RED), ("×PHI", "СКВИЗ", G.AMBER), ("618", "КОМИССИЯ", G.GREY)]), 1),
-         (f_gauge(3, "РИСК ШОРТА", "до сквиза"), 1), (f_candles(3, "GAMMA"), 2),
+         (f_gauge(3, "РИСК ШОРТА", "до сквиза"), 1), (f_funnel(3), 2),
          (f_ladder(3), 1), (f_compare(3), 1)],
         ["Шорт — не для слабых.", "PHI решает, кто выживет.", "corp-heist / PHI PRESS"]))
 
@@ -218,9 +282,9 @@ def build_all():
         "Голубиная политика поднимает цены, ястребиная давит.",
         ("ЦИКЛ", ["Диапазон [1/PHI, PHI]", "Период ~ 3600·PHI·PHI", "Влияет на кредиты и бонды"]),
         "ДАННЫЕ", "Осциллятор ставки ЦБ",
-        "Как ставка тянет кредиты, бонды и хедж.",
+        "Как ставка тянет кредиты, бонды и хедж; тепловая карта секторов.",
         [(f_gauge(4, "СТАВКА СЕЙЧАС", "1/PHI..PHI"), 1), (f_tiles([("2.6ч", "ЦИКЛ", G.AMBER), ("PHI", "ПИК", G.GOLD)]), 1),
-         (f_area(4, "ДРЕЙФ РЫНКА"), 2), (f_ladder(4), 1), (f_sparks(4), 1)],
+         (f_heatmap(4, "РЕАКЦИЯ СЕКТОРОВ"), 2), (f_ladder(4), 1), (f_sparks(4), 1)],
         ["Слушай Центробанк.", "Ставка = ритм PHI.", "corp-heist / PHI PRESS"]))
 
     issues.append(make(5, "МАГНАТЫ", "Рейтинг богатства", G.GOLD,
@@ -231,22 +295,22 @@ def build_all():
         "Каждый ранг отстоит от следующего на PHI.",
         ("КОРОНА", ["PHI_CROWN, редкость 5", "Ценность 1 000 000", "Зал славы сезона"]),
         "ДАННЫЕ", "Топ капиталистов сезона",
-        "Разрыв между рангами — ровно PHI.",
+        "Разрыв между рангами — ровно PHI. Ниже — treemap долей.",
         [(f_magnates(5), 2), (f_tiles([("×PHI", "ШАГ", G.GOLD), ("8", "РАНГОВ", G.CYAN)]), 1),
-         (f_gauge(5, "ДО ВЕРШИНЫ", "прогресс"), 1), (f_ladder(5), 2)],
+         (f_gauge(5, "ДО ВЕРШИНЫ", "прогресс"), 1), (f_treemap(5), 2)],
         ["Взберись на вершину.", "Корона ждёт лучшего.", "corp-heist / PHI PRESS"]))
 
     issues.append(make(6, "МАГНАТ ГОДА", "Коронация сезона", G.GOLD,
         "Магнат года коронован: золотая корона сезона найдена",
         "Лучший капиталист получает PHI-корону, артефакт категории 11 и место в зале славы.",
-        hero_crown(6, D.magnate_ladder(6, 1)[0]["name"], D.magnate_ladder(6, 1)[0]["worth"]),
+        hero_crown(6, _mg(6, 1)[0]["name"], _mg(6, 1)[0]["worth"]),
         "СОБЫТИЕ", "Как заработать корону сезона",
         [P_B, P_A, P_D, P_C], [(f_magnates(6), 160), (f_candles(6, "OMEGA"), 120)],
         "Вечное место в зале славы CORP HEIST.",
         ("НАГРАДА", ["PHI-корона сезона", "Категория 11, редкость 5", "Бонус к боевой мощи"]),
         "ДАННЫЕ", "Путь к короне",
         "Что нужно, чтобы взойти на трон.",
-        [(hero_crown(6, D.magnate_ladder(6, 1)[0]["name"], D.magnate_ladder(6, 1)[0]["worth"]), 2),
+        [(hero_crown(6, _mg(6, 1)[0]["name"], _mg(6, 1)[0]["worth"]), 2),
          (f_magnates(6), 1), (f_gauge(6, "ДО КОРОНЫ", "сезон"), 1), (f_ladder(6), 2)],
         ["Один трон на сезон.", "Стань магнатом года.", "corp-heist / PHI PRESS"]))
 
@@ -286,9 +350,9 @@ def build_all():
         "Приз делится по PHI — счёт идёт на секунды.",
         ("ГИЛЬДИЯ", ["Небоскрёб: общая стройка", "Бонус к урону всем", "Приз войны делится PHI"]),
         "ДАННЫЕ", "Фазы босса и приз войны",
-        "HP босса падает золотыми полосами.",
+        "HP босса падает золотыми полосами; воронка урона по фазам.",
         [(f_boss(9), 2), (f_tiles([("×PHI", "БОНУС", G.CYAN), ("2", "КОРПЫ", G.GOLD)]), 1),
-         (f_gauge(9, "СТРОЙКА", "небоскрёб"), 1), (f_magnates(9), 2)],
+         (f_gauge(9, "СТРОЙКА", "небоскрёб"), 1), (f_funnel(9, "ВОРОНКА ФАЗ"), 2)],
         ["Сила в гильдии.", "Небоскрёб растёт по PHI.", "corp-heist / PHI PRESS"]))
 
     issues.append(make(10, "МАРКЕТ-МЕЙКИНГ", "Спред на PHI", G.GOLD,
@@ -316,16 +380,78 @@ NAMES = [
 ]
 
 
+ALMANAC_NAME = "almanac_full.pdf"
+
+
+def build_almanac(specs):
+    """One big PDF: title page + contents + all 10 issues (no per-issue back)."""
+    m = Magazine(0, "АЛЬМАНАХ", "Полное собрание",
+                 "Журнал корпоративного грабежа",
+                 "%s · %s" % (DATE, SRC_TAG), accent=G.GOLD)
+    # --- title page ---
+    from magazine import MARGIN as _M
+    from pdfkit_phi import PAGE_W, PAGE_H
+    c = m._new_page()
+    c.vgrad(0, 0, PAGE_W, PAGE_H, (26, 21, 8), G.INK, bands=64)
+    G.phi_spiral(c, PAGE_W / 2, PAGE_H / 2, turns=4.6, scale=2.6,
+                 col=G.GOLD, lw=0.9, alpha=0.5)
+    c.text_center(PAGE_W / 2, PAGE_H - 200, "CORP HEIST", size=44, font="UB",
+                  rgb=G.GOLD, char_space=5)
+    c.text_center(PAGE_W / 2, PAGE_H - 240, "PHI PRESS · АЛЬМАНАХ", size=16,
+                  font="UB", rgb=G.GOLD_LT, char_space=3)
+    c.text_center(PAGE_W / 2, PAGE_H - 268,
+                  "Полное собрание десяти срочных выпусков", size=11,
+                  font="U", rgb=G.WHITE)
+    c.star(PAGE_W / 2, PAGE_H / 2, 46, 46 * 0.618, 5,
+           fill=G.GOLD_LT, stroke=G.GOLD)
+    c.text_center(PAGE_W / 2, 90, "%s · источник: %s" % (DATE, SRC_TAG),
+                  size=9, font="U", rgb=G.GREY, char_space=1)
+    m._footer(c)
+    # --- contents page ---
+    c = m._new_page()
+    c.rect(_M, PAGE_H - _M - 4, 20, 4, fill=G.GOLD)
+    c.text(_M, PAGE_H - _M - 20, "СОДЕРЖАНИЕ", size=9, font="UB",
+           rgb=G.GOLD, char_space=2)
+    c.text(_M, PAGE_H - _M - 48, "Десять выпусков", size=24, font="UB",
+           rgb=G.GOLD_LT)
+    cy = PAGE_H - _M - 90
+    for i, sp in enumerate(specs):
+        page_start = 3 + i * 3  # title+contents = 2 pages, then 3 per issue
+        c.rect(_M, cy, 8, 8, fill=sp["accent"])
+        c.text(_M + 16, cy, "#%02d  %s" % (sp["no"], sp["title"]),
+               size=12, font="UB", rgb=G.WHITE)
+        c.text(_M + 200, cy, sp["subtitle"], size=10, font="U", rgb=G.GREY)
+        c.text_right(PAGE_W - _M, cy, "стр. %d" % page_start, size=10,
+                     font="CB", rgb=sp["accent"])
+        c.line(_M + 16, cy - 4, PAGE_W - _M, cy - 4, rgb=G.GREY_DK, lw=0.3)
+        cy -= 30
+    m._footer(c)
+    # --- all issues (3 pages each: cover + article + infographic) ---
+    for sp in specs:
+        render_issue(m, sp, with_back=False)
+    return m
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    specs = build_all()
     total = 0
-    for m, name in zip(build_all(), NAMES):
+    for sp, name in zip(specs, NAMES):
+        m = issue_magazine(sp)
         path = os.path.join(OUT, name)
         m.save(path)
         sz = os.path.getsize(path)
         total += sz
         print("  [OK] %-32s %7d bytes" % (name, sz))
-    print("Gotovo: 10 vypuskov po 4 stranicy, %d bytes" % total)
+    alm = build_almanac(specs)
+    apath = os.path.join(OUT, ALMANAC_NAME)
+    alm.save(apath)
+    asz = os.path.getsize(apath)
+    total += asz
+    print("  [OK] %-32s %7d bytes  (%d стр.)"
+          % (ALMANAC_NAME, asz, len(alm.doc.pages)))
+    print("Gotovo: 10 vypuskov + almanac, %d bytes (istochnik: %s)"
+          % (total, SRC_TAG))
 
 
 if __name__ == "__main__":

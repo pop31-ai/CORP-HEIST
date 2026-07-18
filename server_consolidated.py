@@ -343,6 +343,8 @@ PRESS_META = [
     ("10", "МАРКЕТ-МЕЙКИНГ", "Спред на PHI", "vypusk_10_market_meiking.pdf"),
 ]
 
+PRESS_ALMANAC = "almanac_full.pdf"
+
 async def handle_press_index(request):
     """JSON list of available issues (for the client PRESS panel)."""
     items = []
@@ -351,9 +353,26 @@ async def handle_press_index(request):
         items.append({"no": no, "title": title, "subtitle": sub,
                       "url": "/press/%s.pdf" % no,
                       "available": os.path.exists(path)})
-    body = json.dumps({"issues": items}).encode()
+    alm_path = os.path.join(PRESS_DIR, PRESS_ALMANAC)
+    body = json.dumps({
+        "issues": items,
+        "almanac": {"title": "АЛЬМАНАХ", "subtitle": "Полное собрание",
+                    "url": "/press/almanac.pdf",
+                    "available": os.path.exists(alm_path)},
+    }).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
+
+async def handle_press_almanac(request):
+    """Serve the combined almanac (all 10 issues in one PDF)."""
+    path = os.path.join(PRESS_DIR, PRESS_ALMANAC)
+    if not os.path.exists(path):
+        return web.json_response({"error": "not built"}, status=404)
+    STATE.track(sent=os.path.getsize(path))
+    return web.FileResponse(path, headers={
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'inline; filename="corp-heist-almanac.pdf"',
+    })
 
 async def handle_press_pdf(request):
     """Serve one issue PDF by its number (01..10 or 1..10)."""
@@ -369,6 +388,38 @@ async def handle_press_pdf(request):
         "Content-Type": "application/pdf",
         "Content-Disposition": 'inline; filename="corp-heist-%s.pdf"' % n,
     })
+
+PRESS_BUILD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "press")
+PRESS_REGEN_HOURS = float(os.environ.get("PRESS_REGEN_HOURS", "6"))
+
+async def press_regen_loop():
+    """Rebuild PHI PRESS PDFs periodically from live server data.
+
+    Runs build_issues.py as a subprocess with CORP_HEIST_API pointing at this
+    server; on any failure the previously built PDFs are kept untouched.
+    """
+    await asyncio.sleep(30)  # let the server bind first (live data available)
+    interval = max(PRESS_REGEN_HOURS, 0.05) * 3600.0
+    while True:
+        try:
+            env = dict(os.environ)
+            env["CORP_HEIST_API"] = "http://127.0.0.1:%d" % CMD_PORT
+            env.pop("PRESS_SYNTH", None)  # prefer live data
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "build_issues.py",
+                cwd=PRESS_BUILD_DIR, env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            out, _ = await proc.communicate()
+            if proc.returncode == 0:
+                log.info("press: regenerated PDFs (live data)")
+            else:
+                log.warning("press: regen failed rc=%s (kept last good): %s",
+                            proc.returncode, (out or b"")[-300:])
+        except Exception as e:
+            log.warning("press: regen error (kept last good): %s", e)
+        await asyncio.sleep(interval)
 
 async def handle_char(request):
     uid = int(request.match_info.get("uid", 1000))
@@ -1656,6 +1707,7 @@ def make_unified_app():
     # PRESS: PHI micro-magazines
     app.router.add_get("/api/press", handle_press_index)
     app.router.add_get("/press", handle_press_index)
+    app.router.add_get("/press/almanac.pdf", handle_press_almanac)
     app.router.add_get("/press/{n}.pdf", handle_press_pdf)
     # char API + pulse (shared)
     app.router.add_get("/api/char/{uid}", handle_char)
@@ -1761,6 +1813,7 @@ async def main():
     loop.create_task(market_loop())
     loop.create_task(health_loop())
     loop.create_task(autosave_loop())
+    loop.create_task(press_regen_loop())
 
     # single port: dashboard + 30 cards + API all on CMD_PORT (9000)
     await run_port(make_unified_app(), CMD_PORT)
