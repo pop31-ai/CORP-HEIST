@@ -75,6 +75,7 @@ from golden_econ import (
     PhiCandleBet, CandleShop, CandleSettlement,
     PlayerSession, StateSnapshot, ActivityWatchdog,
     SkillPvP, QuestChains, CraftingSystem, PlayerTrading, StrategyMap,
+    GuildSystem2, TournamentSystem, PetSystem, DailyChallenges, StockPrediction,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -2406,6 +2407,169 @@ async def pulse_map_income(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- GUILDS / TOURNAMENTS / PETS / DAILY / PREDICTION ----
+
+async def handle_guild_info(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(GuildSystem2.info(uid) or {"error": "no guild"}).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_guild_list(request):
+    body = json.dumps(GuildSystem2.list_all()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_guild_create(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    name = d.get("name", "Guild")
+    tag = d.get("tag", "G")
+    result = GuildSystem2.create(STATE, uid, name, tag)
+    _hb(uid, f"guild_create_{name}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_guild_join(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    gid = int(d.get("guild_id", 0))
+    result = GuildSystem2.join(STATE, uid, gid)
+    _hb(uid, f"guild_join_{gid}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_guild_leave(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = GuildSystem2.leave(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_guild_deposit(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    amount = int(d.get("amount", 0))
+    result = GuildSystem2.deposit(STATE, uid, amount)
+    _hb(uid, f"guild_dep_{amount}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_guild_perk(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    perk_id = d.get("perk_id", "")
+    result = GuildSystem2.buy_perk(STATE, uid, perk_id)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_guild_chat(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    msg = d.get("msg", "")
+    result = GuildSystem2.chat(uid, msg)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_tournament(request):
+    tour_type = request.match_info.get("type", "pvp")
+    body = json.dumps(TournamentSystem.status(tour_type)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_tournament_history(request):
+    body = json.dumps(TournamentSystem.history()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_pets(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PetSystem.list_pets(uid, STATE)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_pet_hatch(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = PetSystem.hatch(STATE, uid)
+    _hb(uid, "pet_hatch", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_pet_equip(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    pet_id = d.get("pet_id", "")
+    result = PetSystem.equip(STATE, uid, pet_id)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_pet_feed(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    pet_id = d.get("pet_id", "")
+    amount = int(d.get("amount", 100))
+    result = PetSystem.feed(STATE, uid, pet_id, amount)
+    _hb(uid, f"pet_feed_{amount}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_daily(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(DailyChallenges.check_progress(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_daily_claim(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = DailyChallenges.claim(STATE, uid)
+    _hb(uid, "daily_claim", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_prediction(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(StockPrediction.status(uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_prediction_make(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    stock = d.get("stock", "ALPHA")
+    direction = d.get("direction", "up")
+    result = StockPrediction.make_prediction(STATE, uid, stock, direction)
+    _hb(uid, f"predict_{stock}_{direction}", STATE.chars.get(uid, {}).get("gold", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_prediction_settle(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = StockPrediction.settle_predictions(STATE, uid)
+    _hb(uid, "predict_settle", result.get("gold_left", 0))
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_prediction_lb(request):
+    body = json.dumps(StockPrediction.leaderboard()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 def make_card_app():
     app = web.Application()
     app.router.add_get("/", handle_card_index)
@@ -2626,6 +2790,27 @@ def make_unified_app():
     app.router.add_post("/pulse/map/move", pulse_map_move)
     app.router.add_post("/pulse/map/capture", pulse_map_capture)
     app.router.add_post("/pulse/map/income", pulse_map_income)
+    # ---- GUILDS / TOURNAMENTS / PETS / DAILY / PREDICTION ----
+    app.router.add_get("/api/guild/{uid}", handle_guild_info)
+    app.router.add_get("/api/guilds", handle_guild_list)
+    app.router.add_post("/pulse/guild/create", pulse_guild_create)
+    app.router.add_post("/pulse/guild/join", pulse_guild_join)
+    app.router.add_post("/pulse/guild/leave", pulse_guild_leave)
+    app.router.add_post("/pulse/guild/deposit", pulse_guild_deposit)
+    app.router.add_post("/pulse/guild/perk", pulse_guild_perk)
+    app.router.add_post("/pulse/guild/chat", pulse_guild_chat)
+    app.router.add_get("/api/tournament/{type}", handle_tournament)
+    app.router.add_get("/api/tournaments", handle_tournament_history)
+    app.router.add_get("/api/pets/{uid}", handle_pets)
+    app.router.add_post("/pulse/pet/hatch", pulse_pet_hatch)
+    app.router.add_post("/pulse/pet/equip", pulse_pet_equip)
+    app.router.add_post("/pulse/pet/feed", pulse_pet_feed)
+    app.router.add_get("/api/daily/{uid}", handle_daily)
+    app.router.add_post("/pulse/daily/claim", pulse_daily_claim)
+    app.router.add_get("/api/predict/{uid}", handle_prediction)
+    app.router.add_post("/pulse/predict/make", pulse_prediction_make)
+    app.router.add_post("/pulse/predict/settle", pulse_prediction_settle)
+    app.router.add_get("/api/predict/lb", handle_prediction_lb)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

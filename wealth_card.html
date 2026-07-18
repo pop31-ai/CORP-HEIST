@@ -101,6 +101,11 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-craft" style="border-color:#FF9100;color:#FF9100">🔨 CRAFT</button>
 <button id="btn-trading" style="border-color:#00BCD4;color:#00BCD4">🏪 TRADE</button>
 <button id="btn-map" style="border-color:#8BC34A;color:#8BC34A">🗺 MAP</button>
+<button id="btn-guild" style="border-color:#9C27B0;color:#9C27B0">🏛 GUILD</button>
+<button id="btn-tourney" style="border-color:#FF5722;color:#FF5722">🏆 TOURNEY</button>
+<button id="btn-pets" style="border-color:#E91E63;color:#E91E63">🐾 PETS</button>
+<button id="btn-daily" style="border-color:#009688;color:#009688">📋 DAILY</button>
+<button id="btn-predict" style="border-color:#673AB7;color:#673AB7">📈 PREDICT</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -4522,6 +4527,164 @@ document.getElementById('btn-map').onclick=async()=>{
             showOverlay('INCOME','+'+d2.income+'g collected');loadPlayer(uid);
         }
     }catch(e){showOverlay('MAP','offline');}
+};
+
+// ====== GUILD ======
+document.getElementById('btn-guild').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('GUILD','select player first');return;}
+        const r=await fetch(API+'/api/guild/'+uid);const d=await r.json();
+        if(d.error){
+            const action=prompt('🏛 GUILD\n\nNo guild. 1=Create (5000g), 2=Join, 3=List guilds','3');
+            if(!action)return;
+            if(action==='1'){
+                const name=prompt('Guild name:','My Guild');const tag=prompt('Tag (3 chars):','MGD');
+                if(!name||!tag)return;
+                const r2=await fetch(API+'/pulse/guild/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,name:name,tag:tag})});const d2=await r2.json();
+                if(d2.error){showOverlay('GUILD',d2.error);}else{SND.promo();showOverlay('GUILD CREATED',d2.name+' ['+d2.tag+']');loadPlayer(uid);}
+            }else if(action==='2'){
+                const r2=await fetch(API+'/api/guilds');const guilds=await r2.json();
+                let s='Available guilds:\n';
+                guilds.forEach((g,i)=>{s+=(i+1)+'. '+g.name+' ['+g.tag+'] ('+g.members+'/15)\n';});
+                const gid=prompt(s+'\nGuild #:','1');if(!gid)return;
+                const r3=await fetch(API+'/pulse/guild/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,guild_id:guilds[parseInt(gid)-1].id})});const d3=await r3.json();
+                if(d3.error){showOverlay('GUILD',d3.error);}else{SND.promo();showOverlay('JOINED',d3.guild+' ['+d3.tag+']');loadPlayer(uid);}
+            }else{
+                const r2=await fetch(API+'/api/guilds');const guilds=await r2.json();
+                let s='ALL GUILDS\n\n';
+                guilds.forEach((g,i)=>{s+=(i+1)+'. '+g.name+' ['+g.tag+'] — '+g.members+'/15, treasury:'+g.treasury+'g\n';});
+                showOverlay('GUILDS',s||'No guilds yet');
+            }
+        }else{
+            let s='🏛 '+d.name+' ['+d.tag+']\n';
+            s+='Leader: UID '+d.leader+' | Members: '+d.members+'/15\n';
+            s+='Treasury: '+d.treasury+'g\nPerks: '+d.perks.join(', ')+'\n\n';
+            s+='Chat:\n'+d.chat.map(c=>c.uid+': '+c.msg).join('\n');
+            const action=prompt(s+'\nAction: 1=Deposit, 2=Perk, 3=Chat, 4=Leave','0');
+            if(action==='1'){
+                const amt=prompt('Deposit amount:','1000');if(!amt)return;
+                const r2=await fetch(API+'/pulse/guild/deposit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,amount:parseInt(amt)})});const d2=await r2.json();
+                showOverlay('GUILD','Deposited! Treasury: '+d2.treasury);loadPlayer(uid);
+            }else if(action==='2'){
+                const perks=[{id:'gold_boost',n:'Gold Boost (10000g)'},{id:'xp_boost',n:'XP Boost (8000g)'},{id:'craft_bonus',n:'Craft Bonus (12000g)'},{id:'trade_fee',n:'Trade Discount (6000g)'},{id:'defense',n:'Guild Shield (15000g)'}];
+                let s2='Perks:\n';perks.forEach((p,i)=>{s2+=(i+1)+'. '+p.n+(d.perks.includes(p.id)?' ✓':'')+'\n';});
+                const pi=prompt(s2+'\nBuy #:','0');if(!pi||pi==='0')return;
+                const r2=await fetch(API+'/pulse/guild/perk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,perk_id:perks[parseInt(pi)-1].id})});const d2=await r2.json();
+                if(d2.error){showOverlay('GUILD',d2.error);}else{SND.promo();showOverlay('PERK',d2.perk+' unlocked!');}
+            }else if(action==='3'){
+                const msg=prompt('Message:');if(!msg)return;
+                await fetch(API+'/pulse/guild/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,msg:msg})});
+                showOverlay('GUILD','Sent!');loadPlayer(uid);
+            }else if(action==='4'){
+                if(confirm('Leave guild?')){await fetch(API+'/pulse/guild/leave',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});showOverlay('GUILD','Left!');loadPlayer(uid);}
+            }
+        }
+    }catch(e){showOverlay('GUILD','offline');}
+};
+
+// ====== TOURNAMENT ======
+document.getElementById('btn-tourney').onclick=async()=>{
+    try{
+        const types=['pvp','trading','craft','prediction'];
+        const choice=prompt('🏆 TOURNAMENT\n\n1=PvP, 2=Trading, 3=Craft, 4=Prediction','1');
+        if(!choice)return;
+        const t=types[parseInt(choice)-1];
+        const r=await fetch(API+'/api/tournament/'+t);const d=await r.json();
+        let s='🏆 '+t.toUpperCase()+' TOURNAMENT\n\n';
+        s+='Time left: '+Math.floor(d.remaining/60)+'min\n';
+        s+='Participants: '+d.participants+'\n';
+        s+='Prize pool: '+d.prize_pool+'g\n\n';
+        s+='Leaderboard:\n';
+        d.leaderboard.forEach((e,i)=>{s+=(i+1)+'. UID '+e.uid+' — '+e.score+' pts\n';});
+        showOverlay('TOURNAMENT',s);
+    }catch(e){showOverlay('TOURNAMENT','offline');}
+};
+
+// ====== PETS ======
+document.getElementById('btn-pets').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('PETS','select player first');return;}
+        const r=await fetch(API+'/api/pets/'+uid);const d=await r.json();
+        let s='🐾 PETS\n\n';
+        if(!d.pets.length){s+='No pets yet!\nHatch an egg: 2000g';}
+        else{
+            d.pets.forEach((p,i)=>{
+                const active=p.id===d.active?'★ ACTIVE':'';
+                s+=(i+1)+'. '+p.emoji+' '+p.name+' Lv.'+p.level+' ['+p.rarity+'] '+active+'\n';
+            });
+        }
+        const action=prompt(s+'\n1=Hatch, 2=Equip, 3=Feed, 0=Cancel','0');
+        if(!action||action==='0')return;
+        if(action==='1'){
+            const r2=await fetch(API+'/pulse/pet/hatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+            if(d2.error){showOverlay('HATCH',d2.error);}else{SND.promo();showOverlay('HATCHED',d2.pet.emoji+' '+d2.pet.name+' ['+d2.pet.rarity+']');loadPlayer(uid);}
+        }else if(action==='2'){
+            const idx=prompt('Equip pet # (1-'+d.pets.length+')','1');if(!idx)return;
+            const pet=d.pets[parseInt(idx)-1];
+            const r2=await fetch(API+'/pulse/pet/equip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,pet_id:pet.id})});
+            showOverlay('EQUIPPED',pet.emoji+' '+pet.name);loadPlayer(uid);
+        }else{
+            const idx=prompt('Feed pet # (1-'+d.pets.length+')','1');if(!idx)return;
+            const pet=d.pets[parseInt(idx)-1];
+            const amt=prompt('Feed amount (gold):','100');if(!amt)return;
+            const r2=await fetch(API+'/pulse/pet/feed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,pet_id:pet.id,amount:parseInt(amt)})});const d2=await r2.json();
+            if(d2.error){showOverlay('FEED',d2.error);}else{showOverlay('FED',pet.emoji+' Level: '+d2.level+' XP: '+d2.xp);loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('PETS','offline');}
+};
+
+// ====== DAILY CHALLENGES ======
+document.getElementById('btn-daily').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('DAILY','select player first');return;}
+        const r=await fetch(API+'/api/daily/'+uid);const d=await r.json();
+        let s='📋 DAILY CHALLENGES\n\n';
+        d.challenges.forEach((ch,i)=>{
+            s+=(ch.done?'★ ':'○ ')+ch.name+': '+ch.progress+'/'+ch.target+'\n';
+            s+='  '+ch.desc+' ('+ch.reward_gold+'g + '+ch.reward_xp+'xp)\n';
+        });
+        if(d.claimed){s+='\nAlready claimed today!';}
+        else if(d.all_done){s+='\nAll complete! Claim reward?';
+            if(confirm(s)){
+                const r2=await fetch(API+'/pulse/daily/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+                if(d2.error){showOverlay('DAILY',d2.error);}else{SND.promo();showOverlay('DAILY COMPLETE','Gold: +'+d2.gold+'\nXP: +'+d2.xp+(d2.bonus?'\nBonus: '+d2.bonus.name:''));loadPlayer(uid);}
+            }
+        }else{showOverlay('DAILY',s);}
+    }catch(e){showOverlay('DAILY','offline');}
+};
+
+// ====== STOCK PREDICTION ======
+document.getElementById('btn-predict').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('PREDICT','select player first');return;}
+        const r=await fetch(API+'/api/predict/'+uid);const d=await r.json();
+        let s='📈 STOCK PREDICTION\n\n';
+        s+='Predictions today: '+d.today_count+'/'+d.max_per_day+'\n';
+        s+='Pending: '+d.pending+'\nCost: '+d.cost+'g\n';
+        const action=prompt(s+'1=Predict, 2=Settle, 3=Leaderboard','1');
+        if(!action)return;
+        if(action==='1'){
+            const stock=prompt('Stock (ALPHA/DELTA/OMEGA/...):','ALPHA');
+            const dir=prompt('Direction: up or down?','up');
+            if(!stock||!dir)return;
+            const r2=await fetch(API+'/pulse/predict/make',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,stock:stock,direction:dir})});const d2=await r2.json();
+            if(d2.error){showOverlay('PREDICT',d2.error);}else{SND.promo();showOverlay('PREDICTED',d2.stock+' '+d2.direction.toUpperCase()+' @ '+d2.price);loadPlayer(uid);}
+        }else if(action==='2'){
+            const r2=await fetch(API+'/pulse/predict/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+            if(d2.results.length){
+                let msg='SETTLED:\n';
+                d2.results.forEach(r=>{msg+=r.stock+' '+r.direction+': '+(r.won?'★ WIN +'+r.prize+'g':'✕ LOSS')+'\n';});
+                if(d2.results.some(r=>r.won))SND.promo();
+                showOverlay('PREDICT',msg);loadPlayer(uid);
+            }else{showOverlay('PREDICT','No predictions to settle yet (>1h needed)');}
+        }else{
+            const r2=await fetch(API+'/api/predict/lb');const lb=await r2.json();
+            let msg='🏆 PREDICTION LEADERBOARD\n\n';
+            lb.forEach((e,i)=>{msg+=(i+1)+'. UID '+e.uid+' — '+e.accuracy+'% ('+e.wins+'/'+e.total+')\n';});
+            if(!lb.length)msg+='No data yet';
+            showOverlay('LEADERBOARD',msg);
+        }
+    }catch(e){showOverlay('PREDICT','offline');}
 };
 
 render();

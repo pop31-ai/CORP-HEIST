@@ -5847,6 +5847,645 @@ class StrategyMap:
         return {"ok": True, "income": total, "gold_left": c.get("gold", 0)}
 
 
+# ============================================================
+# GUILD SYSTEM — create/join guilds, treasury, perks
+# ============================================================
+
+class GuildSystem2:
+    """Полноценная система гильдий:
+    - Создание (5000g), вступление, выход
+    - Гильдейское казначейство (общий gold pool)
+    - Гильдейские привилегии (perks) unlocks
+    - Гильдейский чат (последние 50 сообщений)
+    - Гильдейские квесты ( collectively funded projects)"""
+
+    MAX_GUILDS = 20
+    MAX_MEMBERS = 15
+    CREATE_COST = 5000
+
+    PERKS = [
+        {"id": "gold_boost", "name": "Золотой Урожай", "cost": 10000,
+         "desc": "+10% gold from all sources for guild members"},
+        {"id": "xp_boost", "name": "ФИ-Менторство", "cost": 8000,
+         "desc": "+15% XP gain for guild members"},
+        {"id": "craft_bonus", "name": "Мастерская", "cost": 12000,
+         "desc": "+20% craft success rate"},
+        {"id": "trade_fee", "name": "Торговая Скидка", "cost": 6000,
+         "desc": "Trade commission reduced to 2%"},
+        {"id": "defense", "name": "Гильдейский Щит", "cost": 15000,
+         "desc": "+25% defense in all PvP"},
+    ]
+
+    _guilds = {}  # guild_id -> {name, tag, leader, members, treasury, perks, quests, chat, created}
+    _next_id = 1
+
+    @classmethod
+    def create(cls, state, uid, name, tag, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        if c.get("_guild_id"):
+            return {"error": "already in a guild"}
+        if len(cls._guilds) >= cls.MAX_GUILDS:
+            return {"error": "max guilds reached"}
+        gold = int(c.get("gold", 0))
+        if gold < cls.CREATE_COST:
+            return {"error": "not enough gold", "have": gold, "need": cls.CREATE_COST}
+        # check tag unique
+        if any(g["tag"] == tag for g in cls._guilds.values()):
+            return {"error": "tag already taken"}
+        c["gold"] = gold - cls.CREATE_COST
+        gid = cls._next_id
+        cls._next_id += 1
+        cls._guilds[gid] = {
+            "id": gid, "name": name, "tag": tag,
+            "leader": uid, "members": [uid],
+            "treasury": 0, "perks": [], "active_quests": {},
+            "chat": [{"ts": now or int(time.time()), "uid": uid,
+                       "msg": f"{name} основана!"}],
+            "created": now or int(time.time()),
+        }
+        c["_guild_id"] = gid
+        state.mark_dirty(uid)
+        return {"ok": True, "guild_id": gid, "name": name, "tag": tag}
+
+    @classmethod
+    def join(cls, state, uid, guild_id, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        if c.get("_guild_id"):
+            return {"error": "already in a guild"}
+        g = cls._guilds.get(guild_id)
+        if not g:
+            return {"error": "guild not found"}
+        if len(g["members"]) >= cls.MAX_MEMBERS:
+            return {"error": "guild full"}
+        g["members"].append(uid)
+        c["_guild_id"] = guild_id
+        g["chat"].append({"ts": now or int(time.time()), "uid": uid,
+                           "msg": f"UID {uid} joined"})
+        if len(g["chat"]) > 50:
+            g["chat"] = g["chat"][-50:]
+        state.mark_dirty(uid)
+        return {"ok": True, "guild": g["name"], "tag": g["tag"]}
+
+    @classmethod
+    def leave(cls, state, uid, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        gid = c.get("_guild_id")
+        if not gid:
+            return {"error": "not in a guild"}
+        g = cls._guilds.get(gid)
+        if not g:
+            return {"error": "guild not found"}
+        if g["leader"] == uid:
+            return {"error": "leader cannot leave (transfer first)"}
+        g["members"].remove(uid)
+        del c["_guild_id"]
+        g["chat"].append({"ts": now or int(time.time()), "uid": uid,
+                           "msg": f"UID {uid} left"})
+        state.mark_dirty(uid)
+        return {"ok": True}
+
+    @classmethod
+    def info(cls, uid):
+        c = {"_guild_id": None}
+        for gid, g in cls._guilds.items():
+            if uid in g["members"]:
+                return {
+                    "guild_id": gid, "name": g["name"], "tag": g["tag"],
+                    "leader": g["leader"], "members": len(g["members"]),
+                    "treasury": g["treasury"], "perks": g["perks"],
+                    "chat": g["chat"][-10:],
+                }
+        return None
+
+    @classmethod
+    def deposit(cls, state, uid, amount, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        gid = c.get("_guild_id")
+        g = cls._guilds.get(gid)
+        if not g:
+            return {"error": "no guild"}
+        gold = int(c.get("gold", 0))
+        if gold < amount:
+            return {"error": "not enough gold"}
+        c["gold"] = gold - amount
+        g["treasury"] += amount
+        g["chat"].append({"ts": now or int(time.time()), "uid": uid,
+                           "msg": f"Deposited {amount}g"})
+        state.mark_dirty(uid)
+        return {"ok": True, "treasury": g["treasury"]}
+
+    @classmethod
+    def buy_perk(cls, state, uid, perk_id, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        gid = c.get("_guild_id")
+        g = cls._guilds.get(gid)
+        if not g:
+            return {"error": "no guild"}
+        if g["leader"] != uid:
+            return {"error": "only leader can buy perks"}
+        perk = next((p for p in cls.PERKS if p["id"] == perk_id), None)
+        if not perk:
+            return {"error": "perk not found"}
+        if perk_id in g["perks"]:
+            return {"error": "perk already owned"}
+        if g["treasury"] < perk["cost"]:
+            return {"error": "not enough treasury", "have": g["treasury"], "need": perk["cost"]}
+        g["treasury"] -= perk["cost"]
+        g["perks"].append(perk_id)
+        g["chat"].append({"ts": now or int(time.time()), "uid": uid,
+                           "msg": f"Unlocked perk: {perk['name']}"})
+        return {"ok": True, "perk": perk["name"], "treasury": g["treasury"]}
+
+    @classmethod
+    def chat(cls, uid, msg, now=None):
+        c = {"_guild_id": None}
+        for gid, g in cls._guilds.items():
+            if uid in g["members"]:
+                g["chat"].append({"ts": now or int(time.time()), "uid": uid, "msg": msg[:200]})
+                if len(g["chat"]) > 50:
+                    g["chat"] = g["chat"][-50:]
+                return {"ok": True}
+        return {"error": "no guild"}
+
+    @classmethod
+    def list_all(cls):
+        return [{"id": g["id"], "name": g["name"], "tag": g["tag"],
+                 "members": len(g["members"]), "treasury": g["treasury"],
+                 "perks": len(g["perks"])}
+                for g in cls._guilds.values()]
+
+
+# ============================================================
+# TOURNAMENT SYSTEM — periodic competitive events
+# ============================================================
+
+class TournamentSystem:
+    """Регулярные турниры. Каждые 6 часов стартует новый.
+    Типы: PvP (дуэли), Trading (макс. profit), Craft (лучший крафт),
+    Prediction (точные прогнозы).
+    Топ-3 получают призы из общего пула."""
+
+    TOURNAMENT_TYPES = [
+        {"id": "pvp", "name": "PvP Турнир", "duration": 3600,
+         "desc": "Больше побед в дуэлях = выше в таблице"},
+        {"id": "trading", "name": "Торговый Турнир", "duration": 3600,
+         "desc": "Максимальная прибыль от сделок"},
+        {"id": "craft", "name": "Крафт Мастер", "duration": 3600,
+         "desc": "Успешные крафты = очки"},
+        {"id": "prediction", "name": "Прогноз Турнир", "duration": 3600,
+         "desc": "Точные прогнозы рынка = очки"},
+    ]
+
+    PRIZE_POOL = 100000
+    PRIZES = [0.5, 0.3, 0.2]  # 1st, 2nd, 3rd
+
+    _active = {}  # tour_type -> {start_ts, scores: {uid: score}, ended}
+    _history = []  # last 10 completed tournaments
+
+    @classmethod
+    def _current_tournament(cls, tour_type, now=None):
+        t = now or int(time.time())
+        HOUR = 3600
+        tour_info = next((tt for tt in cls.TOURNAMENT_TYPES if tt["id"] == tour_type), None)
+        if not tour_info:
+            return None
+        cycle = t // HOUR
+        active = cls._active.get(tour_type)
+        if active and active.get("cycle") == cycle:
+            return active
+        # start new tournament
+        active = {"cycle": cycle, "start": cycle * HOUR,
+                  "scores": {}, "type": tour_type, "duration": tour_info["duration"]}
+        cls._active[tour_type] = active
+        return active
+
+    @classmethod
+    def status(cls, tour_type, now=None):
+        t = now or int(time.time())
+        active = cls._current_tournament(tour_type, t)
+        elapsed = t - active["start"]
+        remaining = max(0, active["duration"] - elapsed)
+        # top 10
+        sorted_scores = sorted(active["scores"].items(), key=lambda x: -x[1])[:10]
+        return {
+            "type": tour_type,
+            "remaining": remaining,
+            "participants": len(active["scores"]),
+            "leaderboard": [{"uid": uid, "score": sc} for uid, sc in sorted_scores],
+            "prize_pool": cls.PRIZE_POOL,
+        }
+
+    @classmethod
+    def add_score(cls, uid, tour_type, score, now=None):
+        active = cls._current_tournament(tour_type, now)
+        t = now or int(time.time())
+        if t - active["start"] >= active["duration"]:
+            return False  # tournament ended
+        active["scores"][uid] = active["scores"].get(uid, 0) + score
+        return True
+
+    @classmethod
+    def settle(cls, tour_type, state, now=None):
+        """Settle a finished tournament. Returns top 3 winners."""
+        t = now or int(time.time())
+        active = cls._active.get(tour_type)
+        if not active:
+            return {"error": "no tournament"}
+        if t - active["start"] < active["duration"]:
+            return {"error": "tournament still running"}
+        sorted_scores = sorted(active["scores"].items(), key=lambda x: -x[1])
+        winners = []
+        for i, (uid, sc) in enumerate(sorted_scores[:3]):
+            prize = int(cls.PRIZE_POOL * cls.PRIZES[i])
+            c = state.chars.get(uid)
+            if c:
+                c["gold"] = c.get("gold", 0) + prize
+                state.mark_dirty(uid)
+            winners.append({"uid": uid, "score": sc, "prize": prize, "rank": i + 1})
+        cls._history.append({"type": tour_type, "winners": winners,
+                              "end": t, "participants": len(active["scores"])})
+        if len(cls._history) > 10:
+            cls._history = cls._history[-10:]
+        del cls._active[tour_type]
+        return {"ok": True, "winners": winners}
+
+    @classmethod
+    def history(cls):
+        return cls._history[-5:]
+
+
+# ============================================================
+# PET / COMPANION SYSTEM — collectible pets with bonuses
+# ============================================================
+
+class PetSystem:
+    """Собирай питомцев! Каждый питомец даёт бонусы:
+    - combat: +attack/defense в PvP
+    - trading: -commission, +gold from trades
+    - crafting: +craft success rate
+    - exploration: +map income
+
+    Питомцы: яйца (random hatch), магазин, крафт из артефактов."""
+
+    PET_TEMPLATES = [
+        {"id": "phi_dragon", "name": "ФИ-Дракон", "emoji": "🐉", "rarity": 5,
+         "bonus": {"combat_attack": 50, "combat_defense": 30},
+         "desc": "+50 attack, +35 defense"},
+        {"id": "golden_owl", "name": "Золотая Сова", "emoji": "🦉", "rarity": 4,
+         "bonus": {"trading_fee": -0.02, "gold_mult": 1.05},
+         "desc": "-2% fee, +5% gold"},
+        {"id": "quantum_fox", "name": "Квантовая Лиса", "emoji": "🦊", "rarity": 3,
+         "bonus": {"craft_bonus": 0.15},
+         "desc": "+15% craft success"},
+        {"id": "pixel_cat", "name": "Пиксельный Кот", "emoji": "🐱", "rarity": 2,
+         "bonus": {"xp_mult": 1.1},
+         "desc": "+10% XP"},
+        {"id": "crystal_wolf", "name": "Кристальный Волк", "emoji": "🐺", "rarity": 3,
+         "bonus": {"combat_attack": 25, "combat_defense": 25},
+         "desc": "+25 attack, +25 defense"},
+        {"id": "neon_butterfly", "name": "Неоновая Бабочка", "emoji": "🦋", "rarity": 1,
+         "bonus": {"exploration_income": 1.1},
+         "desc": "+10% map income"},
+        {"id": "shadow_raven", "name": "Теневой Ворон", "emoji": "🐦‍⬛", "rarity": 4,
+         "bonus": {"combat_attack": 40, "xp_mult": 1.15},
+         "desc": "+40 attack, +15% XP"},
+        {"id": "phi_turtle", "name": "ФИ-Черепаха", "emoji": "🐢", "rarity": 2,
+         "bonus": {"combat_defense": 40},
+         "desc": "+40 defense"},
+    ]
+
+    HATCH_COST = 2000
+
+    @classmethod
+    def hatch(cls, state, uid, now=None):
+        """Hatch a random pet from an egg."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        gold = int(c.get("gold", 0))
+        if gold < cls.HATCH_COST:
+            return {"error": "not enough gold", "have": gold, "need": cls.HATCH_COST}
+        c["gold"] = gold - cls.HATCH_COST
+        # rarity-weighted roll
+        rng = random.Random(int(time.time() * PHI) + uid)
+        weights = [t["rarity"] for t in cls.PET_TEMPLATES]
+        template = rng.choices(cls.PET_TEMPLATES, weights=weights, k=1)[0]
+        pet = {
+            "id": template["id"],
+            "name": template["name"],
+            "emoji": template["emoji"],
+            "rarity": template["rarity"],
+            "bonus": template["bonus"],
+            "level": 1,
+            "xp": 0,
+        }
+        c.setdefault("_pets", []).append(pet)
+        c.setdefault("_active_pet", pet["id"])
+        state.mark_dirty(uid)
+        return {"ok": True, "pet": pet, "gold_left": c["gold"]}
+
+    @classmethod
+    def list_pets(cls, uid, state):
+        c = state.chars.get(uid, {})
+        return {"pets": c.get("_pets", []), "active": c.get("_active_pet")}
+
+    @classmethod
+    def equip(cls, state, uid, pet_id):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        pets = c.get("_pets", [])
+        if not any(p["id"] == pet_id for p in pets):
+            return {"error": "pet not owned"}
+        c["_active_pet"] = pet_id
+        state.mark_dirty(uid)
+        return {"ok": True, "active": pet_id}
+
+    @classmethod
+    def feed(cls, state, uid, pet_id, amount=100):
+        """Feed pet with gold to gain XP and level up."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        gold = int(c.get("gold", 0))
+        if gold < amount:
+            return {"error": "not enough gold"}
+        pets = c.get("_pets", [])
+        pet = next((p for p in pets if p["id"] == pet_id), None)
+        if not pet:
+            return {"error": "pet not found"}
+        c["gold"] = gold - amount
+        pet["xp"] += amount
+        # level up every 1000 xp
+        new_level = 1 + pet["xp"] // 1000
+        leveled = new_level > pet["level"]
+        pet["level"] = new_level
+        state.mark_dirty(uid)
+        return {"ok": True, "level": pet["level"], "xp": pet["xp"],
+                "leveled": leveled, "gold_left": c["gold"]}
+
+    @classmethod
+    def get_active_bonuses(cls, uid, state):
+        """Get bonuses from currently equipped pet."""
+        c = state.chars.get(uid, {})
+        active_id = c.get("_active_pet")
+        if not active_id:
+            return {}
+        pet = next((p for p in c.get("_pets", []) if p["id"] == active_id), None)
+        if not pet:
+            return {}
+        # scale bonuses by pet level
+        level_mult = 1 + (pet["level"] - 1) * 0.05  # +5% per level
+        bonuses = {}
+        for k, v in pet["bonus"].items():
+            if isinstance(v, (int, float)):
+                bonuses[k] = round(v * level_mult, 4)
+        return bonuses
+
+
+# ============================================================
+# DAILY CHALLENGES — rotating objectives with phi-rewards
+# ============================================================
+
+class DailyChallenges:
+    """Ежедневные задания. 3 задания обновляются каждые 24ч.
+    Типы: trade, craft, pvp, invest, donate, explore.
+    Награды: gold + xp + редкий предмет при полном выполнении."""
+
+    TEMPLATES = [
+        {"id": "trade_5", "name": "Торговец дня", "desc": "Соверши 5 сделок",
+         "type": "trade", "target": 5, "reward_gold": 3000, "reward_xp": 500},
+        {"id": "craft_2", "name": "Мастер крафта", "desc": "Выполни 2 крафта",
+         "type": "craft", "target": 2, "reward_gold": 5000, "reward_xp": 800},
+        {"id": "pvp_3", "name": "Боец дня", "desc": "Выиграй 3 дуэли",
+         "type": "pvp_win", "target": 3, "reward_gold": 4000, "reward_xp": 600},
+        {"id": "invest_10k", "name": "Инвестор", "desc": "Заработай 10,000g на сделках",
+         "type": "gold_earned", "target": 10000, "reward_gold": 2000, "reward_xp": 400},
+        {"id": "donate_5k", "name": "Меценат", "desc": "Пожертвуй 5,000g",
+         "type": "donate", "target": 5000, "reward_gold": 1000, "reward_xp": 300},
+        {"id": "explore_3", "name": "Исследователь", "desc": "Захвати 3 территории",
+         "type": "capture", "target": 3, "reward_gold": 6000, "reward_xp": 1000},
+        {"id": "hatch_1", "name": "Зоолог", "desc": "Вылупи питомца",
+         "type": "hatch", "target": 1, "reward_gold": 3000, "reward_xp": 500},
+        {"id": "lottery_3", "name": "Лоточник", "desc": "Купи 3 лотерейных билета",
+         "type": "lottery", "target": 3, "reward_gold": 2000, "reward_xp": 300},
+    ]
+
+    @staticmethod
+    def _day_seed(now=None):
+        t = now or int(time.time())
+        return t // 86400
+
+    @classmethod
+    def get_challenges(cls, uid, now=None):
+        seed = cls._day_seed(now)
+        rng = random.Random(seed * 31 + uid * 7)
+        # pick 3 unique templates
+        templates = rng.sample(cls.TEMPLATES, 3)
+        return {
+            "day_seed": seed,
+            "challenges": [
+                {"id": t["id"], "name": t["name"], "desc": t["desc"],
+                 "type": t["type"], "target": t["target"],
+                 "reward_gold": t["reward_gold"], "reward_xp": t["reward_xp"]}
+                for t in templates
+            ],
+        }
+
+    @classmethod
+    def check_progress(cls, state, uid, now=None):
+        """Check how many challenges are completed."""
+        c = state.chars.get(uid, {})
+        data = cls.get_challenges(uid, now)
+        completed = []
+        for ch in data["challenges"]:
+            # read player progress for this challenge type
+            key = f"_daily_{ch['id']}"
+            progress = c.get(key, 0)
+            done = progress >= ch["target"]
+            completed.append({**ch, "progress": progress, "done": done})
+        all_done = all(c["done"] for c in completed)
+        claimed_key = f"_daily_claimed_{data['day_seed']}"
+        claimed = c.get(claimed_key, False)
+        return {"challenges": completed, "all_done": all_done, "claimed": claimed}
+
+    @classmethod
+    def increment(cls, state, uid, challenge_type, amount=1):
+        """Increment progress for a challenge type. Called from pulse handlers."""
+        c = state.chars.get(uid)
+        if not c:
+            return
+        data = cls.get_challenges(uid)
+        for ch in data["challenges"]:
+            if ch["type"] == challenge_type:
+                key = f"_daily_{ch['id']}"
+                c[key] = c.get(key, 0) + amount
+                break
+
+    @classmethod
+    def claim(cls, state, uid, now=None):
+        """Claim daily challenge rewards."""
+        c = state.chars.get(uid)
+        if not not c:
+            return {"error": "no char"}
+        data = cls.get_challenges(uid, now)
+        claimed_key = f"_daily_claimed_{data['day_seed']}"
+        if c.get(claimed_key):
+            return {"error": "already claimed"}
+        # check all done
+        all_done = True
+        for ch in data["challenges"]:
+            key = f"_daily_{ch['id']}"
+            if c.get(key, 0) < ch["target"]:
+                all_done = False
+                break
+        if not all_done:
+            return {"error": "not all challenges completed"}
+        # sum rewards
+        total_gold = sum(ch["reward_gold"] for ch in data["challenges"])
+        total_xp = sum(ch["reward_xp"] for ch in data["challenges"])
+        c["gold"] = c.get("gold", 0) + total_gold
+        c["xp"] = c.get("xp", 0) + total_xp
+        c[claimed_key] = True
+        # bonus: rare item if all 3 done
+        bonus = None
+        if all_done:
+            bonus = {"name": "Ежедневный бонус", "rarity": 4, "value": int(total_gold * PHI)}
+            c.setdefault("loot", []).append({"name": "Ежедневный бонус", "cat": 11,
+                                              "rarity": 4, "qty": 1, "value": bonus["value"]})
+        state.mark_dirty(uid)
+        return {"ok": True, "gold": total_gold, "xp": total_xp,
+                "bonus": bonus, "gold_left": c["gold"]}
+
+
+# ============================================================
+# STOCK PREDICTION GAME — skill-based market calls
+# ============================================================
+
+class StockPrediction:
+    """Игрок делает предсказание: вырастет ли конкретный сток за следующий час.
+    Стоимость: 100g. Выигрыш: PHI * bet если угадал.
+    Leaderboard: точность предсказаний."""
+
+    COST = 100
+    MAX_PREDICTIONS_PER_DAY = 10
+
+    _predictions = {}  # uid -> [{ts, stock, direction, price_at_bet, settled, won}]
+
+    @classmethod
+    def make_prediction(cls, state, uid, stock_name, direction, now=None):
+        """Make a stock prediction. direction='up' or 'down'."""
+        t = now or int(time.time())
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        if direction not in ("up", "down"):
+            return {"error": "direction must be up or down"}
+        gold = int(c.get("gold", 0))
+        if gold < cls.COST:
+            return {"error": "not enough gold"}
+        # rate limit: max N per day
+        preds = cls._predictions.setdefault(uid, [])
+        today = t // 86400
+        today_preds = [p for p in preds if p["ts"] // 86400 == today]
+        if len(today_preds) >= cls.MAX_PREDICTIONS_PER_DAY:
+            return {"error": "max predictions per day reached"}
+        # find stock price
+        stock = None
+        for s in getattr(state, "stocks", []):
+            if s["name"] == stock_name:
+                stock = s
+                break
+        if not stock:
+            return {"error": "stock not found"}
+        c["gold"] = gold - cls.COST
+        preds.append({
+            "ts": t, "stock": stock_name, "direction": direction,
+            "price_at_bet": stock["price"], "settled": False, "won": False,
+        })
+        state.mark_dirty(uid)
+        return {"ok": True, "stock": stock_name, "direction": direction,
+                "price": stock["price"], "cost": cls.COST}
+
+    @classmethod
+    def settle_predictions(cls, state, uid, now=None):
+        """Settle expired predictions (>1 hour old)."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        preds = cls._predictions.get(uid, [])
+        results = []
+        for p in preds:
+            if p["settled"]:
+                continue
+            if t - p["ts"] < 3600:
+                continue  # not yet expired
+            # find current stock price
+            stock = None
+            for s in getattr(state, "stocks", []):
+                if s["name"] == p["stock"]:
+                    stock = s
+                    break
+            if not stock:
+                continue
+            current = stock["price"]
+            old = p["price_at_bet"]
+            correct = (p["direction"] == "up" and current > old) or \
+                      (p["direction"] == "down" and current < old)
+            prize = int(cls.COST * PHI) if correct else 0
+            if prize > 0:
+                c["gold"] = c.get("gold", 0) + prize
+            p["settled"] = True
+            p["won"] = correct
+            results.append({
+                "stock": p["stock"], "direction": p["direction"],
+                "old_price": old, "new_price": current,
+                "won": correct, "prize": prize,
+            })
+        state.mark_dirty(uid)
+        return {"results": results, "gold_left": c.get("gold", 0)}
+
+    @classmethod
+    def leaderboard(cls):
+        """Top predictors by accuracy."""
+        lb = []
+        for uid, preds in cls._predictions.items():
+            settled = [p for p in preds if p["settled"]]
+            if len(settled) < 3:
+                continue
+            wins = sum(1 for p in settled if p["won"])
+            accuracy = wins / len(settled) * 100
+            lb.append({"uid": uid, "accuracy": round(accuracy, 1),
+                       "total": len(settled), "wins": wins})
+        lb.sort(key=lambda x: (-x["accuracy"], -x["total"]))
+        return lb[:20]
+
+    @classmethod
+    def status(cls, uid, now=None):
+        t = now or int(time.time())
+        preds = cls._predictions.get(uid, [])
+        today = t // 86400
+        today_count = len([p for p in preds if p["ts"] // 86400 == today])
+        pending = [p for p in preds if not p["settled"]]
+        return {
+            "today_count": today_count,
+            "max_per_day": cls.MAX_PREDICTIONS_PER_DAY,
+            "pending": len(pending),
+            "cost": cls.COST,
+        }
+
+
 if __name__ == "__main__":
     class FakeState:
         def __init__(self):
