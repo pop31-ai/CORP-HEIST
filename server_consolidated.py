@@ -56,8 +56,10 @@ from golden_econ import (
     loan_status, take_loan, repay_loan, check_liquidations,
     central_rate, cb_status, buy_insurance, liq_feed,
     ipo_launch, ipo_list, ipo_buy, portfolio,
-    short_status, short_open, short_close,
+    short_status, short_open, short_close, check_short_squeezes,
     golden_index, tick_index,
+    idx_option_chain, idx_option_open, idx_option_status, idx_option_settle,
+    trader_leaderboard,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -269,9 +271,13 @@ def _post_system_chat(corp, text):
 
 
 def _sweep_liquidations():
-    """Run liquidation sweep and broadcast any events into corp chat."""
+    """Run loan-liquidation + short-squeeze sweeps; broadcast into corp chat."""
     res = check_liquidations(STATE)
     for ev in res.get("liquidated", []) + res.get("saved", []):
+        _post_system_chat(ev["corp"], ev["text"])
+        STATE.save_char(ev["uid"])
+    sq = check_short_squeezes(STATE)
+    for ev in sq.get("squeezed", []):
         _post_system_chat(ev["corp"], ev["text"])
         STATE.save_char(ev["uid"])
     return res
@@ -1292,6 +1298,51 @@ async def handle_index(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- GOLDEN-500 INDEX OPTIONS (calls/puts, phi strikes) ----
+async def handle_idxopt(request):
+    """GET the index option chain, or a player's positions (?uid=)."""
+    uid = request.query.get("uid")
+    if uid:
+        result = idx_option_status(STATE, int(uid))
+    else:
+        result = idx_option_chain(STATE)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_idxopt_open(request):
+    """Pulse: buy a Golden-500 call/put at a phi strike."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = idx_option_open(STATE, uid, d.get("kind", "call"), d.get("strike", 0))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_idxopt_settle(request):
+    """Pulse: settle an expired index option for gold."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = idx_option_settle(STATE, uid, d.get("id"))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- TRADER OF THE DAY (realized PnL leaderboard) ----
+async def handle_traders(request):
+    """GET today's trader leaderboard by realized PnL (?uid= for your rank)."""
+    uid = request.query.get("uid")
+    result = trader_leaderboard(STATE, int(uid) if uid else None)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ---- PORTFOLIO (unified phi net-worth breakdown) ----
 async def handle_portfolio(request):
     """GET a unified breakdown of all a player's assets and net worth."""
@@ -1553,6 +1604,10 @@ def make_unified_app():
     app.router.add_post("/pulse/short/open", pulse_short_open)
     app.router.add_post("/pulse/short/close", pulse_short_close)
     app.router.add_get("/api/index", handle_index)
+    app.router.add_get("/api/idxopt", handle_idxopt)
+    app.router.add_post("/pulse/idxopt/open", pulse_idxopt_open)
+    app.router.add_post("/pulse/idxopt/settle", pulse_idxopt_settle)
+    app.router.add_get("/api/traders", handle_traders)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

@@ -66,6 +66,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-ipo" style="border-color:#00E5FF;color:#00E5FF">📈 IPO</button>
 <button id="btn-short" style="border-color:#FF3B3B;color:#FF3B3B">📉 SHORT</button>
 <button id="btn-index" style="border-color:#FFC800;color:#FFC800">📊 GOLDEN-500</button>
+<button id="btn-idxopt" style="border-color:#00E5FF;color:#00E5FF">🎯 500-OPTIONS</button>
+<button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
 <button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
@@ -2983,6 +2985,79 @@ function drawCandles(cv,candles){
         X.fillRect(cx-cw*0.32,Math.min(yo,yc),Math.max(1,cw*0.64),Math.max(1,Math.abs(yc-yo)));
     });
 }
+// ---- GOLDEN-500 INDEX OPTIONS (calls/puts, phi strikes) ----
+async function showIdxOpt(){
+    try{
+        openPanel('<b>🎯 GOLDEN-500 OPTIONS</b><div id="io-body" style="color:#555">loading...</div>',26000);
+        const paint=async()=>{
+            const p=document.getElementById('io-body');if(!p)return;
+            const [ch,st]=await Promise.all([
+                fetch(API+'/api/idxopt').then(r=>r.json()),
+                fetch(API+'/api/idxopt?uid='+_uid()).then(r=>r.json())
+            ]);
+            let h='<div style="text-align:center;color:#FFC800;font-size:11px">index '+ch.spot+'</div>';
+            h+='<table style="width:100%;font-size:9px;font-family:monospace"><tr style="color:#555"><td>CALL</td><td style="text-align:center">STRIKE</td><td style="text-align:right">PUT</td></tr>';
+            for(const s of ch.strikes){
+                h+='<tr><td><button onclick="openIdxOpt(\'call\','+s.strike+')" style="border:1px solid #00FF8C;color:#00FF8C;background:#0a1a10;font-size:9px;padding:1px 4px;cursor:pointer">C '+fmt(s.call_premium)+'</button></td>'+
+                   '<td style="text-align:center;color:#FFE24B">'+s.strike+'</td>'+
+                   '<td style="text-align:right"><button onclick="openIdxOpt(\'put\','+s.strike+')" style="border:1px solid #FF6B6B;color:#FF6B6B;background:#1a0a0a;font-size:9px;padding:1px 4px;cursor:pointer">P '+fmt(s.put_premium)+'</button></td></tr>';
+            }
+            h+='</table><div style="color:#555;font-size:8px;margin:4px 0">'+ch.note+'</div>';
+            if((st.positions||[]).length){
+                h+='<div style="color:#00E5FF;font-size:9px;border-top:1px solid #222;padding-top:3px">YOUR OPTIONS</div><table style="width:100%;font-size:9px;font-family:monospace">';
+                for(const q of st.positions){
+                    const c=q.in_money?'#00FF8C':'#888';const ready=q.expires_in<=0;
+                    h+='<tr><td style="color:'+c+'">'+q.kind.toUpperCase()+' @'+q.strike+'<div style="color:#555;font-size:7px">est '+fmt(q.est_payout)+'g</div></td>'+
+                       '<td style="text-align:right">'+(ready?'<button onclick="settleIdxOpt('+q.id+')" style="border:1px solid #FFC800;color:#FFC800;background:#181400;font-size:9px;padding:1px 5px;cursor:pointer">SETTLE</button>':'<span style="color:#555">'+q.expires_in+'s</span>')+'</td></tr>';
+                }
+                h+='</table>';
+            }
+            p.innerHTML=h;
+        };
+        paint();
+    }catch(e){showOverlay('500-Options','offline');}
+}
+async function openIdxOpt(kind,strike){
+    try{
+        const r=await fetch(API+'/pulse/idxopt/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),kind:kind,strike:strike})});
+        const d=await r.json();
+        if(d.error){showOverlay('🎯 OPTION',d.error+(d.premium?(' (premium '+fmt(d.premium)+'g)'):''));return;}
+        SND.click();showOverlay('🎯 '+d.kind.toUpperCase(),'strike '+d.strike+'\npremium '+fmt(d.premium)+'g\nexpires in '+d.expires_in+'s');
+        showIdxOpt();loadPlayer(_uid());
+    }catch(e){}
+}
+async function settleIdxOpt(id){
+    try{
+        const r=await fetch(API+'/pulse/idxopt/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),id:id})});
+        const d=await r.json();
+        if(d.error){showOverlay('🎯 SETTLE',d.error+(d.expires_in?(' ('+d.expires_in+'s left)'):''));return;}
+        SND.promo();showOverlay('🎯 SETTLED',d.kind.toUpperCase()+' @'+d.strike+'\nindex '+d.spot+'\npayout '+fmt(d.payout)+'g'+(d.golden?'\n⚡ GOLDEN HOUR':''));
+        showIdxOpt();loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- TRADER OF THE DAY (realized PnL leaderboard) ----
+async function showTraders(){
+    try{
+        openPanel('<b>🏅 TRADERS OF THE DAY</b><div id="tr-body" style="color:#555">loading...</div>',22000);
+        const d=await fetch(API+'/api/traders?uid='+_uid()).then(r=>r.json());
+        const p=document.getElementById('tr-body');if(!p)return;
+        let h='';
+        if(d.crown)h+='<div style="text-align:center;margin:4px 0"><span style="color:#FFE24B;font-size:14px">👑 '+d.crown.name+'</span><div style="color:#FFC800;font-size:10px">+'+fmt(d.crown.pnl)+'g today</div></div>';
+        h+='<table style="width:100%;font-size:9px;font-family:monospace">';
+        (d.leaders||[]).forEach((r,i)=>{
+            const you=String(r.uid)===String(_uid());const pc=r.pnl>=0?'#00FF8C':'#FF3B3B';
+            h+='<tr'+(you?' style="background:#181400"':'')+'><td style="color:#555;width:20px">'+(i+1)+'</td>'+
+               '<td style="color:'+(you?'#FFE24B':'#ccc')+'">'+(i===0?'👑 ':'')+r.name+(you?' (YOU)':'')+'</td>'+
+               '<td style="color:'+pc+';text-align:right">'+(r.pnl>=0?'+':'')+fmt(r.pnl)+'g</td>'+
+               '<td style="color:#555;text-align:right;width:32px">'+r.trades+'t</td></tr>';
+        });
+        h+='</table>';
+        if(!d.leaders||!d.leaders.length)h+='<div style="color:#555;text-align:center">no trades settled today yet</div>';
+        if(d.your_rank)h+='<div style="color:#FFC800;font-size:9px;text-align:center;margin-top:4px">your rank #'+d.your_rank+' ('+(d.your_pnl>=0?'+':'')+fmt(d.your_pnl)+'g)</div>';
+        h+='<div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
+        p.innerHTML=h;
+    }catch(e){showOverlay('Traders','offline');}
+}
 // ---- LIQUIDATION overlay + notifications (global poll) ----
 let _liqSeen=0,_liqInit=false;
 async function pollLiquidations(){
@@ -2991,7 +3066,8 @@ async function pollLiquidations(){
         if(!_liqInit){_liqSeen=d.last_id;_liqInit=true;return;}
         for(const ev of (d.events||[])){
             _liqSeen=Math.max(_liqSeen,ev.id);
-            if(ev.type==='liquidated')liquidationOverlay(ev);
+            if(ev.type==='liquidated')liquidationOverlay(ev,'LIQUIDATED','seized');
+            else if(ev.type==='squeezed')liquidationOverlay(ev,'SQUEEZED','margin wiped');
             else flashToast('🛡 '+ev.text,'#00FF8C');
         }
     }catch(e){}
@@ -3003,7 +3079,8 @@ function flashToast(text,col){
     t.textContent=text;document.body.appendChild(t);
     setTimeout(()=>{t.style.transition='opacity .6s';t.style.opacity='0';setTimeout(()=>t.remove(),600);},3200);
 }
-function liquidationOverlay(ev){
+function liquidationOverlay(ev,title,verb){
+    title=title||'LIQUIDATED';verb=verb||'seized';
     SND.duelHit&&SND.duelHit();
     const cv=document.createElement('canvas');
     cv.width=window.innerWidth;cv.height=window.innerHeight;
@@ -3020,9 +3097,9 @@ function liquidationOverlay(ev){
         X.save();X.textAlign='center';
         const sc=Math.min(1,t/12);X.font='bold '+Math.round(46*sc)+'px monospace';
         X.fillStyle='#FF3B3B';X.shadowColor='#FF3B3B';X.shadowBlur=24;
-        X.fillText('LIQUIDATED',W/2,H*0.42);
+        X.fillText(title,W/2,H*0.42);
         X.shadowBlur=0;X.font='14px monospace';X.fillStyle=mine?'#FFE24B':'#ccc';
-        X.fillText(ev.name+(mine?' (YOU)':'')+' — '+fmt(ev.collateral_lost)+'g seized',W/2,H*0.42+34);
+        X.fillText(ev.name+(mine?' (YOU)':'')+' — '+fmt(ev.collateral_lost)+'g '+verb,W/2,H*0.42+34);
         X.restore();
         if(t<90)requestAnimationFrame(anim);else cv.remove();
     };
@@ -3081,6 +3158,8 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bip=document.getElementById('btn-ipo');if(bip)bip.onclick=showIPO;}
 {const bsh=document.getElementById('btn-short');if(bsh)bsh.onclick=showShort;}
 {const bix=document.getElementById('btn-index');if(bix)bix.onclick=showIndex;}
+{const bio=document.getElementById('btn-idxopt');if(bio)bio.onclick=showIdxOpt;}
+{const btr=document.getElementById('btn-traders');if(btr)btr.onclick=showTraders;}
 {const bpf=document.getElementById('btn-portfolio');if(bpf)bpf.onclick=showPortfolio;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}

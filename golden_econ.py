@@ -1177,14 +1177,19 @@ def settle_derivs(state, uid, now=None):
     derivs = me.get("derivs", [])
     due = [p for p in derivs if now >= p["expires"]]
     total = 0
+    pnl = 0
     for p in due:
         s = _stock_by_name(state, p["symbol"])
         spot = s["price"] if s else p["entry_spot"]
-        total += int(max(0, _settle_value(p, spot)))
+        val = int(max(0, _settle_value(p, spot)))
+        total += val
+        pnl += val - (0 if p["kind"] == "future" else int(p.get("cost", 0)))
     me["derivs"] = [p for p in derivs if now < p["expires"]]
     if total:
         me["gold"] = me.get("gold", 0) + total
         state.mark_dirty(uid)
+    if due:
+        record_trade_pnl(state, uid, pnl, now=now)
     return {"settled_count": len(due), "payout": total, "gold": me.get("gold", 0),
             "note": "Derivatives settle in in-game gold only."}
 
@@ -1831,6 +1836,38 @@ def check_liquidations(state, now=None):
     del events[:-30]
     return {"liquidated": liquidated, "saved": saved, "count": len(liquidated)}
 
+def check_short_squeezes(state, now=None):
+    """Sweep all short positions: if spot >= entry*phi, force-cover and wipe
+    the margin. Records a 'squeezed' event to the shared liq feed."""
+    now = now or int(time.time())
+    events = _liq_events(state)
+    squeezed = []
+    for uid, me in state.chars.items():
+        shorts = me.get("shorts")
+        if not shorts:
+            continue
+        keep = []
+        for p in shorts:
+            s = _stock_by_name(state, p["symbol"])
+            spot = s["price"] if s else p["entry"]
+            if spot >= p["entry"] * SHORT_SQUEEZE_MULT:
+                name = me.get("name", f"Player_{uid}")
+                corp = me.get("corp_id", 0) % len(CORPS)
+                state._liq_seq += 1
+                ev = {"id": state._liq_seq, "ts": now, "uid": uid,
+                      "name": name, "corp": corp, "type": "squeezed",
+                      "collateral_lost": p["margin"],
+                      "text": f"{name}'s {p['symbol']} short got SQUEEZED — {p['margin']:,}g margin wiped!"}
+                events.append(ev)
+                squeezed.append(ev)
+                record_trade_pnl(state, uid, -p["margin"], now=now)
+                state.mark_dirty(uid)
+            else:
+                keep.append(p)
+        me["shorts"] = keep
+    del events[:-30]
+    return {"squeezed": squeezed, "count": len(squeezed)}
+
 def liq_feed(state, since=0):
     events = _liq_events(state)
     return {"events": [e for e in events if e["id"] > since][-30:],
@@ -2066,12 +2103,14 @@ def short_close(state, uid, pos_id, now=None):
     shorts.remove(pos)
     if squeezed:
         # margin wiped on a squeeze; no return
+        record_trade_pnl(state, uid, -pos["margin"], now=now)
         state.mark_dirty(uid)
         return {"ok": True, "squeezed": True, "symbol": pos["symbol"],
                 "entry": round(pos["entry"], 2), "spot": round(spot, 2),
                 "margin_lost": pos["margin"], "returned": 0, "gold": me["gold"]}
     payout = max(0, pos["margin"] + pnl)
     res = award_gold(state, uid, payout, now=now) if payout > 0 else {"gained": 0}
+    record_trade_pnl(state, uid, pnl, now=now)
     state.mark_dirty(uid)
     return {"ok": True, "squeezed": False, "symbol": pos["symbol"],
             "entry": round(pos["entry"], 2), "spot": round(spot, 2),
@@ -2130,6 +2169,99 @@ def tick_index(state, now=None):
         c["l"] = min(c["l"], v)
         c["c"] = v
 
+IDX_OPT_EXPIRY = int(60 * PHI * PHI)     # ~157s to expiry
+IDX_OPT_SIZE = PHI                        # payout leverage per point
+
+def _idx_opts(char):
+    if "idx_opts" not in char:
+        char["idx_opts"] = []
+    return char["idx_opts"]
+
+def idx_option_chain(state):
+    """Offer phi-spaced call/put strikes around the current index."""
+    spot = golden_index_value(state)
+    strikes = []
+    for k in (-2, -1, 0, 1, 2):
+        strike = round(spot * (PHI ** (k / 3.0)), 2)
+        # premium scales with distance-from-money on a phi curve
+        call_prem = int(max(1, (spot - strike) + spot / PHI) * IDX_OPT_SIZE)
+        put_prem = int(max(1, (strike - spot) + spot / PHI) * IDX_OPT_SIZE)
+        strikes.append({"strike": strike, "call_premium": call_prem,
+                        "put_premium": put_prem})
+    return {"spot": spot, "strikes": strikes,
+            "expiry_secs": IDX_OPT_EXPIRY, "size": round(IDX_OPT_SIZE, 4),
+            "note": "Golden-500 index options settle in in-game gold at expiry."}
+
+def idx_option_open(state, uid, kind, strike, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    kind = (kind or "").lower()
+    if kind not in ("call", "put"):
+        return {"error": "kind must be call or put"}
+    spot = golden_index_value(state)
+    strike = round(float(strike), 2)
+    if kind == "call":
+        premium = int(max(1, (spot - strike) + spot / PHI) * IDX_OPT_SIZE)
+    else:
+        premium = int(max(1, (strike - spot) + spot / PHI) * IDX_OPT_SIZE)
+    if me.get("gold", 0) < premium:
+        return {"error": "not enough gold", "premium": premium}
+    me["gold"] -= premium
+    seq = getattr(state, "_idxopt_seq", 0) + 1
+    state._idxopt_seq = seq
+    pos = {"id": seq, "kind": kind, "strike": strike, "premium": premium,
+           "opened": now, "expires": now + IDX_OPT_EXPIRY, "entry_spot": spot}
+    _idx_opts(me).append(pos)
+    state.mark_dirty(uid)
+    return {"ok": True, "id": seq, "kind": kind, "strike": strike,
+            "premium": premium, "expires_in": IDX_OPT_EXPIRY, "gold": me["gold"]}
+
+def _idx_intrinsic(pos, spot):
+    if pos["kind"] == "call":
+        return max(0.0, spot - pos["strike"])
+    return max(0.0, pos["strike"] - spot)
+
+def idx_option_status(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    spot = golden_index_value(state)
+    out = []
+    for p in _idx_opts(me):
+        intrinsic = _idx_intrinsic(p, spot)
+        out.append({"id": p["id"], "kind": p["kind"], "strike": p["strike"],
+                    "premium": p["premium"], "spot": round(spot, 2),
+                    "intrinsic": round(intrinsic, 2),
+                    "est_payout": int(intrinsic * IDX_OPT_SIZE),
+                    "expires_in": max(0, p["expires"] - now),
+                    "in_money": intrinsic > 0})
+    return {"positions": out, "spot": round(spot, 2)}
+
+def idx_option_settle(state, uid, pos_id, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    opts = _idx_opts(me)
+    pos = next((p for p in opts if p["id"] == int(pos_id)), None)
+    if not pos:
+        return {"error": "no such option"}
+    if now < pos["expires"]:
+        return {"error": "not expired yet",
+                "expires_in": pos["expires"] - now}
+    spot = golden_index_value(state)
+    payout = int(_idx_intrinsic(pos, spot) * IDX_OPT_SIZE)
+    opts.remove(pos)
+    res = award_gold(state, uid, payout, now=now) if payout > 0 else {"gained": 0, "golden": False}
+    record_trade_pnl(state, uid, payout - pos["premium"], now=now)
+    state.mark_dirty(uid)
+    return {"ok": True, "kind": pos["kind"], "strike": pos["strike"],
+            "spot": round(spot, 2), "payout": payout,
+            "golden": res.get("golden", False), "gold": me["gold"]}
+
 def golden_index(state):
     hist = _index_hist(state)
     cur = golden_index_value(state)
@@ -2141,6 +2273,56 @@ def golden_index(state):
     return {"value": cur, "change": chg, "change_pct": chg_pct,
             "candles": candles, "count": len(candles),
             "note": "GOLDEN-500: phi-weighted composite of all markets."}
+
+
+# ============================================================
+# TRADER OF THE DAY (leaderboard by realized PnL)
+# ============================================================
+
+def _day_bucket(now=None):
+    now = now or int(time.time())
+    return now // 86400
+
+def record_trade_pnl(state, uid, pnl, now=None):
+    """Accumulate a player's realized trading PnL into today's bucket."""
+    me = state.chars.get(uid)
+    if not me:
+        return
+    day = _day_bucket(now)
+    rec = me.get("trade_day")
+    if not rec or rec.get("day") != day:
+        rec = {"day": day, "pnl": 0, "trades": 0}
+    rec["pnl"] = int(rec.get("pnl", 0)) + int(pnl)
+    rec["trades"] = int(rec.get("trades", 0)) + 1
+    me["trade_day"] = rec
+    state.mark_dirty(uid)
+
+def trader_leaderboard(state, uid=None, now=None):
+    day = _day_bucket(now)
+    rows = []
+    for u, me in state.chars.items():
+        rec = me.get("trade_day")
+        if not rec or rec.get("day") != day:
+            continue
+        if rec.get("trades", 0) <= 0:
+            continue
+        rows.append({"uid": u, "name": me.get("name", f"Player_{u}"),
+                     "corp": me.get("corp_id", 0) % len(CORPS),
+                     "pnl": int(rec["pnl"]), "trades": int(rec["trades"])})
+    rows.sort(key=lambda r: -r["pnl"])
+    top = rows[:20]
+    out = {"leaders": top, "count": len(rows),
+           "note": "Realized PnL from shorts, derivatives & index options today."}
+    if top:
+        out["crown"] = {"uid": top[0]["uid"], "name": top[0]["name"],
+                        "pnl": top[0]["pnl"]}
+    if uid is not None:
+        for i, r in enumerate(rows):
+            if r["uid"] == uid:
+                out["your_rank"] = i + 1
+                out["your_pnl"] = r["pnl"]
+                break
+    return out
 
 
 # ============================================================
