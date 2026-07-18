@@ -24,6 +24,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button onclick="tradeStock()">TRADE</button>
 <button onclick="togglePause()">PAUSE</button>
 <button onclick="exportPNG()">EXPORT PNG</button>
+<button onclick="exportWelfarePNG()" style="border-color:#00FF8C;color:#00FF8C">WELFARE PNG</button>
 <button onclick="donateLoot()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
 <button onclick="buyGold()" style="border-color:#00AAFF;color:#00AAFF">BUY GOLD</button>
 <button onclick="supportRequest()" style="border-color:#00FF8C;color:#00FF8C">SUPPORT</button>
@@ -2204,6 +2205,68 @@ function render(){
 
 function togglePause(){paused=!paused;if(paused)requestAnimationFrame(render);}
 function exportPNG(){const a=document.createElement('a');a.download='corp-heist-wealth.png';a.href=C.toDataURL('image/png');a.click();}
+
+// Welfare report -> standalone high-res PNG (client-side, zero deps, prints itself).
+// Renders to an offscreen canvas so nothing touches the live render loop or the main canvas.
+function exportWelfarePNG(scale){
+    scale=scale||2;
+    const MC=window.MarketCube;
+    const W=520,H=340;
+    const cv=document.createElement('canvas');cv.width=W*scale;cv.height=H*scale;
+    const g=cv.getContext('2d');g.scale(scale,scale);
+    // background
+    g.fillStyle='#05060d';g.fillRect(0,0,W,H);
+    g.strokeStyle='#FFC800';g.lineWidth=1;g.strokeRect(4,4,W-8,H-8);
+    // header
+    g.fillStyle='#FFC800';g.font='bold 15px monospace';g.textAlign='left';
+    g.fillText('CORP HEIST \u2014 \u0411\u041b\u0410\u0413\u041e\u041f\u041e\u041b\u0423\u0427\u0418\u0415',16,28);
+    g.fillStyle='#888';g.font='9px monospace';
+    g.fillText('\u0423\u0420\u041e\u0412\u0415\u041d\u042c \u0416\u0418\u0417\u041d\u0418 \u00b7 '+(P.name||('#'+(P.uid||0))),16,42);
+    if(!MC||P.uid==null){
+        g.fillStyle='#666';g.font='11px monospace';g.textAlign='center';
+        g.fillText('cube unavailable',W/2,H/2);
+    } else {
+        let q,ex;try{const now=Math.floor(Date.now()/1000);q=MC.welfareQuotes(P.uid|0,now,8);ex=MC.welfareExplain(P.uid|0,now);}catch(e){q=null;}
+        if(q&&q.length){
+            const cx0=16,cy0=58,cw0=W-32,ch0=200;
+            let lo=Infinity,hi=-Infinity;q.forEach(c=>{if(c.l<lo)lo=c.l;if(c.h>hi)hi=c.h;});
+            const fl=q[q.length-1].floor;if(fl<lo)lo=fl;lo*=0.98;hi*=1.02;const rng=hi-lo||1;
+            const slot=cw0/q.length,bw=Math.max(4,slot*0.5);
+            const yOf=v=>cy0+ch0-((v-lo)/rng)*ch0;
+            // phi guides
+            g.strokeStyle='#161826';g.lineWidth=0.5;
+            [0.382,0.618].forEach(fr=>{const gy=cy0+ch0*fr;g.beginPath();g.moveTo(cx0,gy);g.lineTo(cx0+cw0,gy);g.stroke();});
+            // floor line
+            g.strokeStyle='#664400';g.setLineDash([3,3]);
+            g.beginPath();g.moveTo(cx0,yOf(fl));g.lineTo(cx0+cw0,yOf(fl));g.stroke();g.setLineDash([]);
+            // candles
+            q.forEach((c,i)=>{
+                const cx=cx0+i*slot+slot/2;const up=c.c>=c.o;const col=up?'#38d66a':'#ff4b4b';
+                g.strokeStyle=col;g.lineWidth=1.2;
+                g.beginPath();g.moveTo(cx,yOf(c.h));g.lineTo(cx,yOf(c.l));g.stroke();
+                const oy=yOf(c.o),cy=yOf(c.c),bt=Math.min(oy,cy),bb=Math.max(oy,cy);
+                g.fillStyle=col;g.fillRect(cx-bw/2,bt,bw,Math.max(1.5,bb-bt));
+            });
+            // saldo + tier
+            const saldo=q[q.length-1].c-q[0].o;const up=saldo>=0;
+            g.font='11px monospace';g.textAlign='left';
+            g.fillStyle='#FFC800';g.fillText('\u043a\u043b\u0430\u0441\u0441 \u0436\u0438\u0437\u043d\u0438 '+ex.living_tier,16,H-46);
+            g.fillStyle=up?'#38d66a':'#ff4b4b';
+            g.fillText('\u0441\u0430\u043b\u044c\u0434\u043e 8\u043d\u0435\u0434: '+(up?'+':'\u2212')+'$'+fmt(Math.abs(saldo)),16,H-32);
+            g.textAlign='right';g.fillStyle='#888';
+            g.fillText('floor $'+fmt(fl)+'   welfare $'+fmt(ex.welfare),W-16,H-46);
+        } else {
+            g.fillStyle='#666';g.font='11px monospace';g.textAlign='center';g.fillText('no data',W/2,H/2);
+        }
+    }
+    // compliance footer
+    g.fillStyle='#555';g.font='8px monospace';g.textAlign='center';
+    g.fillText('\u0412\u043d\u0443\u0442\u0440\u0438\u0438\u0433\u0440\u043e\u0432\u0430\u044f \u043c\u0435\u0442\u0440\u0438\u043a\u0430 \u0443\u0440\u043e\u0432\u043d\u044f \u0436\u0438\u0437\u043d\u0438. \u041d\u0435 \u0440\u0435\u0430\u043b\u044c\u043d\u044b\u0435 \u0434\u0435\u043d\u044c\u0433\u0438. \u0414\u0435\u0442\u0435\u0440\u043c\u0438\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u043e\u0442 \u043a\u0443\u0431\u0430.',W/2,H-14);
+    const a=document.createElement('a');
+    a.download='corp-heist-welfare-'+(P.name||('uid'+(P.uid||0)))+'-'+Date.now()+'.png';
+    a.href=cv.toDataURL('image/png');document.body.appendChild(a);a.click();a.remove();
+    try{SND.click();}catch(e){}
+}
 
 // donate: system decides budget, everything obtainable for something (14-ФЗ compliant)
 function donateLoot(){
