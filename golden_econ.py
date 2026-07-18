@@ -1887,7 +1887,7 @@ def _ipos(state):
     return state.ipos
 
 def ipo_price(state, founder_uid):
-    ipo = _ipos(state).get(founder_uid)
+    ipo = _ipos(state).get(str(founder_uid))
     if not ipo:
         return 0
     sold = sum(ipo["held"].values())
