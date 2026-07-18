@@ -104,6 +104,9 @@ class SharedState:
         self._dirty = set()  # uids pending save
         self.chat = {}       # corp_id -> list[{uid,name,corp,text,ts}]  (ring buffer)
         self._chat_seq = 0   # monotonic id for chat messages
+        self._refresh_cooldown = {}   # uid -> timestamp of last page load
+        self._refresh_lock_sec = 300  # 5 minutes default
+        self._donor_uids = set()      # uids with donor status (skip cooldown)
 
     def _load_market(self):
         path = os.path.join(DATA_DIR, "market.json")
@@ -264,6 +267,47 @@ class SharedState:
         self.bytes_sent += sent
         self.bytes_recv += recv
 
+    # ---- REFRESH COOLDOWN ----
+
+    def refresh_cooldown_status(self, uid):
+        """Return cooldown info for a uid.
+        Returns dict with: locked, remaining, lock_sec, donor, can_force."""
+        now = time.time()
+        lock_sec = self._refresh_lock_sec
+        donor = uid in self._donor_uids
+        last = self._refresh_cooldown.get(uid, 0)
+        elapsed = now - last
+        if donor:
+            remaining = 0
+            locked = False
+        elif elapsed < lock_sec:
+            remaining = int(lock_sec - elapsed)
+            locked = True
+        else:
+            remaining = 0
+            locked = False
+        return {
+            "locked": locked,
+            "remaining": remaining,
+            "lock_sec": lock_sec,
+            "donor": donor,
+        }
+
+    def refresh_register(self, uid):
+        """Register a page load for cooldown tracking."""
+        self._refresh_cooldown[uid] = time.time()
+
+    def refresh_force(self, uid):
+        """Admin/force: reset cooldown for a uid."""
+        self._refresh_cooldown.pop(uid, None)
+
+    def refresh_set_donor(self, uid, on=True):
+        """Toggle donor status (skip cooldown)."""
+        if on:
+            self._donor_uids.add(uid)
+        else:
+            self._donor_uids.discard(uid)
+
     def stats(self):
         uptime = time.time() - self.start_time
         files = len([f for f in os.listdir(CHARS_DIR) if f.endswith(".json")])
@@ -414,6 +458,49 @@ async def handle_press_index(request):
     }, ensure_ascii=False).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
+
+
+# ---- REFRESH COOLDOWN HANDLERS ----
+
+async def handle_refresh_cooldown(request):
+    """GET /api/refresh-cooldown/{uid} — returns cooldown state for client."""
+    uid = int(request.match_info.get("uid", 0))
+    status = STATE.refresh_cooldown_status(uid)
+    body = json.dumps(status).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_refresh_load(request):
+    """POST /pulse/refresh/load — register page load, start cooldown."""
+    d = await request.json()
+    uid = int(d.get("uid", 0))
+    STATE.refresh_register(uid)
+    body = json.dumps(STATE.refresh_cooldown_status(uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_refresh_force(request):
+    """POST /pulse/refresh/force — admin: reset cooldown for a uid."""
+    d = await request.json()
+    uid = int(d.get("uid", 0))
+    STATE.refresh_force(uid)
+    body = json.dumps(STATE.refresh_cooldown_status(uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_refresh_donor(request):
+    """POST /pulse/refresh/donor — toggle donor status (skip cooldown)."""
+    d = await request.json()
+    uid = int(d.get("uid", 0))
+    on = d.get("on", True)
+    STATE.refresh_set_donor(uid, on)
+    body = json.dumps(STATE.refresh_cooldown_status(uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
 
 async def handle_char(request):
     uid = int(request.match_info.get("uid", 1000))
@@ -1836,6 +1923,11 @@ def make_unified_app():
     app.router.add_get("/api/mm/{uid}", handle_mm)
     app.router.add_post("/pulse/mm/place", pulse_mm_place)
     app.router.add_post("/pulse/mm/cancel", pulse_mm_cancel)
+    # ---- REFRESH COOLDOWN ----
+    app.router.add_get("/api/refresh-cooldown/{uid}", handle_refresh_cooldown)
+    app.router.add_post("/pulse/refresh/load", pulse_refresh_load)
+    app.router.add_post("/pulse/refresh/force", pulse_refresh_force)
+    app.router.add_post("/pulse/refresh/donor", pulse_refresh_donor)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

@@ -2319,12 +2319,12 @@ async function refreshPlayers(){
 }
 
 async function loadPlayer(uid){
-    if(uid==='local'){newPortfolio();return;}
+    if(uid==='local'){_currentUid='local';newPortfolio();return;}
     try{
         const r=await fetch(API+'/api/char/'+uid);
         const d=await r.json();
         if(d.error)return;
-        P.uid=d.user_id;
+        P.uid=d.user_id;_currentUid=d.user_id;
         P.name=PNAMES[d.user_id%PNAMES.length];
         P.corp=CNAMES[d.corp_id%CNAMES.length];
         setTheme(d.corp_id%CORP_THEMES.length);
@@ -2336,6 +2336,7 @@ async function loadPlayer(uid){
         P.rank=d.rank_percent;frame=0;
         loadRaidViz(uid);
         loadBadges(uid);
+        syncCooldown();
     }catch(e){}
 }
 // Unlocked achievement badges for the on-card shelf
@@ -2359,15 +2360,66 @@ async function loadRaidViz(uid){
 }
 
 // ====== INFO ======
-document.getElementById('info').textContent=TOTAL+' math render algorithms | 10 categories | Pure Canvas, zero assets | Hourly refresh';
+document.getElementById('info').textContent=TOTAL+' math render algorithms | 10 categories | Pure Canvas, zero assets | 5-min refresh';
 
-// hourly refresh
-let refreshLeft=3600;
+// ====== REFRESH COOLDOWN (5 min, donor skip, admin force) ======
+let _refreshLeft=300;
+let _refreshLocked=false;
+let _refreshDonor=false;
+let _currentUid=0;
+const REFRESH_LOCK=300;
+
+async function syncCooldown(){
+    if(!_currentUid||_currentUid==='local')return;
+    try{
+        const r=await fetch(API+'/api/refresh-cooldown/'+_currentUid);
+        const d=await r.json();
+        _refreshLeft=d.remaining||0;
+        _refreshLocked=d.locked;
+        _refreshDonor=d.donor;
+    }catch(e){}
+}
+async function registerPageLoad(){
+    if(!_currentUid||_currentUid==='local')return;
+    try{
+        await fetch(API+'/pulse/refresh/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_currentUid})});
+        _refreshLeft=REFRESH_LOCK;
+        _refreshLocked=true;
+    }catch(e){}
+}
+async function forceRefresh(){
+    if(!_currentUid||_currentUid==='local')return;
+    try{
+        await fetch(API+'/pulse/refresh/force',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_currentUid})});
+        _refreshLeft=0;_refreshLocked=false;
+        location.reload();
+    }catch(e){}
+}
+async function toggleDonor(on){
+    if(!_currentUid||_currentUid==='local')return;
+    try{
+        await fetch(API+'/pulse/refresh/donor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_currentUid,on:on})});
+        _refreshDonor=on;
+        if(on){_refreshLeft=0;_refreshLocked=false;}
+        else{_refreshLeft=REFRESH_LOCK;_refreshLocked=true;}
+    }catch(e){}
+}
+
 setInterval(()=>{
-    refreshLeft--;
-    if(refreshLeft<=0){location.reload();return;}
-    const m=Math.floor(refreshLeft/60),s=refreshLeft%60;
+    if(_refreshDonor){
+        document.getElementById('refresh-timer').textContent='DONOR: no cooldown';
+        document.getElementById('refresh-timer').style.color='#00FF8C';
+        return;
+    }
+    if(_refreshLeft<=0){
+        document.getElementById('refresh-timer').textContent='ready — refreshing...';
+        document.getElementById('refresh-timer').style.color='#FFC800';
+        location.reload();return;
+    }
+    _refreshLeft--;
+    const m=Math.floor(_refreshLeft/60),s=_refreshLeft%60;
     document.getElementById('refresh-timer').textContent='refresh in '+m+':'+(s<10?'0':'')+s;
+    document.getElementById('refresh-timer').style.color=_refreshLeft<60?'#FF3232':'#555';
 },1000);
 
 // try fetch player list on load
@@ -2375,7 +2427,7 @@ refreshPlayers();
 
 // auto-load player from ?uid= in URL (used by /card/N links)
 const _urlUid = new URLSearchParams(location.search).get('uid');
-if(_urlUid){ loadPlayer(_urlUid); }
+if(_urlUid){ _currentUid=_urlUid; loadPlayer(_urlUid); registerPageLoad(); }
 else { newPortfolio(); }
 
 // ====== METAGAME PANEL (arena / guilds / leaderboard) ======
