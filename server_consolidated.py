@@ -84,6 +84,106 @@ log = logging.getLogger("consolidated")
 
 
 # ============================================================
+# RATE LIMITER MIDDLEWARE
+# ============================================================
+
+class RateLimiter:
+    """Sliding-window rate limiter per IP.
+    GET /poll  — 60 req per 10s window (card data, char, market)
+    POST/pulse — 20 req per 10s window (actions, trades, gambles)
+    Static/*   — 30 req per 10s window (JS, CSS, images)
+    Returns 429 with Retry-After header when exceeded.
+    Free tier: 30 max connections total."""
+
+    WINDOW = 10  # seconds
+    GET_LIMIT = 60
+    POST_LIMIT = 20
+    STATIC_LIMIT = 30
+    BURST_LIMIT = 5  # max requests in 1s burst
+    _buckets = {}   # ip -> {path_type: [(ts, ...)]}
+    _last_clean = 0
+
+    @classmethod
+    def _get_client_ip(cls, request):
+        fwd = request.headers.get("X-Forwarded-For", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
+        return request.remote or "0.0.0.0"
+
+    @classmethod
+    def _bucket_type(cls, path):
+        if path.startswith("/pulse/") or path.startswith("/pulse"):
+            return "post"
+        if path.startswith("/static") or path.endswith(".js") or path.endswith(".css"):
+            return "static"
+        return "get"
+
+    @classmethod
+    def _limit_for(cls, btype):
+        if btype == "post":
+            return cls.POST_LIMIT
+        if btype == "static":
+            return cls.STATIC_LIMIT
+        return cls.GET_LIMIT
+
+    @classmethod
+    def check(cls, request):
+        now = time.time()
+        ip = cls._get_client_ip(request)
+        btype = cls._bucket_type(request.path)
+        limit = cls._limit_for(btype)
+
+        key = ip
+        if key not in cls._buckets:
+            cls._buckets[key] = {}
+        bucket = cls._buckets[key]
+        if btype not in bucket:
+            bucket[btype] = []
+
+        entries = bucket[btype]
+        # prune old entries
+        cutoff = now - cls.WINDOW
+        while entries and entries[0] < cutoff:
+            entries.pop(0)
+
+        if len(entries) >= limit:
+            retry = int(cls.WINDOW - (now - entries[0])) + 1
+            return {"blocked": True, "retry_after": retry, "limit": limit, "count": len(entries)}
+
+        entries.append(now)
+        return {"blocked": False, "limit": limit, "count": len(entries)}
+
+    @classmethod
+    def cleanup_loop(cls):
+        """Periodic cleanup of stale IP buckets (called from health_loop)."""
+        now = time.time()
+        if now - cls._last_clean < 60:
+            return
+        cls._last_clean = now
+        stale_ips = [ip for ip, buckets in cls._buckets.items()
+                     if all(not entries for entries in buckets.values())]
+        for ip in stale_ips:
+            del cls._buckets[ip]
+
+
+@web.middleware
+async def rate_limit_middleware(request, handler):
+    result = RateLimiter.check(request)
+    if result["blocked"]:
+        return web.json_response(
+            {"error": "rate limited", "retry_after": result["retry_after"],
+             "limit": result["limit"]},
+            status=429,
+            headers={"Retry-After": str(result["retry_after"]),
+                     "X-RateLimit-Limit": str(result["limit"]),
+                     "X-RateLimit-Remaining": "0"})
+    resp = await handler(request)
+    resp.headers["X-RateLimit-Limit"] = str(result.get("limit", 60))
+    resp.headers["X-RateLimit-Remaining"] = str(max(0, result.get("limit", 60) - result.get("count", 0)))
+    return resp
+
+
+# ============================================================
 # CONFIG
 # ============================================================
 
@@ -1821,7 +1921,8 @@ async def market_loop():
 async def health_loop():
     while True:
         s = STATE.stats()
-        log.info(f"health: req={s['requests']} sent={s['bytes_sent']}B chars={s['chars']} dirty={s['dirty']} uptime={s['uptime_sec']}s active={PlayerSession.active_count()}")
+        RateLimiter.cleanup_loop()
+        log.info(f"health: req={s['requests']} sent={s['bytes_sent']}B chars={s['chars']} dirty={s['dirty']} uptime={s['uptime_sec']}s active={PlayerSession.active_count()} ratelimit_buckets={len(RateLimiter._buckets)}")
         # periodic snapshots for all active chars
         now = int(time.time())
         for uid in list(STATE.chars.keys())[:50]:
@@ -2762,7 +2863,7 @@ def make_dashboard_app():
 
 def make_unified_app():
     """Single-port app: dashboard + 30 cards + API on one port (9000)."""
-    app = web.Application()
+    app = web.Application(middlewares=[rate_limit_middleware])
     # dashboard
     app.router.add_get("/", handle_dashboard)
     app.router.add_get("/api/market", handle_market)
