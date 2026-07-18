@@ -4899,6 +4899,212 @@ class CandleSettlement:
         return {"exchanged": exchanged, "kept": kept,
                 "gold_left": c.get("gold", 0)}
 
+
+# ============================================================
+# PLAYER SESSIONS — track who's active, play time, activity log
+# ============================================================
+
+class PlayerSession:
+    """Отслеживает активные сессии игроков. Каждый запрос от uid = heartbeat.
+    Хранит: когда зашёл, сколько玩 time, последние N действий.
+    При споре «у меня было X» — показываем лог."""
+
+    MAX_LOG = 50
+    SESSION_TIMEOUT = 600  # 10 min = inactive
+
+    _sessions = {}  # uid -> {first_seen, last_seen, total_sec, actions: [{ts, action, gold_after}]}
+
+    @classmethod
+    def heartbeat(cls, uid, action, gold_after, now=None):
+        """Record activity. Called from every pulse handler."""
+        t = now or int(time.time())
+        s = cls._sessions.get(uid)
+        if s is None:
+            s = {"first_seen": t, "last_seen": t, "total_sec": 0, "actions": []}
+            cls._sessions[uid] = s
+        # accumulate play time
+        gap = t - s["last_seen"]
+        if gap < cls.SESSION_TIMEOUT:
+            s["total_sec"] += gap
+        s["last_seen"] = t
+        # log action (compact)
+        entry = {"ts": t, "action": action, "g": gold_after}
+        s["actions"].append(entry)
+        if len(s["actions"]) > cls.MAX_LOG:
+            s["actions"] = s["actions"][-cls.MAX_LOG:]
+
+    @classmethod
+    def get_session(cls, uid):
+        s = cls._sessions.get(uid, {})
+        t = int(time.time())
+        return {
+            "uid": uid,
+            "first_seen": s.get("first_seen", 0),
+            "last_seen": s.get("last_seen", 0),
+            "online": (t - s.get("last_seen", 0)) < cls.SESSION_TIMEOUT,
+            "total_play_sec": s.get("total_sec", 0),
+            "actions_logged": len(s.get("actions", [])),
+        }
+
+    @classmethod
+    def get_log(cls, uid, last_n=20):
+        s = cls._sessions.get(uid, {})
+        actions = s.get("actions", [])
+        return actions[-last_n:]
+
+    @classmethod
+    def active_count(cls):
+        t = int(time.time())
+        return sum(1 for s in cls._sessions.values()
+                   if (t - s.get("last_seen", 0)) < cls.SESSION_TIMEOUT)
+
+
+# ============================================================
+# STATE SNAPSHOTS — periodic compact proof of player state
+# ============================================================
+
+class StateSnapshot:
+    """Каждые N секунд делает компактный снимок состояния игрока.
+    Если потом спорит «у меня было 1M gold» — показываем снимок.
+    Хранит последние 20 снимков на uid."""
+
+    MAX_SNAPSHOTS = 20
+    INTERVAL = 300  # snapshot every 5 min
+
+    _snapshots = {}  # uid -> [{ts, gold, items, level, elo, etc}]
+
+    @classmethod
+    def take(cls, state, uid, now=None):
+        """Take a compact snapshot of player state."""
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        snap = {
+            "ts": t,
+            "gold": int(c.get("gold", 0)),
+            "items": len(c.get("loot", [])),
+            "level": c.get("level", 1),
+            "elo": c.get("_arena_elo", 0),
+            "hp": c.get("hp", 0),
+            "attack": c.get("attack", 0),
+            "defense": c.get("defense", 0),
+        }
+        arr = cls._snapshots.setdefault(uid, [])
+        # skip if too soon
+        if arr and (t - arr[-1]["ts"]) < cls.INTERVAL:
+            return snap
+        arr.append(snap)
+        if len(arr) > cls.MAX_SNAPSHOTS:
+            arr[:] = arr[-cls.MAX_SNAPSHOTS:]
+        return snap
+
+    @classmethod
+    def get_history(cls, uid, last_n=10):
+        return cls._snapshots.get(uid, [])[-last_n:]
+
+    @classmethod
+    def diff(cls, uid, ts_a, ts_b):
+        """Compare two snapshots to show what changed."""
+        snaps = cls._snapshots.get(uid, [])
+        sa = next((s for s in snaps if s["ts"] == ts_a), None)
+        sb = next((s for s in snaps if s["ts"] == ts_b), None)
+        if not sa or not sb:
+            return None
+        return {k: sb[k] - sa[k] for k in sa if isinstance(sa[k], (int, float))}
+
+
+# ============================================================
+# ACTIVITY WATCHDOG — detect anomalies + rate limit
+# ============================================================
+
+class ActivityWatchdog:
+    """Защита от аномалий:
+    1. Rate limit: max 1 pulse per uid per 2 sec
+    2. Gold spike: if gold changed > 50x in 5 min → flag
+    3. Impossible state: hp < 0, gold < 0, level < 1 → reject
+    4. Spree detect: > 50 actions in 5 min → warn"""
+
+    RATE_LIMIT_SEC = 2
+    SPIKE_WINDOW = 300
+    SPIKE_MULTIPLIER = 50
+    SPREE_LIMIT = 50
+
+    _last_pulse = {}  # uid -> last_ts
+    _action_counts = {}  # uid -> [(ts, count)]
+
+    @classmethod
+    def check_rate(cls, uid, now=None):
+        """Returns True if OK, False if rate limited."""
+        t = now or int(time.time())
+        last = cls._last_pulse.get(uid, 0)
+        if (t - last) < cls.RATE_LIMIT_SEC:
+            return False
+        cls._last_pulse[uid] = t
+        return True
+
+    @classmethod
+    def check_state(cls, c, action=""):
+        """Validate state invariants. Returns error string or None."""
+        gold = c.get("gold", 0)
+        if gold < 0:
+            return "gold_underflow"
+        if c.get("level", 1) < 1:
+            return "invalid_level"
+        if c.get("hp", 0) < 0:
+            return "hp_negative"
+        return None
+
+    @classmethod
+    def check_gold_spike(cls, uid, current_gold, now=None):
+        """Detect suspicious gold changes. Returns True if spike detected."""
+        t = now or int(time.time())
+        key = uid
+        history = cls._action_counts.setdefault(key, [])
+        history.append({"ts": t, "gold": current_gold})
+        # keep last 60 entries
+        if len(history) > 60:
+            history[:] = history[-60:]
+        # check window
+        window_start = t - cls.SPIKE_WINDOW
+        old_golds = [h for h in history if h["ts"] < window_start]
+        if old_golds:
+            old = old_golds[0]["gold"]
+            if old > 0:
+                ratio = current_gold / max(old, 1)
+                if ratio > cls.SPIKE_MULTIPLIER:
+                    return True
+        return False
+
+    @classmethod
+    def check_spree(cls, uid, now=None):
+        """Detect excessive activity. Returns action count in window."""
+        t = now or int(time.time())
+        window = t - 300  # 5 min
+        history = cls._action_counts.get(uid, [])
+        recent = [h for h in history if h["ts"] > window]
+        return len(recent)
+
+    @classmethod
+    def audit(cls, state, uid, now=None):
+        """Full audit for a player. Returns report dict."""
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        session = PlayerSession.get_session(uid)
+        snaps = StateSnapshot.get_history(uid, 5)
+        spree = cls.check_spree(uid)
+        state_err = cls.check_state(c)
+        gold_history = cls._action_counts.get(uid, [])[-10:]
+        return {
+            "uid": uid,
+            "session": session,
+            "state_valid": state_err is None,
+            "state_error": state_err,
+            "spree_5min": spree,
+            "spree_warning": spree > cls.SPREE_LIMIT,
+            "recent_snapshots": snaps,
+            "recent_gold": [{"ts": g["ts"], "gold": g["gold"]} for g in gold_history],
+            "active_sessions": cls.active_count() if hasattr(cls, 'active_count') else PlayerSession.active_count(),
+        }
+
 if __name__ == "__main__":
     class FakeState:
         def __init__(self):

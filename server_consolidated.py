@@ -73,6 +73,7 @@ from golden_econ import (
     PhiCasino, MarketOracle, PhiArenaRankings,
     CrashInsurance, PhiArtifacts, MarketInsider,
     PhiCandleBet, CandleShop, CandleSettlement,
+    PlayerSession, StateSnapshot, ActivityWatchdog,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -717,6 +718,7 @@ async def pulse_trade(request):
     STATE.track(sent=50)
     STATE.mark_dirty(uid)
     STATE.save_char(uid)
+    _hb(uid, f"trade_{side}_{stock_name}_{amount}", c["gold"])
     return web.json_response({"ok": True, "gold": c["gold"], "side": side,
                               "stock": stock_name, "amount": amount,
                               "price": ms["price"]})
@@ -750,6 +752,7 @@ async def pulse_gacha(request):
     STATE.track(sent=20)
     STATE.mark_dirty(uid)
     STATE.save_char(uid)
+    _hb(uid, f"gacha_r{rarity}", c["gold"])
     return web.json_response({"ok": True, "hero_id": hero_id,
                               "rarity": rarity, "pity": c["gacha_pity"]})
 
@@ -1805,7 +1808,11 @@ async def market_loop():
 async def health_loop():
     while True:
         s = STATE.stats()
-        log.info(f"health: req={s['requests']} sent={s['bytes_sent']}B chars={s['chars']} dirty={s['dirty']} uptime={s['uptime_sec']}s")
+        log.info(f"health: req={s['requests']} sent={s['bytes_sent']}B chars={s['chars']} dirty={s['dirty']} uptime={s['uptime_sec']}s active={PlayerSession.active_count()}")
+        # periodic snapshots for all active chars
+        now = int(time.time())
+        for uid in list(STATE.chars.keys())[:50]:
+            StateSnapshot.take(STATE, uid, now=now)
         await asyncio.sleep(HEALTH_CHECK_SEC)
 
 async def autosave_loop():
@@ -2044,6 +2051,8 @@ async def pulse_casino_play(request):
     player_hand = d.get("player_hand")
     dealer_hand = d.get("dealer_hand")
     result = PhiCasino.play(STATE, uid, bet, action, player_hand, dealer_hand)
+    gold_after = result.get("gold_left", STATE.chars.get(uid, {}).get("gold", 0))
+    _hb(uid, f"casino_{action}_{bet}", gold_after)
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -2157,6 +2166,7 @@ async def pulse_candle_buy(request):
     bet = int(d.get("bet", 100))
     direction = d.get("direction", "green")
     result = PhiCandleBet.buy(STATE, uid, bet, direction)
+    _hb(uid, f"candle_buy_{direction}_{bet}", result.get("gold_left", 0))
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -2220,6 +2230,39 @@ async def pulse_candle_auto_exchange(request):
     uid = int(d.get("uid", 1000))
     result = CandleSettlement.auto_exchange_wrong_sector(STATE, uid)
     body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+# ---- AUDIT / SESSION / WATCHDOG ----
+
+def _hb(uid, action, gold_after):
+    """Heartbeat helper — call after every pulse."""
+    PlayerSession.heartbeat(uid, action, gold_after)
+    c = STATE.chars.get(uid, {})
+    StateSnapshot.take(STATE, uid)
+
+async def handle_audit(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(ActivityWatchdog.audit(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_session(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PlayerSession.get_session(uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_session_log(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PlayerSession.get_log(uid, last_n=30)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_snapshots(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(StateSnapshot.get_history(uid, last_n=10)).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
 
@@ -2423,6 +2466,11 @@ def make_unified_app():
     app.router.add_get("/api/candlesettle/{uid}", handle_candle_settlement)
     app.router.add_post("/pulse/candlesettle/claim", pulse_candle_claim)
     app.router.add_post("/pulse/candlesettle/autoex", pulse_candle_auto_exchange)
+    # ---- AUDIT / SESSION ----
+    app.router.add_get("/api/audit/{uid}", handle_audit)
+    app.router.add_get("/api/session/{uid}", handle_session)
+    app.router.add_get("/api/sessionlog/{uid}", handle_session_log)
+    app.router.add_get("/api/snapshots/{uid}", handle_snapshots)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
