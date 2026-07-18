@@ -271,13 +271,22 @@ class SharedState:
 
     def refresh_cooldown_status(self, uid):
         """Return cooldown info for a uid.
-        Returns dict with: locked, remaining, lock_sec, donor, can_force."""
+        Returns dict with: locked, remaining, lock_sec, donor, tier."""
         now = time.time()
-        lock_sec = self._refresh_lock_sec
         donor = uid in self._donor_uids
+        c = self.chars.get(uid)
+        tier = 0
+        if c:
+            tier = int(c.get("premium_tier", 0))
+        if donor or tier >= 2:
+            lock_sec = 0
+        elif tier == 1:
+            lock_sec = 60
+        else:
+            lock_sec = self._refresh_lock_sec
         last = self._refresh_cooldown.get(uid, 0)
         elapsed = now - last
-        if donor:
+        if lock_sec == 0:
             remaining = 0
             locked = False
         elif elapsed < lock_sec:
@@ -290,7 +299,8 @@ class SharedState:
             "locked": locked,
             "remaining": remaining,
             "lock_sec": lock_sec,
-            "donor": donor,
+            "donor": donor or tier >= 2,
+            "tier": tier,
         }
 
     def refresh_register(self, uid):
@@ -498,6 +508,29 @@ async def pulse_refresh_donor(request):
     on = d.get("on", True)
     STATE.refresh_set_donor(uid, on)
     body = json.dumps(STATE.refresh_cooldown_status(uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+async def pulse_premium_buy(request):
+    """POST /pulse/premium/buy — buy priority tier (1 min cooldown) with in-game gold."""
+    d = await request.json()
+    uid = int(d.get("uid", 0))
+    c = STATE.chars.get(uid)
+    if not c:
+        return web.json_response({"error": "no char"})
+    tier = int(c.get("premium_tier", 0))
+    if tier >= 1:
+        return web.json_response({"error": "already premium", "tier": tier})
+    cost = 5000
+    gold = int(c.get("gold", 0))
+    if gold < cost:
+        return web.json_response({"error": "not enough gold", "have": gold, "need": cost})
+    c["gold"] = gold - cost
+    c["premium_tier"] = 1
+    STATE.mark_dirty(uid)
+    body = json.dumps({"ok": True, "tier": 1, "gold_left": c["gold"],
+                        **STATE.refresh_cooldown_status(uid)}).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
 
@@ -1928,6 +1961,7 @@ def make_unified_app():
     app.router.add_post("/pulse/refresh/load", pulse_refresh_load)
     app.router.add_post("/pulse/refresh/force", pulse_refresh_force)
     app.router.add_post("/pulse/refresh/donor", pulse_refresh_donor)
+    app.router.add_post("/pulse/premium/buy", pulse_premium_buy)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

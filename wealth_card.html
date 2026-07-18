@@ -75,7 +75,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
 <button id="btn-mm" style="border-color:#00FF8C;color:#00FF8C">⚖ MARKET MAKE</button>
 <button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
-<span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
+<span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
 <div id="overlay"></div>
@@ -2362,10 +2362,11 @@ async function loadRaidViz(uid){
 // ====== INFO ======
 document.getElementById('info').textContent=TOTAL+' math render algorithms | 10 categories | Pure Canvas, zero assets | 5-min refresh';
 
-// ====== REFRESH COOLDOWN (5 min, donor skip, admin force) ======
+// ====== REFRESH COOLDOWN (5 min, donor skip, admin force, premium buy) ======
 let _refreshLeft=300;
 let _refreshLocked=false;
 let _refreshDonor=false;
+let _refreshTier=0;
 let _currentUid=0;
 const REFRESH_LOCK=300;
 
@@ -2377,6 +2378,7 @@ async function syncCooldown(){
         _refreshLeft=d.remaining||0;
         _refreshLocked=d.locked;
         _refreshDonor=d.donor;
+        _refreshTier=d.tier||0;
     }catch(e){}
 }
 async function registerPageLoad(){
@@ -2404,22 +2406,38 @@ async function toggleDonor(on){
         else{_refreshLeft=REFRESH_LOCK;_refreshLocked=true;}
     }catch(e){}
 }
+async function buyPremium(){
+    if(!_currentUid||_currentUid==='local')return;
+    try{
+        const r=await fetch(API+'/pulse/premium/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_currentUid})});
+        const d=await r.json();
+        if(d.error){showOverlay('PREMIUM',d.error+(d.need?'\nNeed: '+d.need+' gold\nHave: '+d.have:''));return;}
+        _refreshTier=1;_refreshLeft=0;_refreshLocked=false;
+        SND.promo();showOverlay('PREMIUM','Priority active! 1-min cooldown.\nGold left: '+d.gold_left);
+    }catch(e){}
+}
 
 setInterval(()=>{
-    if(_refreshDonor){
-        document.getElementById('refresh-timer').textContent='DONOR: no cooldown';
-        document.getElementById('refresh-timer').style.color='#00FF8C';
+    const el=document.getElementById('refresh-timer');
+    if(_refreshDonor||_refreshTier>=2){
+        el.textContent='DONOR: no cooldown';
+        el.style.color='#00FF8C';
         return;
     }
-    if(_refreshLeft<=0){
-        document.getElementById('refresh-timer').textContent='ready — refreshing...';
-        document.getElementById('refresh-timer').style.color='#FFC800';
+    if(_refreshTier===1){
+        el.textContent='PRIORITY 1-min';
+        el.style.color='#00E5FF';
+        if(_refreshLeft<=0)return;
+    }
+    if(_refreshLeft<=0&&!_refreshLocked){
+        el.textContent='ready — refreshing...';
+        el.style.color='#FFC800';
         location.reload();return;
     }
     _refreshLeft--;
     const m=Math.floor(_refreshLeft/60),s=_refreshLeft%60;
-    document.getElementById('refresh-timer').textContent='refresh in '+m+':'+(s<10?'0':'')+s;
-    document.getElementById('refresh-timer').style.color=_refreshLeft<60?'#FF3232':'#555';
+    el.textContent='refresh in '+m+':'+(s<10?'0':'')+s;
+    el.style.color=_refreshLeft<60?'#FF3232':'#555';
 },1000);
 
 // try fetch player list on load
