@@ -32,3 +32,21 @@ jobs:
     - name: Verify game imports
       run: |
         python -c "import config; import heroes; import battle; import shop; import save_system; import ui; print('All modules OK')"
+
+    - name: Compile server + economy + press
+      run: |
+        python -m py_compile server_consolidated.py golden_econ.py
+        python -m py_compile press/pdfkit_phi.py press/ttf_reader.py press/phi_data.py press/phi_charts.py press/live_data.py press/magazine.py press/build_issues.py
+
+    - name: Golden economy self-test
+      run: python golden_econ.py
+
+    - name: Build PHI PRESS (synthetic) and validate PDFs
+      env:
+        PRESS_SYNTH: '1'
+      run: |
+        python build_issues.py
+      working-directory: press
+
+    - name: Validate generated PDFs
+      run: python .github/validate_pdfs.py
