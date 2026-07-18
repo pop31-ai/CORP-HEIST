@@ -48,7 +48,9 @@ from golden_econ import (
     bond_tiers, buy_bond, bond_status, claim_bonds,
     deriv_quote, open_position, deriv_status, settle_derivs,
     sky_status, sky_fund,
-    golden_hour, golden_multiplier,
+    golden_hour, golden_multiplier, award_gold,
+    ma_status, buy_shares, share_price,
+    news_feed, tick_news,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -238,6 +240,34 @@ RAID = Raid(STATE)
 WORLDBOSS = WorldBoss(STATE)
 AUCTION = Auction(STATE)
 GUILDWAR = GuildWar(STATE)
+
+
+def _boost_reward(uid, result, field="reward_gold"):
+    """Apply Golden Hour x-phi bonus + M&A dividends on top of a reward that
+    was already credited by a golden_econ function. Mutates & annotates result."""
+    base = result.get(field, 0)
+    if not base or base <= 0:
+        return result
+    c = STATE.chars.get(uid)
+    if not c:
+        return result
+    mult = golden_multiplier()
+    bonus = int(round(base * (mult - 1.0)))
+    if bonus > 0:
+        c["gold"] = c.get("gold", 0) + bonus
+        STATE.mark_dirty(uid)
+        result["golden_bonus"] = bonus
+        result[field] = base + bonus
+    result["golden"] = mult > 1.0
+    result["golden_mult"] = round(mult, 6)
+    # M&A dividends on the full (boosted) reward
+    from golden_econ import _pay_dividends
+    total_base = base + (bonus if bonus > 0 else 0)
+    div = _pay_dividends(STATE, uid, total_base)
+    if div:
+        result["dividends_paid"] = div
+    result["gold"] = STATE.chars.get(uid, {}).get("gold", c.get("gold", 0))
+    return result
 
 
 # ============================================================
@@ -435,12 +465,13 @@ async def pulse_loot_sell(request):
     item["qty"] -= qty
     if item["qty"] <= 0:
         c["loot"].remove(item)
-    gold = item["value"] * qty
-    c["gold"] += gold
+    base = item["value"] * qty
+    aw = award_gold(STATE, uid, base)
     STATE.track(sent=30)
-    STATE.mark_dirty(uid)
     STATE.save_char(uid)
-    return web.json_response({"ok": True, "gold": c["gold"], "earned": gold})
+    return web.json_response({"ok": True, "gold": aw["gold"], "earned": aw["gained"],
+                              "golden": aw["golden"], "multiplier": aw["multiplier"],
+                              "dividends_paid": aw["dividends_paid"]})
 
 async def pulse_donate(request):
     """Pulse: donate rarest loot for gold (system decides multiplier)."""
@@ -452,14 +483,15 @@ async def pulse_donate(request):
     ri = max(range(len(c["loot"])), key=lambda i: c["loot"][i]["rarity"])
     item = c["loot"][ri]
     mult = [3,5,8,12,20,50][item["rarity"]]
-    gold = item["value"] * item["qty"] * mult
-    c["gold"] += gold
+    base = item["value"] * item["qty"] * mult
     c["loot"].pop(ri)
+    aw = award_gold(STATE, uid, base)
     STATE.track(sent=30)
-    STATE.mark_dirty(uid)
     STATE.save_char(uid)
-    return web.json_response({"ok": True, "gold": c["gold"], "donated_rarity": item["rarity"],
-                              "multiplier": mult, "earned": gold})
+    return web.json_response({"ok": True, "gold": aw["gold"], "donated_rarity": item["rarity"],
+                              "multiplier": mult, "earned": aw["gained"],
+                              "golden": aw["golden"], "golden_mult": aw["multiplier"],
+                              "dividends_paid": aw["dividends_paid"]})
 
 async def pulse_buy_gold(request):
     """Pulse: buy game gold for real money (USD/RUB, system decides rate)."""
@@ -508,6 +540,7 @@ async def pulse_duel(request):
     result = ARENA.fight(uid)
     if "error" in result:
         return web.json_response(result, status=404)
+    _boost_reward(uid, result)
     STATE.save_char(uid)
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
@@ -602,6 +635,7 @@ async def pulse_quest(request):
     result = claim_quest(STATE, uid, slot)
     if "error" in result:
         return web.json_response(result, status=400)
+    _boost_reward(uid, result)
     STATE.save_char(uid)
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
@@ -677,6 +711,7 @@ async def pulse_chest(request):
     result = open_chest(STATE, uid)
     if "error" in result:
         return web.json_response(result, status=400)
+    _boost_reward(uid, result)
     STATE.save_char(uid)
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
@@ -697,6 +732,7 @@ async def pulse_worldboss(request):
     result = WORLDBOSS.strike(uid)
     if "error" in result and "boss_hp" not in result:
         return web.json_response(result, status=400)
+    _boost_reward(uid, result)
     STATE.save_char(uid)
     STATE.track(sent=len(json.dumps(result).encode()))
     return web.json_response(result)
@@ -988,6 +1024,37 @@ async def handle_golden_hour(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- M&A (buy corp stakes; earn phi-share dividends) ----
+async def handle_ma(request):
+    """GET M&A board (corp share prices + holdings; ?uid= for your stakes)."""
+    uid = request.query.get("uid")
+    result = ma_status(STATE, uid=int(uid) if uid else None)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_ma_buy(request):
+    """Pulse: buy shares in a corp (gold)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = buy_shares(STATE, uid, int(d.get("corp", 0)), d.get("qty", 1))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- INSIDER NEWS (random phi events move stocks) ----
+async def handle_news(request):
+    """GET the insider news feed (?since=). Generates headlines on a phi timer."""
+    since = int(request.query.get("since", 0))
+    result = news_feed(STATE, since)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -1208,6 +1275,9 @@ def make_unified_app():
     app.router.add_get("/api/skyscraper", handle_skyscraper)
     app.router.add_post("/pulse/skyscraper", pulse_sky_fund)
     app.router.add_get("/api/golden-hour", handle_golden_hour)
+    app.router.add_get("/api/ma", handle_ma)
+    app.router.add_post("/pulse/ma/buy", pulse_ma_buy)
+    app.router.add_get("/api/news", handle_news)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

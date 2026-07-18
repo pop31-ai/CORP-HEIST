@@ -1271,6 +1271,184 @@ def golden_multiplier(now=None):
 
 
 # ============================================================
+# M&A (buy a stake in a corp; earn phi-share of members' income)
+# ============================================================
+
+# Total shares per corp; buying shares diverts a phi-fraction of that
+# corp's members' earned gold to shareholders, pro-rata by shares held.
+CORP_TOTAL_SHARES = 1000
+MA_DIVIDEND_RATE = (PHI - 1) / (PHI ** 2)     # ~0.236 of earnings go to shareholders
+
+def _ma(state):
+    if not hasattr(state, "corp_shares"):
+        # corp_shares[corp_id] = {"held": {uid: qty}, "price": base}
+        state.corp_shares = {}
+    return state.corp_shares
+
+def _corp_book(state, corp_id):
+    ma = _ma(state)
+    c = corp_id % len(CORPS)
+    if c not in ma:
+        ma[c] = {"held": {}, "base_price": 1000}
+    return ma[c]
+
+def share_price(state, corp_id):
+    """Price per share rises by phi as more shares are held (scarcity)."""
+    book = _corp_book(state, corp_id)
+    sold = sum(book["held"].values())
+    frac = sold / CORP_TOTAL_SHARES
+    return int(book["base_price"] * (PHI ** (frac * 3)))
+
+def ma_status(state, corp_id=None, uid=None):
+    out = []
+    for cid in range(len(CORPS)):
+        book = _corp_book(state, cid)
+        sold = sum(book["held"].values())
+        holders = sorted(book["held"].items(), key=lambda x: -x[1])[:5]
+        entry = {"corp": CORPS[cid], "corp_id": cid,
+                 "shares_sold": sold, "total_shares": CORP_TOTAL_SHARES,
+                 "share_price": share_price(state, cid),
+                 "dividend_rate_pct": round(MA_DIVIDEND_RATE * 100, 2),
+                 "top_holders": [{"uid": int(u), "shares": q} for u, q in holders]}
+        if uid is not None:
+            entry["your_shares"] = book["held"].get(str(uid), 0)
+        out.append(entry)
+    return {"corps": out,
+            "note": "Corp stakes pay phi-share dividends in in-game gold only."}
+
+def buy_shares(state, uid, corp_id, qty):
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    qty = max(1, int(qty))
+    book = _corp_book(state, corp_id)
+    sold = sum(book["held"].values())
+    if sold + qty > CORP_TOTAL_SHARES:
+        return {"error": f"only {CORP_TOTAL_SHARES - sold} shares left"}
+    total_cost = 0
+    for _ in range(qty):
+        total_cost += share_price(state, corp_id)
+        book["held"][str(uid)] = book["held"].get(str(uid), 0) + 1
+    if me.get("gold", 0) < total_cost:
+        # roll back
+        book["held"][str(uid)] -= qty
+        if book["held"][str(uid)] <= 0:
+            book["held"].pop(str(uid), None)
+        return {"error": "not enough gold", "cost": total_cost}
+    me["gold"] -= total_cost
+    state.mark_dirty(uid)
+    res = {"ok": True, "bought": qty, "cost": total_cost, "gold": me["gold"],
+           "your_shares": book["held"][str(uid)],
+           "corp": CORPS[corp_id % len(CORPS)]}
+    return res
+
+def _pay_dividends(state, earner_uid, gross):
+    """When a member of corp C earns gold, divert a phi-fraction to C's shareholders."""
+    earner = state.chars.get(earner_uid)
+    if not earner:
+        return 0
+    corp = earner["corp_id"] % len(CORPS)
+    book = _corp_book(state, corp)
+    sold = sum(book["held"].values())
+    if sold <= 0:
+        return 0
+    pool = int(gross * MA_DIVIDEND_RATE)
+    if pool <= 0:
+        return 0
+    paid = 0
+    for u, q in book["held"].items():
+        share = int(pool * q / CORP_TOTAL_SHARES)
+        if share <= 0:
+            continue
+        ch = state.chars.get(int(u))
+        if ch is not None:
+            ch["gold"] = ch.get("gold", 0) + share
+            state.mark_dirty(int(u))
+            paid += share
+    return paid
+
+
+# ============================================================
+# CENTRAL GOLD AWARD (Golden Hour x-phi + M&A dividends)
+# ============================================================
+
+def award_gold(state, uid, base_amount, now=None, dividends=True):
+    """Single funnel for gold rewards: applies Golden Hour multiplier,
+    credits the player, and pays M&A dividends to corp shareholders.
+    Returns {gained, golden, dividends_paid, gold}."""
+    me = state.chars.get(uid)
+    if not me:
+        return {"gained": 0, "golden": False, "dividends_paid": 0, "gold": 0}
+    mult = golden_multiplier(now)
+    gained = int(round(base_amount * mult))
+    me["gold"] = me.get("gold", 0) + gained
+    div = _pay_dividends(state, uid, gained) if dividends else 0
+    state.mark_dirty(uid)
+    return {"gained": gained, "golden": mult > 1.0,
+            "multiplier": round(mult, 6),
+            "dividends_paid": div, "gold": me["gold"]}
+
+
+# ============================================================
+# INSIDER NEWS (random phi events move stocks; early entry profits)
+# ============================================================
+
+NEWS_TEMPLATES = [
+    ("{sym} lands golden merger — analysts stunned", "up", PHI),
+    ("{sym} posts record phi-quarter earnings", "up", PHI / 1.3),
+    ("{sym} unveils breakthrough — shares surge", "up", PHI / 1.1),
+    ("Regulator probes {sym} accounting", "down", 1 / PHI),
+    ("{sym} guidance slashed — sell-off begins", "down", 1 / (PHI * 1.1)),
+    ("{sym} CEO resigns amid scandal", "down", 1 / (PHI * 1.3)),
+]
+NEWS_INTERVAL = int(300 * PHI)     # a new headline every ~8 min
+NEWS_MAX = 12
+
+def _news(state):
+    if not hasattr(state, "news"):
+        state.news = []
+    if not hasattr(state, "_news_seq"):
+        state._news_seq = 0
+    if not hasattr(state, "_news_last"):
+        state._news_last = 0
+    return state.news
+
+def tick_news(state, now=None):
+    """Generate a headline on the phi interval and move the stock by phi."""
+    now = now or int(time.time())
+    news = _news(state)
+    if now - state._news_last < NEWS_INTERVAL and news:
+        return None
+    stocks = getattr(state, "stocks", [])
+    if not stocks:
+        return None
+    state._news_last = now
+    stock = random.choice(stocks)
+    tmpl, direction, factor = random.choice(NEWS_TEMPLATES)
+    old = stock["price"]
+    stock["price"] = round(max(0.01, old * factor), 2)
+    stock["delta"] = round(stock["price"] - old, 2)
+    state._news_seq += 1
+    item = {"id": state._news_seq, "ts": now, "symbol": stock["name"],
+            "headline": tmpl.format(sym=stock["name"]),
+            "direction": direction,
+            "change_pct": round(100 * (stock["price"] - old) / old, 2),
+            "new_price": stock["price"]}
+    news.append(item)
+    del news[:-NEWS_MAX]
+    return item
+
+def news_feed(state, since=0, now=None):
+    tick_news(state, now)
+    news = _news(state)
+    nxt = max(0, NEWS_INTERVAL - ((now or int(time.time())) - state._news_last))
+    return {"news": [n for n in news if n["id"] > since][-NEWS_MAX:],
+            "last_id": news[-1]["id"] if news else 0,
+            "next_headline_in": nxt,
+            "note": "Insider news moves stocks by phi. Trade early to profit."}
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 
