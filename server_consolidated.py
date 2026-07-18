@@ -59,7 +59,9 @@ from golden_econ import (
     short_status, short_open, short_close, check_short_squeezes,
     golden_index, tick_index,
     idx_option_chain, idx_option_open, idx_option_status, idx_option_settle,
-    trader_leaderboard,
+    trader_leaderboard, award_trader_of_day,
+    maybe_flash_crash,
+    mm_place, mm_status, mm_cancel, tick_market_making,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1338,9 +1340,44 @@ async def handle_traders(request):
     """GET today's trader leaderboard by realized PnL (?uid= for your rank)."""
     uid = request.query.get("uid")
     result = trader_leaderboard(STATE, int(uid) if uid else None)
+    if result.get("hall_of_fame"):
+        for e in result["hall_of_fame"]:
+            STATE.save_char(e["uid"])
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
+
+
+# ---- MARKET MAKING (limit orders; earn the phi-spread) ----
+async def handle_mm(request):
+    """GET a player's market-making orders (?uid= or /api/mm/<uid>)."""
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    result = mm_status(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_mm_place(request):
+    """Pulse: post a market-making order (park gold at bid, sell at bid*phi)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = mm_place(STATE, uid, d.get("symbol", ""), d.get("bid", 0), d.get("size", 1))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_mm_cancel(request):
+    """Pulse: cancel a market-making order (refund parked gold or inventory)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = mm_cancel(STATE, uid, d.get("id"))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
 
 
 # ---- PORTFOLIO (unified phi net-worth breakdown) ----
@@ -1453,6 +1490,11 @@ async def market_loop():
     while True:
         STATE.tick_market()
         try:
+            fc = maybe_flash_crash(STATE)
+            if fc.get("crashed"):
+                for cid in range(len(CORPS)):
+                    _post_system_chat(cid, f"FLASH CRASH! Golden-500 -> {fc['index']:,.0f}. Shorts feast, the leveraged bleed!")
+            tick_market_making(STATE)
             tick_index(STATE)
         except Exception:
             pass
@@ -1608,6 +1650,10 @@ def make_unified_app():
     app.router.add_post("/pulse/idxopt/open", pulse_idxopt_open)
     app.router.add_post("/pulse/idxopt/settle", pulse_idxopt_settle)
     app.router.add_get("/api/traders", handle_traders)
+    app.router.add_get("/api/mm", handle_mm)
+    app.router.add_get("/api/mm/{uid}", handle_mm)
+    app.router.add_post("/pulse/mm/place", pulse_mm_place)
+    app.router.add_post("/pulse/mm/cancel", pulse_mm_cancel)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

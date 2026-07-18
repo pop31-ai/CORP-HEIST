@@ -68,6 +68,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-index" style="border-color:#FFC800;color:#FFC800">📊 GOLDEN-500</button>
 <button id="btn-idxopt" style="border-color:#00E5FF;color:#00E5FF">🎯 500-OPTIONS</button>
 <button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
+<button id="btn-mm" style="border-color:#00FF8C;color:#00FF8C">⚖ MARKET MAKE</button>
 <button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
@@ -2879,7 +2880,7 @@ async function buyIPO(founder){
     }catch(e){}
 }
 // ---- PORTFOLIO (unified phi net-worth breakdown) ----
-const PF_COL={gold:'#FFE24B',loot:'#B14BFF',stocks:'#00E5FF',bonds:'#00FF8C',hedge:'#FF9B00',derivatives:'#FF3B3B',ma_stakes:'#FFC800',ipo_shares:'#4BC0FF',own_equity:'#FFD700',shorts:'#FF6B6B'};
+const PF_COL={gold:'#FFE24B',loot:'#B14BFF',stocks:'#00E5FF',bonds:'#00FF8C',hedge:'#FF9B00',derivatives:'#FF3B3B',ma_stakes:'#FFC800',ipo_shares:'#4BC0FF',own_equity:'#FFD700',shorts:'#FF6B6B',market_making:'#7CFFB0',index_options:'#00B8D4'};
 async function showPortfolio(){
     try{
         openPanel('<b>💼 PORTFOLIO</b><div id="pf-body" style="color:#555">loading...</div>',24000);
@@ -3054,9 +3055,66 @@ async function showTraders(){
         h+='</table>';
         if(!d.leaders||!d.leaders.length)h+='<div style="color:#555;text-align:center">no trades settled today yet</div>';
         if(d.your_rank)h+='<div style="color:#FFC800;font-size:9px;text-align:center;margin-top:4px">your rank #'+d.your_rank+' ('+(d.your_pnl>=0?'+':'')+fmt(d.your_pnl)+'g)</div>';
+        if((d.hall_of_fame||[]).length){
+            h+='<div style="color:#B14BFF;font-size:9px;border-top:1px solid #222;margin-top:4px;padding-top:3px">🏛 HALL OF FAME</div>';
+            for(const e of d.hall_of_fame.slice().reverse())h+='<div style="color:#999;font-size:8px">day '+e.day+' — '+e.name+' +'+fmt(e.pnl)+'g</div>';
+        }
         h+='<div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
         p.innerHTML=h;
     }catch(e){showOverlay('Traders','offline');}
+}
+// ---- MARKET MAKING (post limit orders; earn phi-spread) ----
+async function showMM(){
+    try{
+        openPanel('<b>⚖ MARKET MAKING</b><div id="mm-body" style="color:#555">loading...</div>',26000);
+        const paint=async()=>{
+            const p=document.getElementById('mm-body');if(!p)return;
+            const [mk,st]=await Promise.all([
+                fetch(API+'/api/market').then(r=>r.json()),
+                fetch(API+'/api/mm/'+_uid()).then(r=>r.json())
+            ]);
+            let opt='';for(const s of mk.slice(0,12))opt+='<option value="'+s.name+'" data-p="'+s.price+'">'+s.name+' ('+s.price.toFixed(1)+'g)</option>';
+            let h='<div style="border:1px dashed #00FF8C;border-radius:5px;padding:6px;margin:6px 0">'+
+                '<select id="mm-sym" style="background:#111;border:1px solid #333;color:#7CFFB0;font-size:10px">'+opt+'</select>'+
+                '<input id="mm-bid" type="number" step="0.1" placeholder="bid" style="width:50px;background:#111;border:1px solid #333;color:#FFE24B;font-size:10px;padding:2px">'+
+                '<input id="mm-size" type="number" value="10" style="width:42px;background:#111;border:1px solid #333;color:#FFE24B;font-size:10px;padding:2px">'+
+                '<button onclick="placeMM()" style="border:1px solid #00FF8C;color:#00FF8C;background:#0a1a10;font-size:10px;padding:2px 6px;cursor:pointer">POST</button>'+
+                '<div style="color:#555;font-size:7px;margin-top:2px">buy at bid, auto-sell at bid×φ ('+st.spread+'×)</div></div>';
+            h+='<table style="width:100%;font-size:9px;font-family:monospace">';
+            for(const o of (st.orders||[])){
+                const sc=o.state==='filled'?'#FFC800':'#00FF8C';
+                h+='<tr style="border-top:1px solid #1a1a2e"><td style="color:'+sc+'">'+o.symbol+' ×'+o.size+'<div style="color:#555;font-size:7px">'+o.state+' · spot '+o.spot+'</div></td>'+
+                   '<td style="color:#7CFFB0;text-align:right">'+o.bid+' → '+o.ask+'</td>'+
+                   '<td style="text-align:right"><button onclick="cancelMM('+o.id+')" style="border:1px solid #FF6B6B;color:#FF6B6B;background:#1a0a0a;font-size:9px;padding:1px 5px;cursor:pointer">✕</button></td></tr>';
+            }
+            h+='</table><div style="color:#555;font-size:8px;margin-top:4px">'+st.note+'</div>';
+            p.innerHTML=h;
+        };
+        paint();
+    }catch(e){showOverlay('Market Making','offline');}
+}
+async function placeMM(){
+    const sym=(document.getElementById('mm-sym')||{}).value;
+    const sel=document.getElementById('mm-sym');
+    let bid=parseFloat((document.getElementById('mm-bid')||{}).value||'0');
+    if(!bid&&sel){const o=sel.options[sel.selectedIndex];bid=Math.round(parseFloat(o.getAttribute('data-p'))/PHI*100)/100;}
+    const size=parseInt((document.getElementById('mm-size')||{}).value||'10',10);
+    try{
+        const r=await fetch(API+'/pulse/mm/place',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),symbol:sym,bid:bid,size:size})});
+        const d=await r.json();
+        if(d.error){showOverlay('⚖ MM',d.error+(d.need?(' (need '+fmt(d.need)+'g)'):''));return;}
+        SND.click();showOverlay('⚖ POSTED',d.symbol+' ×'+d.size+'\nbid '+d.bid+' → ask '+d.ask+'\nparked '+fmt(d.reserved)+'g');
+        showMM();loadPlayer(_uid());
+    }catch(e){}
+}
+async function cancelMM(id){
+    try{
+        const r=await fetch(API+'/pulse/mm/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),id:id})});
+        const d=await r.json();
+        if(d.error){showOverlay('⚖ CANCEL',d.error);return;}
+        SND.click();showOverlay('⚖ CANCELLED','refund '+fmt(d.refund)+'g');
+        showMM();loadPlayer(_uid());
+    }catch(e){}
 }
 // ---- LIQUIDATION overlay + notifications (global poll) ----
 let _liqSeen=0,_liqInit=false;
@@ -3068,6 +3126,7 @@ async function pollLiquidations(){
             _liqSeen=Math.max(_liqSeen,ev.id);
             if(ev.type==='liquidated')liquidationOverlay(ev,'LIQUIDATED','seized');
             else if(ev.type==='squeezed')liquidationOverlay(ev,'SQUEEZED','margin wiped');
+            else if(ev.type==='flashcrash')flashCrashOverlay(ev);
             else flashToast('🛡 '+ev.text,'#00FF8C');
         }
     }catch(e){}
@@ -3102,6 +3161,32 @@ function liquidationOverlay(ev,title,verb){
         X.fillText(ev.name+(mine?' (YOU)':'')+' — '+fmt(ev.collateral_lost)+'g '+verb,W/2,H*0.42+34);
         X.restore();
         if(t<90)requestAnimationFrame(anim);else cv.remove();
+    };
+    anim();
+}
+function flashCrashOverlay(ev){
+    SND.duelHit&&SND.duelHit();
+    const cv=document.createElement('canvas');
+    cv.width=window.innerWidth;cv.height=window.innerHeight;
+    cv.style.cssText='position:fixed;left:0;top:0;z-index:10001;pointer-events:none';
+    document.body.appendChild(cv);
+    const X=cv.getContext('2d');const W=cv.width,H=cv.height;
+    const bars=[];for(let i=0;i<40;i++)bars.push({x:Math.random()*W,y:-Math.random()*H,h:20+Math.random()*80,v:6+Math.random()*14});
+    let t=0;
+    const anim=()=>{
+        t++;X.clearRect(0,0,W,H);
+        X.fillStyle='rgba(120,0,0,'+(0.30*Math.max(0,1-t/70))+')';X.fillRect(0,0,W,H);
+        X.strokeStyle='#FF3B3B';X.lineWidth=3;
+        for(const b of bars){b.y+=b.v;X.beginPath();X.moveTo(b.x,b.y);X.lineTo(b.x-8,b.y-b.h);X.stroke();
+            X.beginPath();X.moveTo(b.x,b.y);X.lineTo(b.x-14,b.y-8);X.moveTo(b.x,b.y);X.lineTo(b.x-4,b.y-16);X.stroke();
+            if(b.y>H+b.h){b.y=-b.h;b.x=Math.random()*W;}}
+        X.save();X.textAlign='center';const sc=Math.min(1,t/12);
+        X.font='bold '+Math.round(44*sc)+'px monospace';X.fillStyle='#FF3B3B';X.shadowColor='#FF3B3B';X.shadowBlur=26;
+        X.fillText('FLASH CRASH',W/2,H*0.42);
+        X.shadowBlur=0;X.font='13px monospace';X.fillStyle='#FFE24B';
+        X.fillText('GOLDEN-500 → '+fmt(Math.round(ev.index||0))+'  shorts feast, leveraged bleed',W/2,H*0.42+32);
+        X.restore();
+        if(t<100)requestAnimationFrame(anim);else cv.remove();
     };
     anim();
 }
@@ -3160,6 +3245,7 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bix=document.getElementById('btn-index');if(bix)bix.onclick=showIndex;}
 {const bio=document.getElementById('btn-idxopt');if(bio)bio.onclick=showIdxOpt;}
 {const btr=document.getElementById('btn-traders');if(btr)btr.onclick=showTraders;}
+{const bmm=document.getElementById('btn-mm');if(bmm)bmm.onclick=showMM;}
 {const bpf=document.getElementById('btn-portfolio');if(bpf)bpf.onclick=showPortfolio;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
