@@ -696,6 +696,8 @@ async def pulse_trade(request):
     c = STATE.chars.get(uid)
     if not c:
         return web.json_response({"error": "no char"})
+    if not EnergySystem.use_energy(STATE, uid, 3, "trade"):
+        return web.json_response({"error": "not enough energy", "need": 3})
     ms = next((s for s in STATE.stocks if s["name"] == stock_name), None)
     if not ms:
         return web.json_response({"error": "no stock"})
@@ -721,6 +723,7 @@ async def pulse_trade(request):
     STATE.track(sent=50)
     STATE.mark_dirty(uid)
     STATE.save_char(uid)
+    DailyChallenges.increment(STATE, uid, "trade", abs(amount))
     _hb(uid, f"trade_{side}_{stock_name}_{amount}", c["gold"])
     return web.json_response({"ok": True, "gold": c["gold"], "side": side,
                               "stock": stock_name, "amount": amount,
@@ -846,9 +849,13 @@ async def pulse_duel(request):
     """Pulse: phi-duel arena fight. Pure in-game economy, no P2P, no real money."""
     d = await request.json()
     uid = d.get("uid", 1000)
+    if not EnergySystem.use_energy(STATE, uid, 10, "duel"):
+        return web.json_response({"error": "not enough energy", "need": 10})
     result = ARENA.fight(uid)
     if "error" in result:
         return web.json_response(result, status=404)
+    if result.get("won"):
+        DailyChallenges.increment(STATE, uid, "pvp_win")
     _boost_reward(uid, result)
     STATE.save_char(uid)
     STATE.track(sent=len(json.dumps(result).encode()))
@@ -1103,6 +1110,8 @@ async def pulse_craft(request):
     c = STATE.chars.get(uid)
     if not c or not c.get("loot"):
         return web.json_response({"error": "no loot"}, status=400)
+    if not EnergySystem.use_energy(STATE, uid, 8, "craft"):
+        return web.json_response({"error": "not enough energy", "need": 8})
     rarity = d.get("rarity")
     loot = c["loot"]
     # if no rarity given, pick the lowest rarity with >=3 items
@@ -1133,6 +1142,7 @@ async def pulse_craft(request):
     c["net_worth"] = c.get("net_worth", 0) - consumed_val + new_value
     STATE.save_char(uid)
     STATE.track(sent=len(json.dumps(new_item).encode()))
+    DailyChallenges.increment(STATE, uid, "craft")
     return web.json_response({"ok": True, "consumed_rarity": rarity,
                               "new_item": new_item, "new_rarity": new_rarity,
                               "net_worth": c["net_worth"],
@@ -1849,7 +1859,11 @@ async def handle_lottery(request):
 async def pulse_lottery_buy(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 3, "lottery"):
+        return web.json_response({"error": "not enough energy", "need": 3})
     result = PhiLottery.buy_ticket(STATE, uid)
+    if result.get("ok"):
+        DailyChallenges.increment(STATE, uid, "lottery")
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -1869,6 +1883,8 @@ async def handle_blackmarket(request):
 async def pulse_blackmarket_buy(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 5, "blackmarket"):
+        return web.json_response({"error": "not enough energy", "need": 5})
     item_id = int(d.get("item_id", 0))
     result = BlackMarket.buy(STATE, uid, item_id)
     body = json.dumps(result).encode()
@@ -1884,8 +1900,12 @@ async def handle_heist(request):
 async def pulse_heist_fund(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 3, "heist"):
+        return web.json_response({"error": "not enough energy", "need": 3})
     amount = int(d.get("amount", 1000))
     result = HeistMission.fund(STATE, uid, amount)
+    if result.get("ok"):
+        DailyChallenges.increment(STATE, uid, "donate", amount)
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -1907,6 +1927,8 @@ async def handle_prophet(request):
 async def pulse_prophet_predict(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 4, "prophet"):
+        return web.json_response({"error": "not enough energy", "need": 4})
     symbol = d.get("symbol", "ALPHA")
     direction = d.get("direction", "up")
     result = PhiProphet.predict(STATE, uid, symbol, direction)
@@ -1976,6 +1998,8 @@ async def handle_bounty(request):
 async def pulse_bounty_claim(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 5, "bounty"):
+        return web.json_response({"error": "not enough energy", "need": 5})
     slot = int(d.get("slot", 0))
     result = BountyBoard.claim(STATE, uid, slot)
     body = json.dumps(result).encode()
@@ -1985,6 +2009,8 @@ async def pulse_bounty_claim(request):
 async def pulse_wheel_spin(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 3, "wheel"):
+        return web.json_response({"error": "not enough energy", "need": 3})
     result = PhiWheel.spin(STATE, uid)
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
@@ -2049,6 +2075,8 @@ async def pulse_trial_claim(request):
 async def pulse_casino_play(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 3, "casino"):
+        return web.json_response({"error": "not enough energy", "need": 3})
     action = d.get("action", "deal")
     bet = int(d.get("bet", 100))
     player_hand = d.get("player_hand")
@@ -2092,8 +2120,12 @@ async def handle_arena(request):
 async def pulse_arena_match(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 10, "arena"):
+        return web.json_response({"error": "not enough energy", "need": 10})
     won = bool(d.get("won", False))
     PhiArenaRankings.record_match(STATE, uid, won)
+    if won:
+        DailyChallenges.increment(STATE, uid, "pvp_win")
     body = json.dumps({"ok": True, "won": won}).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")

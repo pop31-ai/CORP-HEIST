@@ -5496,6 +5496,14 @@ class QuestChains:
         # apply consequences
         consequence = choice.get("consequence", "")
         c["_quest_consequences"] = c.get("_quest_consequences", []) + [consequence]
+        # parse reputation from consequence string
+        import re
+        rep_match = re.search(r'reputation\s+([+-]?\d+)', consequence)
+        if rep_match:
+            ReputationSystem.apply_reputation_change(state, uid, int(rep_match.group(1)))
+        corr_match = re.search(r'corruption\s+([+-]?\d+)', consequence)
+        if corr_match:
+            ReputationSystem.apply_reputation_change(state, uid, -int(corr_match.group(1)))
         # record choice
         active[quest_id]["choices"].append({"choice": choice_id, "ts": t})
         # unlock next quest
