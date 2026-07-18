@@ -70,6 +70,38 @@ def f_treemap(seed, title="TREEMAP КАПИТАЛОВ"):
     return lambda c, x, y, w, h: G.treemap(c, x, y, w, h, items, title=title)
 
 
+def f_radar(seed, title="ПРОФИЛЬ МАГНАТА"):
+    axes = ["РИСК", "ПЛЕЧО", "ТЕМП", "ХЕДЖ", "PHI", "ДОЛЯ"]
+    r = D.PhiRng(seed)
+    a = [0.4 + 0.55 * r.next() for _ in axes]
+    b = [0.4 + 0.55 * r.next() for _ in axes]
+    series = [("ЛИДЕР", a, G.GOLD), ("СРЕДНИЙ", b, G.CYAN)]
+    return lambda c, x, y, w, h: G.radar(c, x, y, w, h, axes, series, title=title)
+
+
+def f_waterfall(seed, title="ДЕКОМПОЗИЦИЯ PnL"):
+    labels = ["БАЗА", "КОЛЛ", "ПУТ", "ХЕДЖ", "СКВИЗ", "КОМИС"]
+    r = D.PhiRng(seed + 7)
+    steps = []
+    for lab in labels:
+        d = (r.next() - 0.45) * 900 * G.PHI
+        steps.append((lab, d))
+    return lambda c, x, y, w, h: G.waterfall(c, x, y, w, h, steps,
+                                             title=title, start=1000.0)
+
+
+def f_bullet(seed, title="KPI МАРКЕТ-МЕЙКЕРА"):
+    r = D.PhiRng(seed + 3)
+    names = ["СПРЕД", "ОБЪЁМ", "ЗАЛИВКА", "PnL"]
+    rows = []
+    for nm in names:
+        mv = 100.0
+        tgt = 55 + 30 * r.next()
+        act = 30 + 65 * r.next()
+        rows.append((nm, act, tgt, mv))
+    return lambda c, x, y, w, h: G.bullet(c, x, y, w, h, rows, title=title)
+
+
 def f_donut(seed):
     snap = _sc(seed)
     cols = [G.CYAN, G.GOLD, G.AMBER, G.PURPLE]
@@ -309,9 +341,9 @@ def build_all():
         "Вечное место в зале славы CORP HEIST.",
         ("НАГРАДА", ["PHI-корона сезона", "Категория 11, редкость 5", "Бонус к боевой мощи"]),
         "ДАННЫЕ", "Путь к короне",
-        "Что нужно, чтобы взойти на трон.",
+        "Что нужно, чтобы взойти на трон; профиль лидера в радаре.",
         [(hero_crown(6, _mg(6, 1)[0]["name"], _mg(6, 1)[0]["worth"]), 2),
-         (f_magnates(6), 1), (f_gauge(6, "ДО КОРОНЫ", "сезон"), 1), (f_ladder(6), 2)],
+         (f_magnates(6), 1), (f_gauge(6, "ДО КОРОНЫ", "сезон"), 1), (f_radar(6), 2)],
         ["Один трон на сезон.", "Стань магнатом года.", "corp-heist / PHI PRESS"]))
 
     issues.append(make(7, "ДЕРИВАТИВЫ", "Опционы на PHI-страйки", G.PURPLE,
@@ -322,9 +354,9 @@ def build_all():
         "Выплата больше PHI премии открывает знак PHI-OPTION.",
         ("ОПЦИОНЫ", ["Экспирация 60·PHI·PHI", "Размер позиции = PHI", "Страйки через PHI"]),
         "ДАННЫЕ", "Сетка страйков и премий",
-        "PHI-шаг между страйками и порог значка.",
+        "PHI-шаг между страйками, порог значка и декомпозиция PnL.",
         [(f_ladder(7, "СТРАЙКИ"), 1), (f_gauge(7, "PHI-OPTION", "порог"), 1),
-         (f_candles(7, "SIGMA"), 2), (f_tiles([("×PHI", "ВЫПЛАТА", G.PURPLE), ("PHI²", "ЭКСПИРА", G.CYAN)]), 1),
+         (f_waterfall(7), 2), (f_tiles([("×PHI", "ВЫПЛАТА", G.PURPLE), ("PHI²", "ЭКСПИРА", G.CYAN)]), 1),
          (f_area(7, "ПРЕМИЯ"), 1)],
         ["Плечо на золоте.", "Опцион PHI ждёт.", "corp-heist / PHI PRESS"]))
 
@@ -363,9 +395,9 @@ def build_all():
         "Плечо до PHI, но флеш-крах запускает маржин-колл.",
         ("MM", ["Спред = PHI", "Макс плечо = PHI", "До 8 заявок"]),
         "ДАННЫЕ", "Экономика маркет-мейкера",
-        "Спред, плечо и риск маржин-колла.",
+        "Спред, плечо, риск маржин-колла и KPI против цели.",
         [(f_tiles([("PHI", "СПРЕД", G.GOLD), ("×PHI", "ПЛЕЧО", G.CYAN), ("8", "ЗАЯВОК", G.GREY)]), 1),
-         (f_gauge(10, "ЗАГРУЗКА", "плечо"), 1), (f_candles(10, "PSI"), 2),
+         (f_gauge(10, "ЗАГРУЗКА", "плечо"), 1), (f_bullet(10), 2),
          (f_ladder(10), 1), (f_compare(10), 1)],
         ["Лови спред.", "Золото на пересечении.", "corp-heist / PHI PRESS"]))
 

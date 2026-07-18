@@ -472,6 +472,151 @@ def _tm_label(c, x, y, w, h, lab, v):
         c.text(x + 4, y + h - 22, fmt_money(v), size=7, font="U", rgb=INK)
 
 
+# --- radar / spider (multi-axis metric web) ----------------------------
+def radar(c, x, y, w, h, axes, series, title=None):
+    """axes: list of labels. series: list of (name, [0..1 values], colour).
+
+    A golden-web radar comparing several metric profiles on shared axes.
+    """
+    panel(c, x, y, w, h, fill=(12, 13, 26), border=GREY_DK, lw=0.8)
+    if title:
+        section_title(c, x + 8, y + h - 16, title, size=10)
+    n = len(axes)
+    if n < 3:
+        return
+    cx = x + w / 2
+    cy = y + (h - (16 if title else 0)) / 2 + 4
+    r = min(w, h - (24 if title else 8)) / 2 - 20
+    r = max(r, 10)
+    ang = lambda i: math.pi / 2 - TAU * i / n
+    # concentric golden rings
+    for ring in (INV_PHI * INV_PHI, INV_PHI, 1.0):
+        pts = [(cx + r * ring * math.cos(ang(i)),
+                cy + r * ring * math.sin(ang(i))) for i in range(n)]
+        c.polyline(pts, rgb=GREY_DK, lw=0.4, close=True)
+    # spokes + axis labels
+    for i, lab in enumerate(axes):
+        ex, ey = cx + r * math.cos(ang(i)), cy + r * math.sin(ang(i))
+        c.line(cx, cy, ex, ey, rgb=GREY_DK, lw=0.4)
+        lx = cx + (r + 12) * math.cos(ang(i))
+        ly = cy + (r + 8) * math.sin(ang(i))
+        c.text_center(lx, ly - 2, str(lab), size=6.5, font="U", rgb=GREY)
+    # series polygons
+    for name, vals, col in series:
+        pts = []
+        for i in range(n):
+            v = clamp(vals[i] if i < len(vals) else 0, 0.0, 1.0)
+            pts.append((cx + r * v * math.cos(ang(i)),
+                        cy + r * v * math.sin(ang(i))))
+        fill = (int(col[0] * 0.32), int(col[1] * 0.32), int(col[2] * 0.32))
+        c.polyline(pts, rgb=col, lw=1.2, close=True, fill=fill)
+        for px, py in pts:
+            c.circle(px, py, 1.6, fill=col)
+    # legend
+    ly = y + 10
+    for name, vals, col in series:
+        c.rect(x + 10, ly, 6, 6, fill=col)
+        c.text(x + 20, ly, str(name), size=6.5, font="U", rgb=PARCH)
+        ly += 10
+
+
+# --- waterfall (stepwise PnL decomposition) ----------------------------
+def waterfall(c, x, y, w, h, steps, title=None, start=0.0):
+    """steps: list of (label, delta). Green up, red down, gold totals.
+
+    Shows how a running balance is built from sequential contributions.
+    """
+    panel(c, x, y, w, h, fill=(12, 13, 26), border=GREY_DK, lw=0.8)
+    if title:
+        section_title(c, x + 8, y + h - 16, title, size=10)
+    pad = 10
+    ix, iy = x + pad, y + pad + 12
+    iw = w - pad * 2
+    ih = h - pad * 2 - (18 if title else 0) - 12
+    if ih <= 0 or not steps:
+        return
+    run = start
+    lows = [start]
+    highs = [start]
+    for _, d in steps:
+        nxt = run + d
+        lows.append(min(run, nxt))
+        highs.append(max(run, nxt))
+        run = nxt
+    lo, hi = min(lows), max(highs)
+    if hi <= lo:
+        hi = lo + 1
+    scale = ih / (hi - lo)
+    y0 = iy + (0 - lo) * scale if lo <= 0 <= hi else iy
+    n = len(steps)
+    bw = iw / n * 0.62
+    gap = iw / n
+    run = start
+    prev_top = iy + (start - lo) * scale
+    for i, (lab, d) in enumerate(steps):
+        nxt = run + d
+        bx = ix + gap * i + (gap - bw) / 2
+        ytop = iy + (max(run, nxt) - lo) * scale
+        ybot = iy + (min(run, nxt) - lo) * scale
+        col = GREEN if d >= 0 else RED
+        c.rect(bx, ybot, bw, max(ytop - ybot, 1), fill=col)
+        # connector to previous bar top
+        if i > 0:
+            c.line(ix + gap * (i - 1) + (gap + bw) / 2, prev_top,
+                   bx, iy + (run - lo) * scale, rgb=GREY_DK, lw=0.4)
+        prev_top = iy + (nxt - lo) * scale
+        c.text_center(bx + bw / 2, ybot - 9, str(lab), size=6, font="U", rgb=GREY)
+        c.text_center(bx + bw / 2, ytop + 2,
+                      ("+" if d >= 0 else "") + fmt_money(d),
+                      size=6, font="UB", rgb=col)
+        run = nxt
+    # baseline + final total marker
+    c.line(ix, y0, ix + iw, y0, rgb=GREY, lw=0.4)
+    c.text_right(ix + iw, iy + ih + 2, "ИТОГ " + fmt_money(run),
+                 size=7.5, font="UB", rgb=GOLD)
+
+
+# --- bullet graph (actual vs target with qualitative bands) ------------
+def bullet(c, x, y, w, h, rows, title=None):
+    """rows: list of (label, actual, target, maxv). Compact KPI bars.
+
+    Each row: graded background bands (phi thirds), a value bar, a target tick.
+    """
+    panel(c, x, y, w, h, fill=(12, 13, 26), border=GREY_DK, lw=0.8)
+    if title:
+        section_title(c, x + 8, y + h - 16, title, size=10)
+    pad = 10
+    top = y + h - (26 if title else pad)
+    n = len(rows) or 1
+    lab_w = 62
+    bar_x = x + pad + lab_w
+    bar_w = w - pad * 2 - lab_w
+    row_h = (top - (y + pad)) / n
+    bands = (int(GREY_DK[0] * 0.7), int(GREY_DK[1] * 0.7), int(GREY_DK[2] * 0.7))
+    for i, (lab, actual, target, maxv) in enumerate(rows):
+        cy = top - row_h * (i + 1)
+        bh = row_h * 0.5
+        by = cy + (row_h - bh) / 2
+        mv = maxv or 1
+        # qualitative bands: dark / mid / light (phi thirds)
+        for k, frac in enumerate((INV_PHI * INV_PHI, INV_PHI, 1.0)):
+            shade = 0.35 + 0.18 * k
+            bc = (int(GREY_DK[0] * shade + 20), int(GREY_DK[1] * shade + 20),
+                  int(GREY_DK[2] * shade + 22))
+            c.rect(bar_x, by, bar_w * frac, bh, fill=bc)
+        # value bar
+        vfrac = clamp(actual / mv, 0.0, 1.0)
+        col = GREEN if actual >= target else AMBER
+        c.rect(bar_x, by + bh * 0.28, bar_w * vfrac, bh * 0.44, fill=col)
+        # target tick
+        tx = bar_x + bar_w * clamp(target / mv, 0.0, 1.0)
+        c.rect(tx - 1, by - 2, 2, bh + 4, fill=GOLD_LT)
+        # labels
+        c.text(x + pad, by + bh * 0.28, str(lab), size=7, font="UB", rgb=PARCH)
+        c.text_right(bar_x + bar_w, by + bh + 1, fmt_money(actual),
+                     size=6.5, font="UB", rgb=col)
+
+
 # module-level doc handle for alpha graphics states (set by magazine.py)
 _DOC = [None]
 
