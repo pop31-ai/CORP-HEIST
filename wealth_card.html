@@ -81,6 +81,12 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-prophet" style="border-color:#00E5FF;color:#00E5FF">🔮 PHI-PROPHET</button>
 <button id="btn-rain" style="border-color:#FFE24B;color:#FFE24B">🌧 GOLDEN RAIN</button>
 <button id="btn-espionage" style="border-color:#AA00FF;color:#AA00FF">🕵 ESPIONAGE</button>
+<button id="btn-weather" style="border-color:#FFE24B;color:#FFE24B">⛅ WEATHER</button>
+<button id="btn-bounty" style="border-color:#FF6BD6;color:#FF6BD6">💀 BOUNTY</button>
+<button id="btn-wheel" style="border-color:#FFC800;color:#FFC800">🎡 PHI-WHEEL</button>
+<button id="btn-frenzy" style="border-color:#FF3232;color:#FF3232">⚡ FRENZY</button>
+<button id="btn-whale" style="border-color:#00E5FF;color:#00E5FF">🐋 WHALE</button>
+<button id="btn-trial" style="border-color:#00FF8C;color:#00FF8C">⚔ CORP TRIAL</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -4035,6 +4041,121 @@ document.getElementById('btn-espionage').onclick=async()=>{
             const r2=await fetch(API+'/pulse/espionage/boost',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();if(d2.error){showOverlay('ESPIONAGE',d2.error);}else{SND.promo();showOverlay('BOOST','Boosted '+d2.target+'!\nCost: '+d2.cost+'g\nDuration: '+Math.floor(d2.duration/60)+'m');loadPlayer(uid);}
         }
     }catch(e){showOverlay('ESPIONAGE','offline');}
+};
+
+// ====== PHI WEATHER ======
+document.getElementById('btn-weather').onclick=async()=>{
+    try{
+        const r=await fetch(API+'/api/weather');const d=await r.json();
+        let s='PHI WEATHER\n\n';
+        s+=d.name_ru+' ('+d.weather+')\n';
+        s+=d.description+'\n';
+        s+='Changes in: '+Math.floor(d.remaining/3600)+'h '+Math.floor((d.remaining%3600)/60)+'m';
+        showOverlay('WEATHER',s);
+    }catch(e){showOverlay('WEATHER','offline');}
+};
+
+// ====== BOUNTY BOARD ======
+document.getElementById('btn-bounty').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/bounty/'+uid);const d=await r.json();
+        let s='BOUNTY BOARD — Today\\'s Contracts\n\n';
+        d.forEach((b,i)=>{
+            s+='['+i+'] '+b.name+' ('+b.name_en+')\n';
+            s+='    '+b.desc+' ['+('+'+b.difficulty+')+']\n';
+            s+='    Reward: '+b.reward+'g '+(b.completed?'DONE':'pending')+'\n\n';
+        });
+        s+='Claim completed bounties? (0/1/2)';
+        const choice=prompt(s);
+        if(choice!==null&&(choice==='0'||choice==='1'||choice==='2')){
+            const r2=await fetch(API+'/pulse/bounty/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,slot:parseInt(choice)})});
+            const d2=await r2.json();
+            if(d2.error){showOverlay('BOUNTY',d2.error);}else{SND.promo();showOverlay('BOUNTY CLAIMED',d2.bounty+'\nReward: '+d2.reward+'g');loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('BOUNTY','offline');}
+};
+
+// ====== PHI WHEEL ======
+document.getElementById('btn-wheel').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        if(!confirm('Spin the PHI-WHEEL for 200g?\nPrizes: xPHI, xPHI^2... xPHI^5 JACKPOT!\nAlso: MISS, EVEN, FREE SPIN'))return;
+        const r=await fetch(API+'/pulse/wheel/spin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
+        const d=await r.json();
+        if(d.error){showOverlay('PHI-WHEEL',d.error);return;}
+        if(d.free_spin){SND.promo();showOverlay('FREE SPIN!','You got a free spin! Spin again!');}
+        else if(d.prize>0){SND.firework();showOverlay('PHI-WHEEL WIN!',d.label+'\nPrize: '+d.prize+'g\nSpent: '+d.cost+'g');}
+        else{SND.duelHit();showOverlay('PHI-WHEEL',d.label+'\nNo luck. Lost '+d.cost+'g');}
+        loadPlayer(uid);
+    }catch(e){showOverlay('PHI-WHEEL','offline');}
+};
+
+// ====== MARKET FRENZY ======
+document.getElementById('btn-frenzy').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/frenzy');const d=await r.json();
+        let s='MARKET FRENZY\n\n';
+        if(d.active){
+            s+='ACTIVE! '+d.remaining+'s left\n';
+            s+='Target: '+d.stock+' (x'+d.multiplier.toFixed(0)+' volatility)\n';
+            s+='Bonus pool: '+d.bonus_pool+'g\n';
+            s+='Trade '+d.stock+' now for bonus!';
+        }else{
+            s+='No active frenzy\n';
+            s+='Next in: '+Math.floor(d.next_in/3600)+'h '+Math.floor((d.next_in%3600)/60)+'m\n';
+            s+='Target stock: '+d.stock;
+        }
+        showOverlay('FRENZY',s);
+    }catch(e){showOverlay('FRENZY','offline');}
+};
+
+// ====== WHALE CHASE ======
+document.getElementById('btn-whale').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/whale/'+uid);const d=await r.json();
+        let s='WHALE CHASE — Predict bot trades\n\n';
+        d.whales.forEach(w=>{
+            const pred=d.my_predictions[w.id+'_'+Math.floor(Date.now()/1000/7200)];
+            s+=w.name+' targeting: '+w.hint+(pred?' [YOU: '+pred+']':'')+'\n';
+        });
+        s+='\nPredict: (whale 0-4) (stock)';
+        s+='\nType "settle" to check last round';
+        const choice=prompt(s);
+        if(!choice)return;
+        if(choice==='settle'){
+            const r2=await fetch(API+'/pulse/whale/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+            let msg='WHALE RESULTS\n';d2.results.forEach(r=>{msg+=r.whale+': '+r.predicted+' vs '+r.actual+(r.won?' WIN +'+r.prize+'g':' MISS')+'\n';});msg+='Total won: '+d2.total_won+'g';showOverlay('WHALE SETTLE',msg);loadPlayer(uid);
+        }else{
+            const parts=choice.split(' ');
+            const r2=await fetch(API+'/pulse/whale/predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,whale_id:parseInt(parts[0])||0,stock:parts[1]||'ALPHA'})});const d2=await r2.json();
+            if(d2.error){showOverlay('WHALE',d2.error);}else{SND.trade();showOverlay('WHALE PREDICT','Whale: '+d2.whale+'\nPredicted: '+d2.predicted);loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('WHALE','offline');}
+};
+
+// ====== CORP TRIAL ======
+document.getElementById('btn-trial').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/trial/'+uid);const d=await r.json();
+        let s='CORP TRIAL — Weekly Challenge\n\n';
+        s+=d.trial+' ('+d.trial_en+')\n';
+        s+=d.desc+'\n';
+        s+='Progress: '+d.progress+'/'+d.target+' ('+d.pct+'%)\n';
+        s+='Reward pool: '+d.reward+'g\n';
+        if(d.my_claimed){s+='Already claimed!';}
+        else if(d.completed){s+='COMPLETED — claim your share!';}
+        else{s+='In progress...';}
+        if(d.completed&&!d.my_claimed){
+            if(confirm(s+'\n\nClaim your reward?')){
+                const r2=await fetch(API+'/pulse/trial/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+                if(d2.error){showOverlay('TRIAL',d2.error);}else{SND.promo();showOverlay('TRIAL COMPLETE',d2.trial+'\nShare: '+d2.share+'g\nMembers: '+d2.members);loadPlayer(uid);}
+            }
+        }else{showOverlay('CORP TRIAL',s);}
+    }catch(e){showOverlay('TRIAL','offline');}
 };
 
 render();

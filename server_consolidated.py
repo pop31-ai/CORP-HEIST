@@ -68,6 +68,8 @@ from golden_econ import (
     tape_feed, tick_sectors, sectors_status, trader_badges,
     PhiLottery, BlackMarket, HeistMission, PhiProphet,
     GoldenRain, CorpEspionage,
+    PhiWeather, BountyBoard, PhiWheel, MarketFrenzy,
+    WhaleChase, CorpTrial,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1787,6 +1789,8 @@ async def market_loop():
             if fc.get("crashed"):
                 for cid in range(len(CORPS)):
                     _post_system_chat(cid, f"FLASH CRASH! Golden-500 -> {fc['index']:,.0f}. Shorts feast, the leveraged bleed!")
+            PhiWeather.apply_weather_effect(STATE)
+            MarketFrenzy.apply_frenzy(STATE)
             tick_market_making(STATE)
             tick_index(STATE)
             tick_stock_candles(STATE)
@@ -1938,6 +1942,90 @@ async def pulse_espionage_boost(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
     result = CorpEspionage.boost(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+# ---- NEW EVENTS 2: Weather, Bounty, Wheel, Frenzy, Whale, Trial ----
+
+async def handle_weather(request):
+    body = json.dumps(PhiWeather.current()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_bounty(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(BountyBoard.check_progress(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_bounty_claim(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    slot = int(d.get("slot", 0))
+    result = BountyBoard.claim(STATE, uid, slot)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_wheel_spin(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = PhiWheel.spin(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_frenzy(request):
+    body = json.dumps(MarketFrenzy.status()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_frenzy_claim(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = MarketFrenzy.claim_bonus(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_whale(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(WhaleChase.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_whale_predict(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    whale_id = int(d.get("whale_id", 0))
+    stock = d.get("stock", "ALPHA")
+    result = WhaleChase.predict(STATE, uid, whale_id, stock)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_whale_settle(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = WhaleChase.settle(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_trial(request):
+    uid = int(request.match_info.get("uid", 1000))
+    c = STATE.chars.get(uid, {})
+    corp_id = c.get("corp_id", 0)
+    body = json.dumps(CorpTrial.status(STATE, corp_id, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_trial_claim(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = CorpTrial.claim(STATE, uid)
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -2104,6 +2192,18 @@ def make_unified_app():
     app.router.add_get("/api/espionage/{uid}", handle_espionage)
     app.router.add_post("/pulse/espionage/sabotage", pulse_espionage_sabotage)
     app.router.add_post("/pulse/espionage/boost", pulse_espionage_boost)
+    # ---- NEW EVENTS 2 ----
+    app.router.add_get("/api/weather", handle_weather)
+    app.router.add_get("/api/bounty/{uid}", handle_bounty)
+    app.router.add_post("/pulse/bounty/claim", pulse_bounty_claim)
+    app.router.add_post("/pulse/wheel/spin", pulse_wheel_spin)
+    app.router.add_get("/api/frenzy", handle_frenzy)
+    app.router.add_post("/pulse/frenzy/claim", pulse_frenzy_claim)
+    app.router.add_get("/api/whale/{uid}", handle_whale)
+    app.router.add_post("/pulse/whale/predict", pulse_whale_predict)
+    app.router.add_post("/pulse/whale/settle", pulse_whale_settle)
+    app.router.add_get("/api/trial/{uid}", handle_trial)
+    app.router.add_post("/pulse/trial/claim", pulse_trial_claim)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

@@ -3451,7 +3451,476 @@ class CorpEspionage:
 
 
 # ============================================================
-# SELF-TEST (run: python golden_econ.py)
+# PHI WEATHER — dynamic market conditions
+# ============================================================
+
+class PhiWeather:
+    """Market weather system. Cycles through conditions that affect all stocks:
+    BULL_STORM:  prices surge (all deltas +PHI^2)
+    BEAR_BLIZZARD: prices crash (all deltas -PHI^2)
+    GOLDEN_CLEAR: normal trading, golden hour bonus
+    VOLATILE_TEMPEST: wild swings, high risk/high reward
+    PHI_ECLIPSE: everything freezes, massive rewards after thaw"""
+
+    WEATHERS = ["BULL_STORM", "BEAR_BLIZZARD", "GOLDEN_CLEAR", "VOLATILE_TEMPEST", "PHI_ECLIPSE"]
+    WEATHER_NAMES_RU = {
+        "BULL_STORM": "Бычий шторм",
+        "BEAR_BLIZZARD": "Медвежья буря",
+        "GOLDEN_CLEAR": "Золотая ясность",
+        "VOLATILE_TEMPEST": "Волатильный шторм",
+        "PHI_ECLIPSE": "ФИ-Затмение",
+    }
+    WEATHER_DESC = {
+        "BULL_STORM": "All prices surge by PHI^2. Buy everything!",
+        "BEAR_BLIZZARD": "All prices crash by PHI^2. Short everything!",
+        "GOLDEN_CLEAR": "Normal conditions. Golden Hour bonus active.",
+        "VOLATILE_TEMPEST": "Wild swings. High risk, massive reward.",
+        "PHI_ECLIPSE": "Market frozen. Wait for the thaw — huge bonus.",
+    }
+    CYCLE = int(3600 * PHI * 6)  # ~9.7 hours per weather
+
+    @staticmethod
+    def current(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        idx = (t - EPOCH) // PhiWeather.CYCLE
+        rng = random.Random(idx)
+        w = rng.choice(PhiWeather.WEATHERS)
+        next_change = EPOCH + (idx + 1) * PhiWeather.CYCLE
+        return {
+            "weather": w,
+            "name_ru": PhiWeather.WEATHER_NAMES_RU[w],
+            "description": PhiWeather.WEATHER_DESC[w],
+            "remaining": max(0, next_change - t),
+        }
+
+    @staticmethod
+    def apply_weather_effect(state, now=None):
+        """Apply weather to stock deltas. Called by market_loop."""
+        w = PhiWeather.current(now)["weather"]
+        if w == "BULL_STORM":
+            for s in state.stocks:
+                s["delta"] += PHI ** 2
+        elif w == "BEAR_BLIZZARD":
+            for s in state.stocks:
+                s["delta"] -= PHI ** 2
+        elif w == "VOLATILE_TEMPEST":
+            for s in state.stocks:
+                s["delta"] += (random.random() - 0.5) * PHI ** 3
+        elif w == "PHI_ECLIPSE":
+            for s in state.stocks:
+                s["delta"] *= 0.01  # freeze
+
+
+# ============================================================
+# BOUNTY BOARD — rotating kill quests with phi-rewards
+# ============================================================
+
+class BountyBoard:
+    """Daily bounty targets. Players hunt specific goals for phi-gold rewards.
+    Bounties refresh daily. Each has a difficulty tier affecting reward scale."""
+
+    BOUNTY_TEMPLATES = [
+        {"id": 0, "name": "Рыночный охотник", "name_en": "Market Hunter",
+         "desc": "Execute 3 trades", "type": "trades", "target": 3},
+        {"id": 1, "name": "Золотой жнец", "name_en": "Golden Reaper",
+         "desc": "Earn 5000g in one day", "type": "gold_earned", "target": 5000},
+        {"id": 2, "name": "Дуэлянт", "name_en": "The Duelist",
+         "desc": "Win 2 phi-duels", "type": "duels_won", "target": 2},
+        {"id": 3, "name": "Боссолюб", "name_en": "Boss Slayer",
+         "desc": "Deal 100K boss damage", "type": "boss_damage", "target": 100000},
+        {"id": 4, "name": "Коллекционер", "name_en": "Collector",
+         "desc": "Acquire 5 loot items", "type": "loot_acquired", "target": 5},
+        {"id": 5, "name": "Пророк", "name_en": "The Prophet",
+         "desc": "Win 3 predictions", "type": "predictions_won", "target": 3},
+        {"id": 6, "name": "Грабитель", "name_en": "The Robber",
+         "desc": "Complete 1 heist contribution", "type": "heist_funded", "target": 1},
+        {"id": 7, "name": "Шпион", "name_en": "The Spy",
+         "desc": "Perform 1 sabotage or boost", "type": "espionage", "target": 1},
+        {"id": 8, "name": "Магнат", "name_en": "The Magnate",
+         "desc": "Reach 500K net worth", "type": "net_worth", "target": 500000},
+        {"id": 9, "name": "Фи-мастер", "name_en": "Phi Master",
+         "desc": "Have 3+ prestige", "type": "prestige", "target": 3},
+    ]
+
+    @staticmethod
+    def _today_seed(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        return (t - EPOCH) // 86400
+
+    @staticmethod
+    def daily_bounties(uid, now=None):
+        seed = BountyBoard._today_seed(now) + uid * 7
+        rng = random.Random(seed)
+        chosen = rng.sample(BountyBoard.BOUNTY_TEMPLATES, 3)
+        result = []
+        for i, b in enumerate(chosen):
+            difficulty = rng.randint(1, 3)
+            b = dict(b)
+            b["difficulty"] = difficulty
+            b["reward"] = int(1000 * PHI ** (i + difficulty))
+            b["target"] = int(b["target"] * (PHI ** (difficulty - 1)))
+            result.append(b)
+        return result
+
+    @staticmethod
+    def check_progress(state, uid, now=None):
+        c = state.chars.get(uid, {})
+        bounties = BountyBoard.daily_bounties(uid, now)
+        progress = []
+        for b in bounties:
+            done = BountyBoard._check_one(c, b)
+            progress.append({**b, "completed": done})
+        return progress
+
+    @staticmethod
+    def _check_one(char, bounty):
+        t = bounty["type"]
+        target = bounty["target"]
+        if t == "net_worth":
+            return char.get("net_worth", 0) >= target
+        elif t == "prestige":
+            return char.get("prestige", 0) >= target
+        elif t == "trades":
+            return char.get("_bounty_trades_today", 0) >= target
+        elif t == "gold_earned":
+            return char.get("_bounty_gold_today", 0) >= target
+        elif t == "duels_won":
+            return char.get("_bounty_duels_today", 0) >= target
+        elif t == "boss_damage":
+            return char.get("_bounty_boss_dmg_today", 0) >= target
+        elif t == "loot_acquired":
+            return char.get("_bounty_loot_today", 0) >= target
+        elif t == "predictions_won":
+            return char.get("_bounty_predictions_today", 0) >= target
+        elif t == "heist_funded":
+            return char.get("_bounty_heist_today", 0) >= target
+        elif t == "espionage":
+            return char.get("_bounty_espionage_today", 0) >= target
+        return False
+
+    @staticmethod
+    def claim(state, uid, slot, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        if slot < 0 or slot > 2:
+            return {"error": "invalid slot"}
+        bounties = BountyBoard.daily_bounties(uid, now)
+        b = bounties[slot]
+        claim_key = f"_bounty_claimed_{BountyBoard._today_seed(now)}_{slot}"
+        if c.get(claim_key):
+            return {"error": "already claimed"}
+        if not BountyBoard._check_one(c, b):
+            return {"error": "bounty not completed"}
+        c["gold"] = c.get("gold", 0) + b["reward"]
+        c[claim_key] = True
+        state.mark_dirty(uid)
+        return {"ok": True, "bounty": b["name"], "reward": b["reward"],
+                "gold_left": c["gold"]}
+
+
+# ============================================================
+# PHI WHEEL — spin the wheel casino game
+# ============================================================
+
+class PhiWheel:
+    """Casino wheel with phi-weighted segments. Costs gold to spin.
+    Prizes scale by phi-power. Rare jackpots for lucky spins."""
+
+    SPIN_COST = 200
+    SEGMENTS = [
+        {"label": "x0 (MISS)", "mult": 0, "weight": 30},
+        {"label": "x1 (EVEN)", "mult": 1, "weight": 25},
+        {"label": "xPHI", "mult": PHI, "weight": 20},
+        {"label": "xPHI^2", "mult": PHI ** 2, "weight": 12},
+        {"label": "xPHI^3", "mult": PHI ** 3, "weight": 8},
+        {"label": "xPHI^4 (JACKPOT)", "mult": PHI ** 4, "weight": 3},
+        {"label": "xPHI^5 (MEGA)", "mult": PHI ** 5, "weight": 1.5},
+        {"label": "FREE SPIN", "mult": -1, "weight": 0.5},
+    ]
+
+    @staticmethod
+    def spin(state, uid):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        gold = int(c.get("gold", 0))
+        if gold < PhiWheel.SPIN_COST:
+            return {"error": "not enough gold", "have": gold, "need": PhiWheel.SPIN_COST}
+        total_w = sum(s["weight"] for s in PhiWheel.SEGMENTS)
+        r = random.random() * total_w
+        cumulative = 0
+        result = PhiWheel.SEGMENTS[0]
+        for seg in PhiWheel.SEGMENTS:
+            cumulative += seg["weight"]
+            if r <= cumulative:
+                result = seg
+                break
+        c["gold"] = gold - PhiWheel.SPIN_COST
+        prize = 0
+        free_spin = False
+        if result["mult"] == -1:
+            free_spin = True
+        elif result["mult"] > 0:
+            prize = int(PhiWheel.SPIN_COST * result["mult"])
+            c["gold"] = c.get("gold", 0) + prize
+        state.mark_dirty(uid)
+        spins_today = c.get("_wheel_spins_today", 0) + 1
+        c["_wheel_spins_today"] = spins_today
+        return {
+            "label": result["label"],
+            "mult": result["mult"],
+            "prize": prize,
+            "free_spin": free_spin,
+            "cost": PhiWheel.SPIN_COST if not free_spin else 0,
+            "gold_left": c["gold"],
+            "spins_today": spins_today,
+        }
+
+
+# ============================================================
+# MARKET FRENZY — random volatility events
+# ============================================================
+
+class MarketFrenzy:
+    """Random market frenzy periods. A random stock goes hyper-volatile:
+    price swings by PHI^4 for 10 minutes. Traders who catch the wave
+    get bonus gold."""
+
+    FRENZY_INTERVAL = int(3600 * PHI * 3)  # ~4.8 hours
+    FRENZY_DURATION = 600  # 10 minutes
+    BONUS_POOL = 50000
+
+    @staticmethod
+    def status(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        cycle = (t - EPOCH) // MarketFrenzy.FRENZY_INTERVAL
+        rng = random.Random(cycle)
+        stock_idx = rng.randint(0, 19)
+        stock_name = ["ALPHA","BETA","GAMMA","DELTA","OMEGA","SIGMA","THETA",
+                       "ZETA","PI","RHO","KAPPA","LAMBDA","MU","NU","XI",
+                       "OMIKRON","CHI","PSI","PHI","TAU"][stock_idx]
+        start = EPOCH + cycle * MarketFrenzy.FRENZY_INTERVAL
+        elapsed = t - start
+        active = elapsed < MarketFrenzy.FRENZY_DURATION
+        remaining = max(0, MarketFrenzy.FRENZY_DURATION - elapsed) if active else 0
+        next_in = max(0, (start + MarketFrenzy.FRENZY_INTERVAL) - t)
+        return {
+            "active": active,
+            "stock": stock_name,
+            "remaining": remaining,
+            "next_in": next_in,
+            "bonus_pool": MarketFrenzy.BONUS_POOL,
+            "multiplier": PHI ** 4,
+        }
+
+    @staticmethod
+    def apply_frenzy(state, now=None):
+        f = MarketFrenzy.status(now)
+        if not f["active"]:
+            return
+        for s in state.stocks:
+            if s["name"] == f["stock"]:
+                s["delta"] += (random.random() - 0.5) * f["multiplier"]
+                s["volume"] = int(s["volume"] * PHI)
+                break
+
+    @staticmethod
+    def claim_bonus(state, uid, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        cycle = (t - EPOCH) // MarketFrenzy.FRENZY_INTERVAL
+        claim_key = f"_frenzy_claimed_{cycle}"
+        if c.get(claim_key):
+            return {"error": "already claimed"}
+        trades = c.get("_frenzy_trades", 0)
+        if trades <= 0:
+            return {"error": "no frenzy trades"}
+        bonus = int(MarketFrenzy.BONUS_POOL * (PHI ** min(trades - 1, 7)) / (PHI ** 7))
+        bonus = min(bonus, MarketFrenzy.BONUS_POOL)
+        c["gold"] = c.get("gold", 0) + bonus
+        c[claim_key] = True
+        c["_frenzy_trades"] = 0
+        state.mark_dirty(uid)
+        return {"ok": True, "bonus": bonus, "trades": trades, "gold_left": c["gold"]}
+
+
+# ============================================================
+# WHALE CHASE — track bot whales, predict their moves
+# ============================================================
+
+class WhaleChase:
+    """Track the bot traders (whales). Predict which stock a whale will
+    buy next. Correct prediction earns phi-scaled gold."""
+
+    WHALE_NAMES = ["Leviathan", "Megalodon", "Kraken", "Hydra", "Chimera"]
+    PREDICTION_COST = 300
+    STOCKS = ["ALPHA","BETA","GAMMA","DELTA","OMEGA","SIGMA","THETA",
+              "ZETA","PI","RHO","KAPPA","LAMBDA","MU","NU","XI",
+              "OMIKRON","CHI","PSI","PHI","TAU"]
+
+    @staticmethod
+    def _whale_stock(whale_id, cycle):
+        rng = random.Random(whale_id * 1000 + cycle)
+        return rng.choice(WhaleChase.STOCKS)
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        interval = int(3600 * PHI * 2)
+        cycle = t // interval
+        whales = []
+        for i, name in enumerate(WhaleChase.WHALE_NAMES):
+            target = WhaleChase._whale_stock(i, cycle)
+            whales.append({"id": i, "name": name, "hint": target[0] + "???"})
+        my_preds = state.chars.get(uid, {}).get("_whale_preds", {})
+        return {
+            "whales": whales,
+            "prediction_cost": WhaleChase.PREDICTION_COST,
+            "my_predictions": my_preds,
+        }
+
+    @staticmethod
+    def predict(state, uid, whale_id, stock):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        if whale_id < 0 or whale_id >= len(WhaleChase.WHALE_NAMES):
+            return {"error": "invalid whale"}
+        gold = int(c.get("gold", 0))
+        if gold < WhaleChase.PREDICTION_COST:
+            return {"error": "not enough gold", "have": gold, "need": WhaleChase.PREDICTION_COST}
+        t = int(time.time())
+        interval = int(3600 * PHI * 2)
+        cycle = t // interval
+        pred_key = f"{whale_id}_{cycle}"
+        preds = c.get("_whale_preds", {})
+        if pred_key in preds:
+            return {"error": "already predicted this whale"}
+        c["gold"] = gold - WhaleChase.PREDICTION_COST
+        preds[pred_key] = stock.upper()
+        c["_whale_preds"] = preds
+        state.mark_dirty(uid)
+        return {"ok": True, "whale": WhaleChase.WHALE_NAMES[whale_id],
+                "predicted": stock.upper()}
+
+    @staticmethod
+    def settle(state, uid, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        interval = int(3600 * PHI * 2)
+        cycle = (t - 1) // interval
+        preds = c.get("_whale_preds", {})
+        results = []
+        total_won = 0
+        for i, name in enumerate(WhaleChase.WHALE_NAMES):
+            pred_key = f"{i}_{cycle}"
+            predicted = preds.pop(pred_key, None)
+            if predicted is None:
+                continue
+            actual = WhaleChase._whale_stock(i, cycle)
+            won = predicted == actual
+            prize = 0
+            if won:
+                prize = int(WhaleChase.PREDICTION_COST * PHI ** 3)
+                c["gold"] = c.get("gold", 0) + prize
+                total_won += prize
+            results.append({"whale": name, "predicted": predicted,
+                            "actual": actual, "won": won, "prize": prize})
+        c["_whale_preds"] = preds
+        state.mark_dirty(uid)
+        return {"results": results, "total_won": total_won, "gold_left": c.get("gold", 0)}
+
+
+# ============================================================
+# CORP TRIAL — weekly corp challenges
+# ============================================================
+
+class CorpTrial:
+    """Weekly challenge for each corp. All members contribute toward
+    a shared goal. If the corp completes it, everyone gets a phi-reward."""
+
+    TRIALS = [
+        {"name": "Торговый марафон", "name_en": "Trading Marathon",
+         "desc": "Corp trades 50 times", "type": "trades", "target": 50},
+        {"name": "Золотой штурм", "name_en": "Golden Assault",
+         "desc": "Earn 1M gold collectively", "type": "gold_earned", "target": 1000000},
+        {"name": "Охота на боссов", "name_en": "Boss Hunt",
+         "desc": "Deal 5M total boss damage", "type": "boss_damage", "target": 5000000},
+        {"name": "Финансовый хаос", "name_en": "Financial Chaos",
+         "desc": "Execute 20 short positions", "type": "shorts", "target": 20},
+        {"name": "Шпионская сеть", "name_en": "Spy Network",
+         "desc": "Perform 10 espionage actions", "type": "espionage", "target": 10},
+        {"name": "Казино-ночь", "name_en": "Casino Night",
+         "desc": "Spin Phi Wheel 30 times", "type": "wheel_spins", "target": 30},
+    ]
+    REWARD_POOL = 500000
+
+    @staticmethod
+    def _week_seed(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        return (t - EPOCH) // (86400 * 7)
+
+    @staticmethod
+    def current_trial(corp_id, now=None):
+        seed = CorpTrial._week_seed(now) + corp_id * 3
+        rng = random.Random(seed)
+        return rng.choice(CorpTrial.TRIALS)
+
+    @staticmethod
+    def status(state, corp_id, uid, now=None):
+        c = state.chars.get(uid, {})
+        trial = CorpTrial.current_trial(corp_id, now)
+        corp_progress = 0
+        for ch in state.chars.values():
+            if ch.get("corp_id") == corp_id:
+                corp_progress += ch.get(f"_trial_{trial['type']}", 0)
+        completed = corp_progress >= trial["target"]
+        claim_key = f"_trial_claimed_{CorpTrial._week_seed(now)}_{corp_id}"
+        my_claimed = c.get(claim_key, False)
+        return {
+            "trial": trial["name"], "trial_en": trial["name_en"],
+            "desc": trial["desc"],
+            "progress": corp_progress, "target": trial["target"],
+            "pct": round(corp_progress / max(trial["target"], 1) * 100, 1),
+            "completed": completed, "reward": CorpTrial.REWARD_POOL,
+            "my_claimed": my_claimed,
+        }
+
+    @staticmethod
+    def claim(state, uid, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        corp_id = c.get("corp_id", 0)
+        trial = CorpTrial.current_trial(corp_id, now)
+        claim_key = f"_trial_claimed_{CorpTrial._week_seed(now)}_{corp_id}"
+        if c.get(claim_key):
+            return {"error": "already claimed"}
+        corp_progress = 0
+        for ch in state.chars.values():
+            if ch.get("corp_id") == corp_id:
+                corp_progress += ch.get(f"_trial_{trial['type']}", 0)
+        if corp_progress < trial["target"]:
+            return {"error": "trial not completed", "progress": corp_progress,
+                    "target": trial["target"]}
+        corp_members = [ch for ch in state.chars.values() if ch.get("corp_id") == corp_id]
+        n = max(len(corp_members), 1)
+        share = int(CorpTrial.REWARD_POOL / (n * PHI))
+        c["gold"] = c.get("gold", 0) + share
+        c[claim_key] = True
+        state.mark_dirty(uid)
+        return {"ok": True, "trial": trial["name"], "share": share,
+                "members": n, "gold_left": c["gold"]}
 # ============================================================
 
 if __name__ == "__main__":
