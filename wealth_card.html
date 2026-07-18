@@ -112,7 +112,7 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-auction" style="border-color:#26C6DA;color:#26C6DA">🏷 AUCTION</button>
 <button id="btn-energy" style="border-color:#66BB6A;color:#66BB6A">⚡ ENERGY</button>
 <button id="btn-raid" style="border-color:#EF5350;color:#EF5350">🐉 RAID</button>
-<span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
+<button id="refresh-btn" onclick="manualRefresh()" style="background:#1a1a2e;color:#FFC800;border:1px solid #FFC800;padding:5px 12px;cursor:pointer;font-family:inherit;font-size:10px;border-radius:3px;text-shadow:0 0 6px #FFC80066;box-shadow:0 0 8px #FFC80022">⟳ REFRESH</button>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
 <div id="overlay"></div>
@@ -2455,29 +2455,49 @@ async function buyPremium(){
     }catch(e){}
 }
 
+// ====== REFRESH BUTTON (clickable + auto countdown) ======
+function manualRefresh(){
+    if(_currentUid&&_currentUid!=='local'){
+        loadPlayer(_currentUid);
+        refreshPlayers();
+        _refreshLocked=false;
+        syncCooldown();
+        const el=document.getElementById('refresh-btn');
+        el.textContent='⟳ OK!';
+        el.style.borderColor='#00FF8C';el.style.color='#00FF8C';el.style.textShadow='0 0 8px #00FF8C88';
+        setTimeout(()=>{el.textContent='⟳ REFRESH';el.style.borderColor='#FFC800';el.style.color='#FFC800';el.style.textShadow='0 0 6px #FFC80066';},1200);
+    }else{
+        location.reload();
+    }
+}
+
 setInterval(()=>{
-    const el=document.getElementById('refresh-timer');
+    const el=document.getElementById('refresh-btn');
+    if(!el)return;
     if(_refreshDonor||_refreshTier>=2){
-        el.textContent='DONOR: no cooldown';
-        el.style.color='#00FF8C';
+        el.innerHTML='⟳ <span style="color:#00FF8C">UNLIMITED</span>';
+        el.style.borderColor='#00FF8C';
         return;
     }
     if(_refreshTier===1){
-        el.textContent='PRIORITY 1-min';
-        el.style.color='#00E5FF';
+        el.innerHTML='⟳ <span style="color:#00E5FF">PRIORITY</span>';
+        el.style.borderColor='#00E5FF';
         if(_refreshLeft<=0)return;
     }
     if(_refreshLeft<=0&&!_refreshLocked){
-        el.textContent='refreshing...';
-        el.style.color='#FFC800';
+        el.innerHTML='⟳ <span style="color:#FFC800">UPDATED</span>';
+        el.style.borderColor='#FFC800';
         if(_currentUid&&_currentUid!=='local'){loadPlayer(_currentUid);refreshPlayers();syncCooldown();}
         else{location.reload();}
         return;
     }
     _refreshLeft--;
     const m=Math.floor(_refreshLeft/60),s=_refreshLeft%60;
-    el.textContent='refresh in '+m+':'+(s<10?'0':'')+s;
-    el.style.color=_refreshLeft<60?'#FF3232':'#555';
+    const urgency=_refreshLeft<60;
+    el.innerHTML='⟳ '+m+':'+(s<10?'0':'')+s;
+    el.style.borderColor=urgency?'#FF3232':'#FFC80088';
+    el.style.color=urgency?'#FF3232':'#FFC80088';
+    el.style.textShadow=urgency?'0 0 8px #FF323266':'none';
 },1000);
 
 // try fetch player list on load
