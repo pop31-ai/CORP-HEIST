@@ -2870,6 +2870,587 @@ def portfolio(state, uid, now=None):
 
 
 # ============================================================
+# PHI LOTTERY — weekly lottery with phi-weighted draws
+# ============================================================
+
+class PhiLottery:
+    """Weekly lottery. Players buy tickets with gold. Draw is phi-weighted:
+    each ticket's chance = PHI^(ticket_count) / sum(PHI^all). More tickets
+    = higher chance but with diminishing phi returns."""
+
+    TICKET_COST = 500        # base cost in gold
+    DRAW_INTERVAL = int(3600 * PHI * 24)  # ~1.6 days (1 PHIday)
+    POOL_MULT = 3            # prize pool = tickets_sold * cost * POOL_MULT
+    MAX_TICKETS = 21         # Fibonacci cap per player
+
+    @staticmethod
+    def _now_week(now=None):
+        """Deterministic lottery epoch (resets every DRAW_INTERVAL)."""
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        return (t - EPOCH) // PhiLottery.DRAW_INTERVAL
+
+    @staticmethod
+    def status(state, uid, now=None):
+        """Return lottery status for a player."""
+        t = now or int(time.time())
+        week = PhiLottery._now_week(t)
+        epoch = 1700000000 + week * PhiLottery.DRAW_INTERVAL
+        next_draw = epoch + PhiLottery.DRAW_INTERVAL
+        remaining = max(0, next_draw - t)
+        # count tickets
+        key = f"lottery_{week}"
+        pool = state.chars.get(uid, {}).get("_lottery_pool", {})
+        my_tickets = pool.get(key, 0)
+        # total tickets (global)
+        total = 0
+        for c in state.chars.values():
+            lp = c.get("_lottery_pool", {})
+            total += lp.get(key, 0)
+        pool_gold = total * PhiLottery.TICKET_COST * PhiLottery.POOL_MULT
+        cost = PhiLottery.TICKET_COST + int(total * PHI)  # price rises with demand
+        return {
+            "week": week,
+            "remaining": remaining,
+            "cost": min(cost, PhiLottery.TICKET_COST * 10),
+            "my_tickets": my_tickets,
+            "max_tickets": PhiLottery.MAX_TICKETS,
+            "total_tickets": total,
+            "pool_gold": pool_gold,
+            "winner": None,
+        }
+
+    @staticmethod
+    def buy_ticket(state, uid, now=None):
+        """Buy a lottery ticket. Returns updated status or error."""
+        t = now or int(time.time())
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        week = PhiLottery._now_week(t)
+        key = f"lottery_{week}"
+        lp = c.get("_lottery_pool", {})
+        my = lp.get(key, 0)
+        if my >= PhiLottery.MAX_TICKETS:
+            return {"error": "max tickets reached"}
+        # cost rises with total demand
+        total_before = 0
+        for ch in state.chars.values():
+            total_before += ch.get("_lottery_pool", {}).get(key, 0)
+        cost = PhiLottery.TICKET_COST + int(total_before * PHI)
+        cost = min(cost, PhiLottery.TICKET_COST * 10)
+        gold = int(c.get("gold", 0))
+        if gold < cost:
+            return {"error": "not enough gold", "have": gold, "need": cost}
+        c["gold"] = gold - cost
+        c.setdefault("_lottery_pool", {})[key] = my + 1
+        state.mark_dirty(uid)
+        return PhiLottery.status(state, uid, t)
+
+    @staticmethod
+    def draw(state, now=None):
+        """Draw the lottery winner. Returns winner uid + prize. Called at draw time."""
+        t = now or int(time.time())
+        week = PhiLottery._now_week(t)
+        key = f"lottery_{week}"
+        entries = []
+        for uid, c in state.chars.items():
+            lp = c.get("_lottery_pool", {})
+            tickets = lp.get(key, 0)
+            if tickets > 0:
+                entries.append((uid, tickets))
+        if not entries:
+            return {"error": "no entries"}
+        # phi-weighted random draw
+        total = sum(t for _, t in entries)
+        weights = [PHI ** (t / total) for _, t in entries]
+        total_w = sum(weights)
+        r = random.random() * total_w
+        cumulative = 0
+        winner_uid = entries[0][0]
+        for i, (uid, _) in enumerate(entries):
+            cumulative += weights[i]
+            if r <= cumulative:
+                winner_uid = uid
+                break
+        pool_gold = total * PhiLottery.TICKET_COST * PhiLottery.POOL_MULT
+        state.chars[winner_uid]["gold"] = state.chars[winner_uid].get("gold", 0) + pool_gold
+        state.mark_dirty(winner_uid)
+        return {"winner": winner_uid, "prize": pool_gold, "week": week}
+
+
+# ============================================================
+# BLACK MARKET — rotating rare item shop
+# ============================================================
+
+class BlackMarket:
+    """Rotating shop of rare items. Stock refreshes every PHI hours.
+    Items are drawn from loot pools with phi-boosted rarities."""
+
+    REFRESH_INTERVAL = int(3600 * PHI * 4)  # ~6.5 hours
+    SHOP_SIZE = 7  # items per refresh
+
+    ITEM_NAMES = [
+        "Phi Shard", "Golden Decoder", "Quantum Key", "Neural Spike",
+        "Void Crystal", "Midas Lens", "Omega Relic", "Sector Cipher",
+        "Delta Core", "Titan Plate", "Ghost Protocol", "Apex Serum",
+        "Chrono Shard", "Eclipse Mask", "Zenith Engine", "Pulse Node",
+    ]
+
+    @staticmethod
+    def _shop_seed(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        return (t - EPOCH) // BlackMarket.REFRESH_INTERVAL
+
+    @staticmethod
+    def _gen_shop(seed):
+        rng = random.Random(seed)
+        items = []
+        for i in range(BlackMarket.SHOP_SIZE):
+            rarity = rng.choices(range(6), weights=[3000, 4000, 2000, 700, 250, 50])[0]
+            name = rng.choice(BlackMarket.ITEM_NAMES)
+            base_val = [50, 250, 1000, 5000, 25000, 100000][rarity]
+            price = int(base_val * (PHI ** rng.randint(0, 3)))
+            items.append({
+                "id": i, "name": name, "rarity": rarity,
+                "code": rng.randint(0, 65535), "price": price,
+                "value": base_val,
+            })
+        return items
+
+    @staticmethod
+    def status(now=None):
+        t = now or int(time.time())
+        seed = BlackMarket._shop_seed(t)
+        items = BlackMarket._gen_shop(seed)
+        epoch = 1700000000 + seed * BlackMarket.REFRESH_INTERVAL
+        remaining = max(0, (epoch + BlackMarket.REFRESH_INTERVAL) - t)
+        return {"items": items, "remaining": remaining, "seed": seed}
+
+    @staticmethod
+    def buy(state, uid, item_id, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = BlackMarket._shop_seed(now)
+        items = BlackMarket._gen_shop(seed)
+        if item_id < 0 or item_id >= len(items):
+            return {"error": "invalid item"}
+        item = items[item_id]
+        gold = int(c.get("gold", 0))
+        if gold < item["price"]:
+            return {"error": "not enough gold", "have": gold, "need": item["price"]}
+        c["gold"] = gold - item["price"]
+        loot = {"code": item["code"], "rarity": item["rarity"],
+                "qty": 1, "value": item["value"], "name": item["name"],
+                "cat": 10 if item["rarity"] >= 4 else 0}
+        c.setdefault("loot", []).append(loot)
+        c["net_worth"] = c.get("net_worth", 0) + item["value"]
+        state.mark_dirty(uid)
+        return {"ok": True, "item": item["name"], "rarity": item["rarity"],
+                "gold_left": c["gold"]}
+
+
+# ============================================================
+# HEIST MISSIONS — timed cooperative multi-stage missions
+# ============================================================
+
+class HeistMission:
+    """Cooperative heist missions. Multiple players contribute gold/loot
+    to fund a heist. After a timer, the heist resolves with phi-weighted
+    loot split among contributors."""
+
+    STAGES = 5
+    BASE_COST = 2000
+    BASE_REWARD = 50000
+    DURATION = int(3600 * PHI)  # ~1.6 hours
+    CORPS = ["MERIDIAN", "APEX", "NOVA", "VERTEX", "PULSAR", "AUREATE", "SOLARIS"]
+
+    MISSION_NAMES = [
+        "Operation Golden Vault", "Phi Protocol Breach", "Midnight Merger Heist",
+        "The Cortex Infiltration", "Quantum Fund Extraction", "The Aureate Gambit",
+        "Operation Silver Lining", "The Zero-Day Raid",
+    ]
+
+    @staticmethod
+    def _current_heist(now=None):
+        t = now or int(time.time())
+        EPOCH = 1700000000
+        cycle = int(3600 * PHI * 3)  # new heist every ~5 hours
+        idx = (t - EPOCH) // cycle
+        return idx
+
+    @staticmethod
+    def status(state, now=None):
+        t = now or int(time.time())
+        idx = HeistMission._current_heist(t)
+        rng = random.Random(idx)
+        mission_name = rng.choice(HeistMission.MISSION_NAMES)
+        target_corp = rng.choice(HeistMission.CORPS)
+        # funding progress from all chars
+        fund_key = f"heist_{idx}"
+        total_funded = 0
+        contributors = []
+        for uid, c in state.chars.items():
+            heists = c.get("_heist_funds", {})
+            amt = heists.get(fund_key, 0)
+            if amt > 0:
+                total_funded += amt
+                contributors.append({"uid": uid, "amount": amt})
+        # target: 7 contributors * PHI^3 * BASE_COST ≈ 13K gold
+        target = HeistMission.BASE_COST * int(PHI ** 4)
+        # is heist in progress or completed?
+        epoch = 1700000000 + idx * int(3600 * PHI * 3)
+        elapsed = t - epoch
+        in_progress = elapsed < HeistMission.DURATION
+        completed = elapsed >= HeistMission.DURATION and total_funded > 0
+        reward_mult = PHI ** (total_funded / target) if target > 0 else 1
+        pool = int(HeistMission.BASE_REWARD * reward_mult)
+        return {
+            "mission": mission_name,
+            "target_corp": target_corp,
+            "funded": total_funded,
+            "target": target,
+            "contributors": len(contributors),
+            "in_progress": in_progress,
+            "completed": completed,
+            "remaining": max(0, HeistMission.DURATION - elapsed) if in_progress else 0,
+            "pool": pool if completed else int(HeistMission.BASE_REWARD * reward_mult * 0.5),
+        }
+
+    @staticmethod
+    def fund(state, uid, amount, now=None):
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        idx = HeistMission._current_heist(now)
+        t = now or int(time.time())
+        epoch = 1700000000 + idx * int(3600 * PHI * 3)
+        if t - epoch >= HeistMission.DURATION:
+            return {"error": "heist closed"}
+        gold = int(c.get("gold", 0))
+        amount = min(amount, gold)
+        if amount <= 0:
+            return {"error": "nothing to fund"}
+        c["gold"] = gold - amount
+        fund_key = f"heist_{idx}"
+        c.setdefault("_heist_funds", {})[fund_key] = \
+            c.get("_heist_funds", {}).get(fund_key, 0) + amount
+        state.mark_dirty(uid)
+        return HeistMission.status(state, t)
+
+    @staticmethod
+    def claim(state, uid, now=None):
+        """Claim heist reward after completion."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        idx = HeistMission._current_heist(now)
+        t = now or int(time.time())
+        epoch = 1700000000 + idx * int(3600 * PHI * 3)
+        if t - epoch < HeistMission.DURATION:
+            return {"error": "heist not completed"}
+        fund_key = f"heist_{idx}"
+        my_funded = c.get("_heist_funds", {}).get(fund_key, 0)
+        if my_funded <= 0:
+            return {"error": "you did not participate"}
+        claimed_key = f"heist_claimed_{idx}"
+        if c.get(claimed_key):
+            return {"error": "already claimed"}
+        # calculate total funded and pool
+        total_funded = 0
+        for ch in state.chars.values():
+            total_funded += ch.get("_heist_funds", {}).get(fund_key, 0)
+        target = HeistMission.BASE_COST * int(PHI ** 4)
+        pool = int(HeistMission.BASE_REWARD * (PHI ** (total_funded / max(target, 1))))
+        # phi-weighted share
+        share = (my_funded / max(total_funded, 1)) ** (1 / PHI)
+        share = min(share * PHI, 1.0)
+        prize = int(pool * share)
+        c["gold"] = c.get("gold", 0) + prize
+        c[claimed_key] = True
+        state.mark_dirty(uid)
+        return {"ok": True, "prize": prize, "share_pct": round(share * 100, 1),
+                "gold_left": c["gold"]}
+
+
+# ============================================================
+# PHI PROPHET — stock price prediction game
+# ============================================================
+
+class PhiProphet:
+    """Prediction market. Players predict if a stock goes up or down in
+    the next PHI minutes. Correct predictions earn phi-scaled gold."""
+
+    PREDICTION_WINDOW = int(60 * PHI * 10)  # ~16 minutes
+    BASE_REWARD = 200
+    MAX_ACTIVE = 3
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        active = c.get("_prophet_active", [])
+        history = c.get("_prophet_history", [])
+        wins = sum(1 for h in history if h.get("won"))
+        total = len(history)
+        return {
+            "active": active,
+            "active_count": len(active),
+            "max_active": PhiProphet.MAX_ACTIVE,
+            "history_len": total,
+            "wins": wins,
+            "accuracy": round(wins / total * 100, 1) if total > 0 else 0,
+            "window": PhiProphet.PREDICTION_WINDOW,
+        }
+
+    @staticmethod
+    def predict(state, uid, symbol, direction, now=None):
+        """direction: 'up' or 'down'. Costs gold, pays out on correct."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        active = c.get("_prophet_active", [])
+        # cleanup expired
+        active = [a for a in active if t < a["expires"]]
+        if len(active) >= PhiProphet.MAX_ACTIVE:
+            return {"error": "max active predictions"}
+        if direction not in ("up", "down"):
+            return {"error": "direction must be 'up' or 'down'"}
+        stake = 100 + int(PHI * len(active) * 50)
+        gold = int(c.get("gold", 0))
+        if gold < stake:
+            return {"error": "not enough gold", "have": gold, "need": stake}
+        c["gold"] = gold - stake
+        pred = {
+            "symbol": symbol,
+            "direction": direction,
+            "price_at": _stock_price_now(state, symbol),
+            "expires": t + PhiProphet.PREDICTION_WINDOW,
+            "stake": stake,
+        }
+        active.append(pred)
+        c["_prophet_active"] = active
+        state.mark_dirty(uid)
+        return {"ok": True, "stake": stake, "expires_in": PhiProphet.PREDICTION_WINDOW}
+
+    @staticmethod
+    def settle(state, uid, now=None):
+        """Check all expired predictions and pay out winners."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        active = c.get("_prophet_active", [])
+        settled = []
+        remaining = []
+        for pred in active:
+            if t >= pred["expires"]:
+                current_price = _stock_price_now(state, pred["symbol"])
+                went_up = current_price > pred["price_at"]
+                won = (pred["direction"] == "up" and went_up) or \
+                      (pred["direction"] == "down" and not went_up)
+                prize = 0
+                if won:
+                    prize = int(pred["stake"] * PHI * 2)
+                    c["gold"] = c.get("gold", 0) + prize
+                settled.append({
+                    "symbol": pred["symbol"],
+                    "direction": pred["direction"],
+                    "price_start": pred["price_at"],
+                    "price_end": current_price,
+                    "won": won,
+                    "prize": prize,
+                })
+            else:
+                remaining.append(pred)
+        c["_prophet_active"] = remaining
+        history = c.get("_prophet_history", [])
+        history.extend(settled)
+        c["_prophet_history"] = history[-50:]  # keep last 50
+        state.mark_dirty(uid)
+        return {"settled": settled, "gold_left": c.get("gold", 0)}
+
+
+def _stock_price_now(state, symbol):
+    """Get current stock price from state."""
+    for s in state.stocks:
+        if s.get("name") == symbol:
+            return s.get("price", 0)
+    return 0
+
+
+# ============================================================
+# GOLDEN RAIN — random server-wide gold drops
+# ============================================================
+
+class GoldenRain:
+    """Random gold drops that fall on the server. When triggered, a rain
+    event appears for N seconds. Players who 'catch' get phi-scaled shares.
+    First catch gets PHI bonus."""
+
+    DROP_INTERVAL = int(3600 * PHI * 2)  # ~3.2 hours between rains
+    RAIN_DURATION = 30  # seconds to catch
+    BASE_POT = 10000
+    MAX_CATCHERS = 8  # Fibonacci
+
+    @staticmethod
+    def _last_rain():
+        EPOCH = 1700000000
+        interval = GoldenRain.DROP_INTERVAL
+        now = int(time.time())
+        last_start = EPOCH + ((now - EPOCH) // interval) * interval
+        return last_start
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        last = GoldenRain._last_rain()
+        elapsed = t - last
+        active = elapsed < GoldenRain.RAIN_DURATION
+        remaining = max(0, GoldenRain.RAIN_DURATION - elapsed) if active else 0
+        next_rain = last + GoldenRain.DROP_INTERVAL
+        next_in = max(0, next_in) if (next_in := next_rain - t) > 0 else 0
+        # did this player catch?
+        key = f"golden_rain_{last}"
+        catchers = state.chars.get(0, {}).get("_rain_catchers", {})
+        my_caught = catchers.get(key, {}).get(str(uid), 0) if isinstance(catchers.get(key), dict) else 0
+        return {
+            "active": active,
+            "remaining": remaining,
+            "next_in": next_in,
+            "pot": GoldenRain.BASE_POT + int(PHI * elapsed),
+            "my_caught": my_caught,
+            "total_catchers": len(catchers.get(key, {})) if isinstance(catchers.get(key), dict) else 0,
+        }
+
+    @staticmethod
+    def catch(state, uid, now=None):
+        """Player tries to catch falling gold."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        last = GoldenRain._last_rain()
+        if t - last >= GoldenRain.RAIN_DURATION:
+            return {"error": "no active rain"}
+        if t - last < 1:
+            return {"error": "rain not yet started"}
+        key = f"golden_rain_{last}"
+        # global catch state in uid 0 (market data holder)
+        market_c = state.chars.setdefault(0, {})
+        rain_catchers = market_c.setdefault("_rain_catchers", {})
+        catch_dict = rain_catchers.setdefault(key, {})
+        uid_str = str(uid)
+        if uid_str in catch_dict:
+            return {"error": "already caught"}
+        count = len(catch_dict)
+        if count >= GoldenRain.MAX_CATCHERS:
+            return {"error": "rain exhausted"}
+        # phi-weighted: first catchers get more
+        rank = count + 1
+        pot = GoldenRain.BASE_POT + int(PHI * (t - last))
+        share = PHI ** (1.0 / rank)  # first gets PHI, second gets sqrt(PHI), etc.
+        total_shares = sum(PHI ** (1.0 / r) for r in range(1, GoldenRain.MAX_CATCHERS + 1))
+        prize = int(pot * share / total_shares)
+        c["gold"] = c.get("gold", 0) + prize
+        catch_dict[uid_str] = prize
+        state.mark_dirty(uid)
+        SND_PRIZE = prize  # noqa: unused
+        return {"ok": True, "prize": prize, "rank": rank, "gold_left": c["gold"]}
+
+
+# ============================================================
+# CORP ESPIONAGE — sabotage/boost rival corps
+# ============================================================
+
+class CorpEspionage:
+    """Strategic corp manipulation. Spend gold to:
+    - SABOTAGE a rival corp: reduces their member bonus for PHI hours
+    - BOOST your own corp: increases member bonus for PHI hours
+    Cost scales by PHI^tier. One action per player per cooldown."""
+
+    SABOTAGE_COST = 5000
+    BOOST_COST = 3000
+    EFFECT_DURATION = int(3600 * PHI)  # ~1.6 hours
+    COOLDOWN = int(3600 * PHI * 2)  # ~3.2 hours
+
+    @staticmethod
+    def status(state, uid, now=None):
+        t = now or int(time.time())
+        c = state.chars.get(uid, {})
+        active = c.get("_espionage_active", {})
+        cooldown_until = c.get("_espionage_cooldown", 0)
+        on_cooldown = t < cooldown_until
+        return {
+            "on_cooldown": on_cooldown,
+            "cooldown_remaining": max(0, cooldown_until - t),
+            "active": active,
+            "sabotage_cost": CorpEspionage.SABOTAGE_COST,
+            "boost_cost": CorpEspionage.BOOST_COST,
+            "effect_duration": CorpEspionage.EFFECT_DURATION,
+        }
+
+    @staticmethod
+    def sabotage(state, uid, target_corp_id, now=None):
+        """Sabotage a rival corp."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        if t < c.get("_espionage_cooldown", 0):
+            return {"error": "on cooldown", "remaining": c["_espionage_cooldown"] - t}
+        if target_corp_id == c.get("corp_id"):
+            return {"error": "cannot sabotage own corp"}
+        if target_corp_id < 0 or target_corp_id >= len(CORPS):
+            return {"error": "invalid corp"}
+        cost = int(CorpEspionage.SABOTAGE_COST * PHI ** (c.get("prestige", 0) * 0.1))
+        gold = int(c.get("gold", 0))
+        if gold < cost:
+            return {"error": "not enough gold", "have": gold, "need": cost}
+        c["gold"] = gold - cost
+        c["_espionage_active"] = {
+            "type": "sabotage",
+            "target": target_corp_id,
+            "expires": t + CorpEspionage.EFFECT_DURATION,
+        }
+        c["_espionage_cooldown"] = t + CorpEspionage.COOLDOWN
+        state.mark_dirty(uid)
+        # apply effect to market mood
+        state.stocks[target_corp_id % len(state.stocks)]["delta"] -= PHI
+        return {"ok": True, "target": CORPS[target_corp_id], "cost": cost,
+                "duration": CorpEspionage.EFFECT_DURATION}
+
+    @staticmethod
+    def boost(state, uid, now=None):
+        """Boost your own corp."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        t = now or int(time.time())
+        if t < c.get("_espionage_cooldown", 0):
+            return {"error": "on cooldown", "remaining": c["_espionage_cooldown"] - t}
+        cost = int(CorpEspionage.BOOST_COST * PHI ** (c.get("prestige", 0) * 0.1))
+        gold = int(c.get("gold", 0))
+        if gold < cost:
+            return {"error": "not enough gold", "have": gold, "need": cost}
+        my_corp = c.get("corp_id", 0)
+        c["gold"] = gold - cost
+        c["_espionage_active"] = {
+            "type": "boost",
+            "target": my_corp,
+            "expires": t + CorpEspionage.EFFECT_DURATION,
+        }
+        c["_espionage_cooldown"] = t + CorpEspionage.COOLDOWN
+        state.mark_dirty(uid)
+        state.stocks[my_corp % len(state.stocks)]["delta"] += PHI
+        return {"ok": True, "target": CORPS[my_corp], "cost": cost,
+                "duration": CorpEspionage.EFFECT_DURATION}
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 

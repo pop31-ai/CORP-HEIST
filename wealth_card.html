@@ -75,6 +75,12 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
 <button id="btn-mm" style="border-color:#00FF8C;color:#00FF8C">⚖ MARKET MAKE</button>
 <button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
+<button id="btn-lottery" style="border-color:#FF6BD6;color:#FF6BD6">🎰 PHI-LOTTO</button>
+<button id="btn-blackmarket" style="border-color:#888899;color:#888899">🏴 BLACK MARKET</button>
+<button id="btn-heist" style="border-color:#FF3232;color:#FF3232">🔓 HEIST</button>
+<button id="btn-prophet" style="border-color:#00E5FF;color:#00E5FF">🔮 PHI-PROPHET</button>
+<button id="btn-rain" style="border-color:#FFE24B;color:#FFE24B">🌧 GOLDEN RAIN</button>
+<button id="btn-espionage" style="border-color:#AA00FF;color:#AA00FF">🕵 ESPIONAGE</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -3912,6 +3918,124 @@ async function unlockPassive(node){
         loadPlayer(uid);
     }catch(e){showOverlay('Unlock','offline');}
 }
+
+// ====== PHI LOTTERY ======
+document.getElementById('btn-lottery').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/lottery/'+uid);const d=await r.json();
+        let s='PHI-LOTTERY Week #'+d.week+'\n';
+        s+='Pool: '+d.pool_gold+'g | Tickets: '+d.total_tickets+'\n';
+        s+='Your tickets: '+d.my_tickets+'/'+d.max_tickets+'\n';
+        s+='Ticket cost: '+d.cost+'g\n';
+        s+='Draws in: '+Math.floor(d.remaining/3600)+'h '+Math.floor((d.remaining%3600)/60)+'m\n\n';
+        s+='Buy a ticket? Cost rises with demand.';
+        if(confirm(s)){await fetch(API+'/pulse/lottery/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})}).then(r=>r.json()).then(d=>{if(d.error){showOverlay('LOTTO',d.error);}else{SND.promo();showOverlay('TICKET BOUGHT','Pool: '+d.pool_gold+'g\nYour tickets: '+d.my_tickets);loadPlayer(uid);}});}
+    }catch(e){showOverlay('LOTTERY','offline');}
+};
+
+// ====== BLACK MARKET ======
+document.getElementById('btn-blackmarket').onclick=async()=>{
+    try{
+        const r=await fetch(API+'/api/blackmarket');const d=await r.json();
+        let s='BLACK MARKET — next refresh in '+Math.floor(d.remaining/3600)+'h\n\n';
+        d.items.forEach(it=>{s+='['+it.id+'] '+it.name+' (R'+it.rarity+') — '+it.price+'g\n';});
+        s+'\nBuy an item by number?';
+        const choice=prompt(s);
+        if(choice!==null){
+            const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+            const r2=await fetch(API+'/pulse/blackmarket/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_id:parseInt(choice)})});
+            const d2=await r2.json();
+            if(d2.error){showOverlay('BLACK MARKET',d2.error);}else{SND.loot(d2.rarity);showOverlay('PURCHASED',d2.item+' (R'+d2.rarity+')\nGold left: '+d2.gold_left);loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('BLACK MARKET','offline');}
+};
+
+// ====== HEIST MISSIONS ======
+document.getElementById('btn-heist').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/heist/'+uid);const d=await r.json();
+        let s='HEIST: '+d.mission+'\n';
+        s+='Target: '+d.target_corp+'\n';
+        s+='Funded: '+d.funded+'/'+d.target+'g ('+d.contributors+' contributors)\n';
+        s+='Pool: '+d.pool+'g\n';
+        if(d.in_progress){s+='Time left: '+Math.floor(d.remaining/60)+'m\n\n1) Fund (contribute gold)\n2) Claim reward';}
+        else if(d.completed){s+='COMPLETE — claim your reward!';}
+        else{s+='Starting soon...';}
+        const choice=prompt(s);
+        if(choice==='1'){
+            const amt=parseInt(prompt('How much gold to fund?','1000'));
+            if(amt>0){const r2=await fetch(API+'/pulse/heist/fund',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,amount:amt})});const d2=await r2.json();if(d2.error){showOverlay('HEIST',d2.error);}else{SND.trade();showOverlay('HEIST FUNDED','Contributed! Pool growing...');loadPlayer(uid);}}
+        }else if(choice==='2'){
+            const r2=await fetch(API+'/pulse/heist/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();if(d2.error){showOverlay('HEIST',d2.error);}else{SND.promo();showOverlay('HEIST COMPLETE','Prize: '+d2.prize+'g\nShare: '+d2.share_pct+'%');loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('HEIST','offline');}
+};
+
+// ====== PHI PROPHET ======
+document.getElementById('btn-prophet').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/prophet/'+uid);const d=await r.json();
+        let s='PHI-PROPHET\n';
+        s+='Accuracy: '+d.accuracy+'% ('+d.wins+'/'+d.history_len+')\n';
+        s+='Active: '+d.active_count+'/'+d.max_active+'\n';
+        d.active.forEach(a=>{s+='  '+a.symbol+' '+a.direction.toUpperCase()+' (stake '+a.stake+'g)\n';});
+        s+='\nPredict: (symbol) (up/down)\nOr type "settle" to check';
+        const choice=prompt(s);
+        if(!choice)return;
+        if(choice==='settle'){
+            const r2=await fetch(API+'/pulse/prophet/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();let msg='';d2.settled.forEach(p=>{msg+=p.symbol+': '+(p.won?'WIN +'+p.prize+'g':'LOSS')+'\n';});showOverlay('PROPHET RESULTS',msg||'Nothing to settle');loadPlayer(uid);
+        }else{
+            const parts=choice.split(' ');
+            const r2=await fetch(API+'/pulse/prophet/predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,symbol:parts[0]||'ALPHA',direction:parts[1]||'up'})});const d2=await r2.json();if(d2.error){showOverlay('PROPHET',d2.error);}else{SND.trade();showOverlay('PREDICTION','Staked '+d2.stake+'g on '+parts[0].toUpperCase()+' '+parts[1]+'\nSettles in ~16min');loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('PROPHET','offline');}
+};
+
+// ====== GOLDEN RAIN ======
+document.getElementById('btn-rain').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/api/rain/'+uid);const d=await r.json();
+        if(d.active){
+            let s='GOLDEN RAIN ACTIVE! '+d.remaining+'s left\n';
+            s+='Pot: '+d.pot+'g | Catchers: '+d.total_catchers+'/8\n';
+            if(d.my_caught>0){s+='You caught: '+d.my_caught+'g\n';}
+            s+='Catch the gold?';
+            if(confirm(s)){
+                const r2=await fetch(API+'/pulse/rain/catch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
+                if(d2.error){showOverlay('GOLDEN RAIN',d2.error);}else{SND.firework();showOverlay('GOLDEN RAIN','CAUGHT '+d2.prize+'g!\nRank #'+d2.rank);loadPlayer(uid);}
+            }
+        }else{
+            let s='GOLDEN RAIN — next in '+Math.floor(d.next_in/3600)+'h '+Math.floor((d.next_in%3600)/60)+'m\n';
+            s+='Rain lasts 30s. First 8 catchers share the pot.';
+            if(d.my_caught>0){s+='\nYour last catch: '+d.my_caught+'g';}
+            showOverlay('GOLDEN RAIN',s);
+        }
+    }catch(e){showOverlay('RAIN','offline');}
+};
+
+// ====== CORP ESPIONAGE ======
+document.getElementById('btn-espionage').onclick=async()=>{
+    const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
+    try{
+        const r=await fetch(API+'/espionage/'+uid);const d=await r.json();
+        let s='CORP ESPIONAGE\n';
+        if(d.on_cooldown){s+='On cooldown: '+Math.floor(d.cooldown_remaining/60)+'m\n';}
+        else{s+='Ready!\n';}
+        if(d.active.type){s+='Active: '+d.active.type.toUpperCase()+' on corp #'+d.active.target+'\n';}
+        s+='\n1) SABOTAGE rival corp ('+d.sabotage_cost+'g)\n2) BOOST your corp ('+d.boost_cost+'g)';
+        const choice=prompt(s);
+        if(choice==='1'){
+            const target=parseInt(prompt('Target corp ID (0-6):\n0=MERIDIAN 1=APEX 2=NOVA 3=VERTEX 4=PULSAR 5=AUREATE 6=SOLARIS','0'));
+            const r2=await fetch(API+'/pulse/espionage/sabotage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,target_corp_id:target})});const d2=await r2.json();if(d2.error){showOverlay('ESPIONAGE',d2.error);}else{SND.duelHit();showOverlay('SABOTAGE','Sabotaged '+d2.target+'!\nCost: '+d2.cost+'g\nDuration: '+Math.floor(d2.duration/60)+'m');loadPlayer(uid);}
+        }else if(choice==='2'){
+            const r2=await fetch(API+'/pulse/espionage/boost',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();if(d2.error){showOverlay('ESPIONAGE',d2.error);}else{SND.promo();showOverlay('BOOST','Boosted '+d2.target+'!\nCost: '+d2.cost+'g\nDuration: '+Math.floor(d2.duration/60)+'m');loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('ESPIONAGE','offline');}
+};
 
 render();
 </script>

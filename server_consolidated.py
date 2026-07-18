@@ -66,6 +66,8 @@ from golden_econ import (
     mm_place, mm_status, mm_cancel, tick_market_making,
     tick_bots, tick_stock_candles, stock_candles,
     tape_feed, tick_sectors, sectors_status, trader_badges,
+    PhiLottery, BlackMarket, HeistMission, PhiProphet,
+    GoldenRain, CorpEspionage,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1818,6 +1820,129 @@ async def run_port(app, port):
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
+
+# ---- NEW GAME EVENTS: Lottery, Black Market, Heist, Prophet, Rain, Espionage ----
+
+async def handle_lottery(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PhiLottery.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_lottery_buy(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = PhiLottery.buy_ticket(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_lottery_draw(request):
+    d = await request.json()
+    result = PhiLottery.draw(STATE)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_blackmarket(request):
+    body = json.dumps(BlackMarket.status()).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_blackmarket_buy(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    item_id = int(d.get("item_id", 0))
+    result = BlackMarket.buy(STATE, uid, item_id)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_heist(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(HeistMission.status(STATE)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_heist_fund(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    amount = int(d.get("amount", 1000))
+    result = HeistMission.fund(STATE, uid, amount)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_heist_claim(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = HeistMission.claim(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_prophet(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PhiProphet.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_prophet_predict(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    symbol = d.get("symbol", "ALPHA")
+    direction = d.get("direction", "up")
+    result = PhiProphet.predict(STATE, uid, symbol, direction)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_prophet_settle(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = PhiProphet.settle(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_rain(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(GoldenRain.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_rain_catch(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = GoldenRain.catch(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_espionage(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(CorpEspionage.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_espionage_sabotage(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    target = int(d.get("target_corp_id", 0))
+    result = CorpEspionage.sabotage(STATE, uid, target)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_espionage_boost(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = CorpEspionage.boost(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 def make_card_app():
     app = web.Application()
     app.router.add_get("/", handle_card_index)
@@ -1962,6 +2087,23 @@ def make_unified_app():
     app.router.add_post("/pulse/refresh/force", pulse_refresh_force)
     app.router.add_post("/pulse/refresh/donor", pulse_refresh_donor)
     app.router.add_post("/pulse/premium/buy", pulse_premium_buy)
+    # ---- NEW EVENTS ----
+    app.router.add_get("/api/lottery/{uid}", handle_lottery)
+    app.router.add_post("/pulse/lottery/buy", pulse_lottery_buy)
+    app.router.add_post("/pulse/lottery/draw", pulse_lottery_draw)
+    app.router.add_get("/api/blackmarket", handle_blackmarket)
+    app.router.add_post("/pulse/blackmarket/buy", pulse_blackmarket_buy)
+    app.router.add_get("/api/heist/{uid}", handle_heist)
+    app.router.add_post("/pulse/heist/fund", pulse_heist_fund)
+    app.router.add_post("/pulse/heist/claim", pulse_heist_claim)
+    app.router.add_get("/api/prophet/{uid}", handle_prophet)
+    app.router.add_post("/pulse/prophet/predict", pulse_prophet_predict)
+    app.router.add_post("/pulse/prophet/settle", pulse_prophet_settle)
+    app.router.add_get("/api/rain/{uid}", handle_rain)
+    app.router.add_post("/pulse/rain/catch", pulse_rain_catch)
+    app.router.add_get("/api/espionage/{uid}", handle_espionage)
+    app.router.add_post("/pulse/espionage/sabotage", pulse_espionage_sabotage)
+    app.router.add_post("/pulse/espionage/boost", pulse_espionage_boost)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
