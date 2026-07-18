@@ -52,7 +52,8 @@ from golden_econ import (
     ma_status, buy_shares, share_price,
     news_feed, tick_news,
     market_index, hedge_open, hedge_status, hedge_redeem,
-    magnates,
+    magnates, moy_status,
+    loan_status, take_loan, repay_loan, check_liquidations,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1106,6 +1107,50 @@ async def handle_magnates(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- MAGNATE OF THE YEAR (season crown artifact) ----
+async def handle_moy(request):
+    """GET Magnate-of-the-Year status; crowns champions at season rollover."""
+    result = moy_status(STATE)
+    if result.get("awarded"):
+        STATE.save_char(result["champion"]["uid"])
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
+# ---- BANK / LOANS (borrow at phi-interest; leverage; liquidation) ----
+async def handle_loan(request):
+    """GET a player's loan status (?uid=). Sweeps liquidations first."""
+    check_liquidations(STATE)
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    result = loan_status(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_loan_take(request):
+    """Pulse: take a leveraged loan against gold collateral."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = take_loan(STATE, uid, d.get("collateral", 0), d.get("leverage", 1.0))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_loan_repay(request):
+    """Pulse: repay part or all of a loan (returns collateral when cleared)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = repay_loan(STATE, uid, d.get("amount"))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -1334,6 +1379,11 @@ def make_unified_app():
     app.router.add_post("/pulse/hedge/open", pulse_hedge_open)
     app.router.add_post("/pulse/hedge/redeem", pulse_hedge_redeem)
     app.router.add_get("/api/magnates", handle_magnates)
+    app.router.add_get("/api/moy", handle_moy)
+    app.router.add_get("/api/loan", handle_loan)
+    app.router.add_get("/api/loan/{uid}", handle_loan)
+    app.router.add_post("/pulse/loan/take", pulse_loan_take)
+    app.router.add_post("/pulse/loan/repay", pulse_loan_repay)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

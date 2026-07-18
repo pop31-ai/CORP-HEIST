@@ -49,6 +49,13 @@ def hero_power(base, level):
     """Power grows as base * PHI^(level/10)."""
     return int(base * (PHI ** (level / 10.0)))
 
+def _sky_combat(state, corp_id):
+    """Combat power multiplier from the corp skyscraper (forward-safe)."""
+    try:
+        return sky_reward_mult(state, corp_id)
+    except Exception:
+        return 1.0
+
 # Arena reward scales with opponent rank gap via phi (softened for balance)
 def duel_reward(base_reward, rank_gap):
     """Higher-ranked opponent beaten => bigger reward by phi^(gap/2).
@@ -182,8 +189,9 @@ class Arena:
         gold_mult = mults.get("gold_mult", 1.0)
 
         # power = hero power * level scaling * passive power_mult
+        sky = _sky_combat(self.state, me["corp_id"])
         my_pow = hero_power(100 + me["level"] * 10, me["hero_levels"][me["hero_id"] % 12])
-        my_pow = int(my_pow * pow_mult)
+        my_pow = int(my_pow * pow_mult * sky)
         opp_pow = hero_power(100 + opp["level"] * 10, opp["hero_levels"][opp["hero_id"] % 12])
         # add a little randomness (phi-weighted swing)
         swing = random.uniform(1 / PHI, PHI)
@@ -427,6 +435,7 @@ class Raid:
         base = hero_power(100 + me["level"] * 10,
                           me["hero_levels"][me["hero_id"] % 12])
         dmg = int(base * mults.get("power_mult", 1.0) * pres *
+                  _sky_combat(self.state, corp_id) *
                   random.uniform(1 / PHI, PHI))
         r["hp"] = max(0, r["hp"] - dmg)
         r["contributions"][uid] = r["contributions"].get(uid, 0) + dmg
@@ -762,6 +771,7 @@ class WorldBoss:
         base = hero_power(100 + me.get("level", 1) * 10,
                           me.get("hero_levels", [1] * 12)[me.get("hero_id", 0) % 12])
         dmg = int(base * mults.get("power_mult", 1.0) * pres *
+                  _sky_combat(self.state, me["corp_id"]) *
                   random.uniform(1 / PHI, PHI))
         wb["hp"] = max(0, wb["hp"] - dmg)
         key = str(uid)
@@ -967,6 +977,7 @@ class GuildWar:
         base = hero_power(100 + me.get("level", 1) * 10,
                           me.get("hero_levels", [1] * 12)[me.get("hero_id", 0) % 12])
         dmg = int(base * mults.get("power_mult", 1.0) * pres *
+                  _sky_combat(self.state, me["corp_id"]) *
                   random.uniform(1 / PHI, PHI))
         gw["hp"] = max(0, gw["hp"] - dmg)
         if corp == gw["corp_a"]:
@@ -1588,6 +1599,174 @@ def magnates(state, top=20, uid=None):
             res["you"] = {"uid": int(uid), "rank": rank, "score": ms,
                           "percentile": round(100 * (1 - rank / max(1, len(state.chars))), 1)}
     return res
+
+
+# ============================================================
+# MAGNATE OF THE YEAR (season award: exclusive phi crown artifact)
+# ============================================================
+
+MOY_CROWN = {"code": "PHI_CROWN", "rarity": 5, "cat": 11,
+             "value": 1_000_000, "qty": 1, "name": "Crown of the Golden Magnate"}
+
+def _moy(state):
+    if not hasattr(state, "moy"):
+        state.moy = {"last_awarded_season": -1, "hall": []}   # hall = past champions
+    return state.moy
+
+def magnate_of_year(state, now=None):
+    """When a new season starts, crown last season's #1 magnate with the
+    exclusive Crown of the Golden Magnate (a unique phi artifact)."""
+    now = now or int(time.time())
+    season, week = current_season(now)
+    moy = _moy(state)
+    prev_season = season - 1
+    if prev_season < 0 or moy["last_awarded_season"] >= prev_season:
+        return {"awarded": False, "current_season": season,
+                "hall_of_fame": moy["hall"][-10:],
+                "note": "Magnate of the Year is crowned when a season ends."}
+    ranked = sorted(state.chars.values(), key=magnate_score, reverse=True)
+    if not ranked:
+        return {"awarded": False, "current_season": season}
+    champ = ranked[0]
+    crown = dict(MOY_CROWN)
+    crown["season"] = prev_season
+    champ.setdefault("loot", []).append(crown)
+    champ["net_worth"] = champ.get("net_worth", 0) + crown["value"]
+    champ["moy_titles"] = champ.get("moy_titles", 0) + 1
+    state.mark_dirty(champ.get("user_id"))
+    moy["last_awarded_season"] = prev_season
+    entry = {"season": prev_season, "uid": champ.get("user_id"),
+             "name": champ.get("name", f"Player_{champ.get('user_id')}"),
+             "corp": CORPS[champ.get("corp_id", 0) % len(CORPS)],
+             "score": magnate_score(champ)}
+    moy["hall"].append(entry)
+    return {"awarded": True, "champion": entry,
+            "crown": crown, "current_season": season,
+            "hall_of_fame": moy["hall"][-10:],
+            "note": "The Golden Crown is a unique in-game artifact."}
+
+def moy_status(state, now=None):
+    """Poll: crowns pending champions and returns the hall of fame + the
+    current front-runner for this season."""
+    res = magnate_of_year(state, now)
+    ranked = sorted(state.chars.values(), key=magnate_score, reverse=True)
+    if ranked:
+        lead = ranked[0]
+        res["front_runner"] = {
+            "uid": lead.get("user_id"),
+            "name": lead.get("name", f"Player_{lead.get('user_id')}"),
+            "corp": CORPS[lead.get("corp_id", 0) % len(CORPS)],
+            "score": magnate_score(lead)}
+    res["season_progress"] = season_progress(now)
+    return res
+
+
+# ============================================================
+# BANK / LOANS (borrow gold at phi-interest; leverage w/ liquidation)
+# ============================================================
+
+# You post gold collateral and borrow up to (phi-1)*collateral*leverage.
+# Interest accrues by phi over time. If debt > collateral * LIQ_RATIO -> liquidated.
+LOAN_INTEREST = (PHI - 1) / 100        # ~0.618% per accrual tick
+LOAN_TICK = 3600                        # interest compounds hourly
+MAX_LEVERAGE = PHI                      # up to phi-x collateral
+LIQ_RATIO = PHI                         # debt >= collateral*phi => margin call
+
+def _loan(state, uid):
+    me = state.chars.get(uid)
+    if me is None:
+        return None
+    return me.get("loan")
+
+def _accrue(loan, now):
+    """Compound phi-interest for elapsed ticks."""
+    ticks = (now - loan["last_accrue"]) // LOAN_TICK
+    if ticks > 0:
+        loan["debt"] = int(loan["debt"] * ((1 + LOAN_INTEREST) ** ticks))
+        loan["last_accrue"] += ticks * LOAN_TICK
+    return loan
+
+def loan_status(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    loan = me.get("loan")
+    info = {"has_loan": bool(loan), "gold": me.get("gold", 0),
+            "max_leverage": round(MAX_LEVERAGE, 4),
+            "interest_pct_per_hour": round(LOAN_INTEREST * 100, 3),
+            "liquidation_ratio": round(LIQ_RATIO, 4),
+            "note": "Loans and interest are in-game gold only."}
+    if loan:
+        _accrue(loan, now)
+        state.mark_dirty(uid)
+        info.update({"collateral": loan["collateral"], "debt": loan["debt"],
+                     "health": round(loan["collateral"] * LIQ_RATIO / max(1, loan["debt"]), 3),
+                     "liquidation_debt": int(loan["collateral"] * LIQ_RATIO),
+                     "at_risk": loan["debt"] >= loan["collateral"] * LIQ_RATIO})
+    return info
+
+def take_loan(state, uid, collateral, leverage, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    if me.get("loan"):
+        return {"error": "repay your existing loan first"}
+    collateral = int(collateral)
+    leverage = min(MAX_LEVERAGE, max(1.0, float(leverage)))
+    if collateral <= 0:
+        return {"error": "bad collateral"}
+    if me.get("gold", 0) < collateral:
+        return {"error": "not enough gold for collateral"}
+    borrowed = int(collateral * (PHI - 1) * leverage)
+    me["gold"] = me.get("gold", 0) - collateral + borrowed
+    me["loan"] = {"collateral": collateral, "debt": borrowed,
+                  "leverage": round(leverage, 4), "last_accrue": now,
+                  "opened": now}
+    state.mark_dirty(uid)
+    return {"ok": True, "borrowed": borrowed, "collateral": collateral,
+            "leverage": round(leverage, 4), "gold": me["gold"],
+            **loan_status(state, uid, now)}
+
+def repay_loan(state, uid, amount=None, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me or not me.get("loan"):
+        return {"error": "no active loan"}
+    loan = _accrue(me["loan"], now)
+    amount = loan["debt"] if amount is None else min(int(amount), loan["debt"])
+    if me.get("gold", 0) < amount:
+        return {"error": "not enough gold to repay", "debt": loan["debt"]}
+    me["gold"] -= amount
+    loan["debt"] -= amount
+    result = {"ok": True, "repaid": amount}
+    if loan["debt"] <= 0:
+        # return collateral
+        me["gold"] += loan["collateral"]
+        result["collateral_returned"] = loan["collateral"]
+        me.pop("loan", None)
+        result["cleared"] = True
+    state.mark_dirty(uid)
+    result.update(loan_status(state, uid, now) if me.get("loan") else {"gold": me["gold"], "has_loan": False})
+    return result
+
+def check_liquidations(state, now=None):
+    """Sweep all loans: if debt >= collateral*phi, seize collateral & wipe debt."""
+    now = now or int(time.time())
+    liquidated = []
+    for uid, me in state.chars.items():
+        loan = me.get("loan")
+        if not loan:
+            continue
+        _accrue(loan, now)
+        if loan["debt"] >= loan["collateral"] * LIQ_RATIO:
+            # collateral seized; borrowed gold already spent/kept by player, debt wiped
+            liquidated.append({"uid": uid, "collateral_lost": loan["collateral"],
+                               "debt": loan["debt"]})
+            me.pop("loan", None)
+            state.mark_dirty(uid)
+    return {"liquidated": liquidated, "count": len(liquidated)}
 
 
 # ============================================================

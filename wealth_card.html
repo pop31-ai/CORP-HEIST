@@ -60,6 +60,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-news" style="border-color:#00E5FF;color:#00E5FF">📰 INSIDER NEWS</button>
 <button id="btn-hedge" style="border-color:#00FF8C;color:#00FF8C">🏦 HEDGE FUND</button>
 <button id="btn-magnates" style="border-color:#FFC800;color:#FFC800">👑 MAGNATES</button>
+<button id="btn-moy" style="border-color:#FFE24B;color:#FFE24B">🏆 MAGNATE/YEAR</button>
+<button id="btn-bank" style="border-color:#FF9B00;color:#FF9B00">🏛 BANK</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -2714,6 +2716,77 @@ async function showMagnates(){
         paint();if(_magTimer)clearInterval(_magTimer);_magTimer=setInterval(paint,4000);
     }catch(e){showOverlay('Magnates','offline');}
 }
+// ---- MAGNATE OF THE YEAR (season crown artifact) ----
+async function showMoY(){
+    try{
+        const r=await fetch(API+'/api/moy');const d=await r.json();
+        const hall=(d.hall_of_fame||[]).slice().reverse().map(h=>
+            '<tr><td style="color:#FFC800">S'+h.season+'</td><td style="color:#ccc">'+h.name+' <span style="color:#555">'+h.corp+'</span></td><td style="color:#FFC800;text-align:right">'+fmt(h.score)+'</td></tr>'
+        ).join('');
+        const fr=d.front_runner;
+        openPanel('<b>🏆 MAGNATE OF THE YEAR</b>'+
+            (d.awarded?'<div style="color:#FFE24B;text-align:center;margin:6px 0;text-shadow:0 0 12px #FFC800">👑 '+d.champion.name+' crowned for S'+d.champion.season+'!<br>+ Crown of the Golden Magnate</div>':'')+
+            (fr?'<div style="color:#00FF8C;font-size:10px;text-align:center;margin:4px 0">current front-runner: '+fr.name+' ('+fr.corp+')  '+fmt(fr.score)+'</div>':'')+
+            '<div style="background:#1a1a2e;height:5px;border-radius:3px;overflow:hidden;margin:2px 0"><div style="width:'+Math.round((d.season_progress||0)*100)+'%;height:100%;background:#FFC800"></div></div>'+
+            '<div style="color:#555;font-size:8px">season '+Math.round((d.season_progress||0)*100)+'% complete</div>'+
+            '<div style="color:#555;font-size:8px;margin-top:6px">HALL OF FAME</div>'+
+            '<table style="width:100%;font-size:9px;font-family:monospace">'+(hall||'<tr><td style="color:#555">no champions yet</td></tr>')+'</table>'+
+            '<div style="color:#555;font-size:8px;margin-top:3px">'+(d.note||'')+'</div>',
+            15000);
+        if(d.awarded){SND.promo();triggerVictory(1000000);}
+    }catch(e){showOverlay('Magnate/Year','offline');}
+}
+// ---- BANK / LOANS (leverage w/ liquidation) ----
+let _bankTimer=null;
+async function showBank(){
+    try{
+        openPanel('<b>🏛 GOLDEN BANK</b><div id="bank-body" style="color:#555">loading...</div>',20000);
+        const paint=async()=>{
+            const p=document.getElementById('bank-body');if(!p){if(_bankTimer)clearInterval(_bankTimer);return;}
+            const r=await fetch(API+'/api/loan/'+_uid());const d=await r.json();
+            if(d.has_loan){
+                const risk=d.at_risk;
+                const hcol=d.health>1.5?'#00FF8C':(d.health>1.1?'#FFE24B':'#FF3B3B');
+                p.innerHTML='<div style="color:#888;font-size:9px">interest '+d.interest_pct_per_hour+'%/h · liquidation at debt ≥ collateral×φ</div>'+
+                    '<table style="width:100%;font-size:10px;font-family:monospace;margin-top:4px">'+
+                    '<tr><td style="color:#555">collateral</td><td style="color:#FFC800;text-align:right">'+fmt(d.collateral)+'g</td></tr>'+
+                    '<tr><td style="color:#555">debt</td><td style="color:#FF9B00;text-align:right">'+fmt(d.debt)+'g</td></tr>'+
+                    '<tr><td style="color:#555">liquidation debt</td><td style="color:#FF3B3B;text-align:right">'+fmt(d.liquidation_debt)+'g</td></tr>'+
+                    '<tr><td style="color:#555">health</td><td style="color:'+hcol+';text-align:right">'+d.health+(risk?' ⚠':'')+'</td></tr></table>'+
+                    '<div style="margin-top:6px;text-align:center"><button onclick="repayLoan()" style="background:#FFC800;color:#05060c;border:0;font-size:10px;padding:3px 12px;cursor:pointer;font-family:monospace">REPAY FULL</button></div>'+
+                    '<div style="color:#555;font-size:8px;margin-top:3px">gold '+fmt(d.gold)+'g</div>';
+            }else{
+                p.innerHTML='<div style="color:#888;font-size:9px">post gold collateral, borrow up to (φ−1)×collateral×leverage. interest '+d.interest_pct_per_hour+'%/h. liquidation if debt ≥ collateral×φ.</div>'+
+                    '<div style="margin-top:8px;text-align:center">'+
+                    '<div style="color:#555;font-size:8px">LEVERAGE</div>'+
+                    [1,1.3,1.618].map(l=>'<button onclick="takeLoanPrompt('+l+')" style="background:#1a1a2e;color:#FF9B00;border:1px solid #FF9B00;font-size:9px;padding:2px 8px;margin:1px;cursor:pointer;font-family:monospace">'+l+'×</button>').join('')+
+                    '</div><div style="color:#555;font-size:8px;margin-top:4px">gold '+fmt(d.gold)+'g · max '+d.max_leverage+'×</div>';
+            }
+        };
+        paint();if(_bankTimer)clearInterval(_bankTimer);_bankTimer=setInterval(paint,4000);
+    }catch(e){showOverlay('Bank','offline');}
+}
+async function takeLoanPrompt(lev){
+    const col=parseInt(prompt('Gold collateral to post (borrow '+((PHI-1)*lev).toFixed(2)+'× of it):','10000')||'0',10);
+    if(!col)return;
+    try{
+        const r=await fetch(API+'/pulse/loan/take',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),collateral:col,leverage:lev})});
+        const d=await r.json();
+        if(d.error){showOverlay('🏛 LOAN',d.error);return;}
+        SND.click();showOverlay('🏛 LOAN OPENED','borrowed +'+fmt(d.borrowed)+'g\ncollateral '+fmt(d.collateral)+'g · '+d.leverage+'×\ngold '+fmt(d.gold)+'g');
+        showBank();loadPlayer(_uid());
+    }catch(e){}
+}
+async function repayLoan(){
+    try{
+        const r=await fetch(API+'/pulse/loan/repay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        if(d.error){showOverlay('🏛 REPAY',d.error);return;}
+        SND.promo();
+        showOverlay('🏛 LOAN'+(d.cleared?' CLEARED':' REPAID'),'repaid '+fmt(d.repaid)+'g'+(d.collateral_returned?'\ncollateral back +'+fmt(d.collateral_returned)+'g':'')+'\ngold '+fmt(d.gold)+'g');
+        showBank();loadPlayer(_uid());
+    }catch(e){}
+}
 function showOverlay(title,text){
     _applyPanel('<b>'+title+'</b><pre>'+text+'</pre>',6000);
 }
@@ -2761,6 +2834,8 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bnw=document.getElementById('btn-news');if(bnw)bnw.onclick=showNews;}
 {const bhf=document.getElementById('btn-hedge');if(bhf)bhf.onclick=showHedge;}
 {const bmg=document.getElementById('btn-magnates');if(bmg)bmg.onclick=showMagnates;}
+{const bmy=document.getElementById('btn-moy');if(bmy)bmy.onclick=showMoY;}
+{const bbk=document.getElementById('btn-bank');if(bbk)bbk.onclick=showBank;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
 {const ci=document.getElementById('chat-in');if(ci)ci.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});}
