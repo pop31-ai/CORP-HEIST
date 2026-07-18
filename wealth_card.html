@@ -58,6 +58,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-golden" style="border-color:#FFE24B;color:#FFE24B">⏳ GOLDEN HOUR</button>
 <button id="btn-ma" style="border-color:#B14BFF;color:#B14BFF">🤝 M&amp;A</button>
 <button id="btn-news" style="border-color:#00E5FF;color:#00E5FF">📰 INSIDER NEWS</button>
+<button id="btn-hedge" style="border-color:#00FF8C;color:#00FF8C">🏦 HEDGE FUND</button>
+<button id="btn-magnates" style="border-color:#FFC800;color:#FFC800">👑 MAGNATES</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -2642,6 +2644,76 @@ async function showNews(){
         _newsTimer=setInterval(paint,4000);
     }catch(e){showOverlay('News','offline');}
 }
+// ---- HEDGE FUND (auto-invest; phi-yield tied to Golden Index) ----
+let _hedgeTimer=null;
+async function showHedge(){
+    try{
+        openPanel('<b>🏦 HEDGE FUND</b><div id="hedge-body" style="color:#555">loading...</div>',20000);
+        const paint=async()=>{
+            const p=document.getElementById('hedge-body');if(!p){if(_hedgeTimer)clearInterval(_hedgeTimer);return;}
+            const r=await fetch(API+'/api/hedge/'+_uid());const d=await r.json();
+            let funds=(d.funds||[]).map(f=>
+                '<tr><td style="color:#888">'+fmt(f.principal)+'g</td>'+
+                '<td style="color:'+(f.pnl>=0?'#00FF8C':'#FF3B3B')+';text-align:right">'+(f.pnl>=0?'+':'')+fmt(f.pnl)+'g</td>'+
+                '<td style="color:'+(f.matured?'#00FF8C':'#888')+';text-align:right">'+(f.matured?'READY':_fmtCd(f.seconds_left))+'</td></tr>'
+            ).join('');
+            if(!funds)funds='<tr><td colspan="3" style="color:#555">no active funds</td></tr>';
+            const hasDue=(d.funds||[]).some(f=>f.matured);
+            p.innerHTML='<div style="color:#FFC800;font-size:14px;text-align:center">GOLDEN INDEX '+fmt(d.index)+'</div>'+
+                '<div style="color:#888;font-size:9px;text-align:center">φ-levered · fee '+d.mgmt_fee_pct+'% · lock '+_fmtCd(d.lock_seconds)+'</div>'+
+                '<table style="width:100%;font-size:9px;font-family:monospace;margin-top:4px">'+
+                '<tr style="color:#555"><td>PRINCIPAL</td><td style="text-align:right">PnL</td><td style="text-align:right">MATURES</td></tr>'+funds+'</table>'+
+                '<div style="margin-top:5px;text-align:center">'+
+                [10000,100000,1000000].map(a=>'<button onclick="openHedge('+a+')" style="background:#1a1a2e;color:#00FF8C;border:1px solid #00FF8C;font-size:9px;padding:2px 7px;margin:1px;cursor:pointer;font-family:monospace">INVEST '+fmt(a)+'</button>').join('')+
+                (hasDue?'<br><button onclick="redeemHedge()" style="background:#FFC800;color:#05060c;border:0;font-size:10px;padding:3px 10px;margin-top:4px;cursor:pointer;font-family:monospace">REDEEM MATURED</button>':'')+
+                '</div><div style="color:#555;font-size:8px;margin-top:3px">gold '+fmt(d.gold)+'g · '+(d.note||'')+'</div>';
+        };
+        paint();if(_hedgeTimer)clearInterval(_hedgeTimer);_hedgeTimer=setInterval(paint,3000);
+    }catch(e){showOverlay('Hedge Fund','offline');}
+}
+async function openHedge(amount){
+    try{
+        const r=await fetch(API+'/pulse/hedge/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),amount:amount})});
+        const d=await r.json();
+        if(d.error){showOverlay('🏦 HEDGE',d.error);return;}
+        SND.click();showHedge();loadPlayer(_uid());
+    }catch(e){}
+}
+async function redeemHedge(){
+    try{
+        const r=await fetch(API+'/pulse/hedge/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid()})});
+        const d=await r.json();
+        SND.promo();triggerWaterfall();
+        showOverlay('🏦 REDEEMED','+'+fmt(d.payout)+'g from '+d.redeemed_count+' fund(s)\ngold '+fmt(d.gold)+'g');
+        showHedge();loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- MAGNATE LEADERBOARD (live; phi crown effects) ----
+let _magTimer=null;
+async function showMagnates(){
+    try{
+        openPanel('<b>👑 MAGNATE INDEX</b><div id="mag-body" style="color:#555">loading...</div>',22000);
+        const paint=async()=>{
+            const p=document.getElementById('mag-body');if(!p){if(_magTimer)clearInterval(_magTimer);return;}
+            const r=await fetch(API+'/api/magnates?uid='+_uid());const d=await r.json();
+            const rows=d.magnates.map(m=>{
+                const glow=m.glow>0.3?('text-shadow:0 0 '+Math.round(m.glow*14)+'px #FFC800;'):'';
+                const col=m.rank===1?'#FFC800':(m.rank<=3?'#FFE24B':'#ccc');
+                const mine=(String(m.uid)===String(_uid()));
+                return '<tr'+(mine?' style="background:#1a1a2e"':'')+'>'+
+                    '<td style="color:'+col+';'+glow+'">'+(m.crown||('#'+m.rank))+'</td>'+
+                    '<td style="color:'+(mine?'#00FF8C':'#ccc')+'">'+m.name+' <span style="color:#555">'+m.corp+'</span></td>'+
+                    '<td style="color:#FFC800;text-align:right;'+glow+'">'+fmt(m.score)+'</td>'+
+                    '<td style="color:#B14BFF;text-align:right">'+(m.prestige?('✦'+m.prestige):'')+'</td></tr>';
+            }).join('');
+            const you=d.you?('<div style="color:#00FF8C;font-size:9px;margin-top:4px">YOU · rank #'+d.you.rank+' of '+d.total_players+'  ·  top '+(100-d.you.percentile).toFixed(1)+'%  ·  score '+fmt(d.you.score)+'</div>'):'';
+            p.innerHTML='<table style="width:100%;font-size:9px;font-family:monospace">'+
+                '<tr style="color:#555"><td>RANK</td><td>MAGNATE</td><td style="text-align:right">WEALTH</td><td style="text-align:right">✦</td></tr>'+rows+'</table>'+you+
+                '<div style="color:#555;font-size:8px;margin-top:3px">'+(d.note||'')+'</div>';
+        };
+        paint();if(_magTimer)clearInterval(_magTimer);_magTimer=setInterval(paint,4000);
+    }catch(e){showOverlay('Magnates','offline');}
+}
 function showOverlay(title,text){
     _applyPanel('<b>'+title+'</b><pre>'+text+'</pre>',6000);
 }
@@ -2687,6 +2759,8 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bgh=document.getElementById('btn-golden');if(bgh)bgh.onclick=showGoldenHour;}
 {const bma=document.getElementById('btn-ma');if(bma)bma.onclick=showMA;}
 {const bnw=document.getElementById('btn-news');if(bnw)bnw.onclick=showNews;}
+{const bhf=document.getElementById('btn-hedge');if(bhf)bhf.onclick=showHedge;}
+{const bmg=document.getElementById('btn-magnates');if(bmg)bmg.onclick=showMagnates;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
 {const ci=document.getElementById('chat-in');if(ci)ci.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});}

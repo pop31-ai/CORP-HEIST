@@ -47,10 +47,12 @@ from golden_econ import (
     Auction, GuildWar,
     bond_tiers, buy_bond, bond_status, claim_bonds,
     deriv_quote, open_position, deriv_status, settle_derivs,
-    sky_status, sky_fund,
+    sky_status, sky_fund, sky_reward_mult,
     golden_hour, golden_multiplier, award_gold,
     ma_status, buy_shares, share_price,
     news_feed, tick_news,
+    market_index, hedge_open, hedge_status, hedge_redeem,
+    magnates,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -251,15 +253,18 @@ def _boost_reward(uid, result, field="reward_gold"):
     c = STATE.chars.get(uid)
     if not c:
         return result
-    mult = golden_multiplier()
+    gh = golden_multiplier()
+    sky = sky_reward_mult(STATE, c["corp_id"])
+    mult = gh * sky
     bonus = int(round(base * (mult - 1.0)))
     if bonus > 0:
         c["gold"] = c.get("gold", 0) + bonus
         STATE.mark_dirty(uid)
         result["golden_bonus"] = bonus
         result[field] = base + bonus
-    result["golden"] = mult > 1.0
-    result["golden_mult"] = round(mult, 6)
+    result["golden"] = gh > 1.0
+    result["golden_mult"] = round(gh, 6)
+    result["sky_bonus_pct"] = round((sky - 1.0) * 100, 2)
     # M&A dividends on the full (boosted) reward
     from golden_econ import _pay_dividends
     total_base = base + (bonus if bonus > 0 else 0)
@@ -1055,6 +1060,52 @@ async def handle_news(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- HEDGE FUND (auto-invest; phi-yield tied to market index) ----
+async def handle_hedge(request):
+    """GET the Golden Index + a player's funds (?uid=)."""
+    STATE.tick_market()
+    uid = request.match_info.get("uid", request.query.get("uid"))
+    if uid is not None:
+        result = hedge_status(STATE, int(uid))
+    else:
+        result = {"index": market_index(STATE)}
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_hedge_open(request):
+    """Pulse: deposit gold into the hedge fund."""
+    STATE.tick_market()
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = hedge_open(STATE, uid, d.get("amount", 0))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_hedge_redeem(request):
+    """Pulse: redeem matured hedge funds (in-game gold)."""
+    STATE.tick_market()
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = hedge_redeem(STATE, uid)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- MAGNATE LEADERBOARD (live richest players; phi crowns) ----
+async def handle_magnates(request):
+    """GET the live magnate leaderboard (?uid= for your rank)."""
+    uid = request.query.get("uid")
+    result = magnates(STATE, top=20, uid=int(uid) if uid else None)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -1278,6 +1329,11 @@ def make_unified_app():
     app.router.add_get("/api/ma", handle_ma)
     app.router.add_post("/pulse/ma/buy", pulse_ma_buy)
     app.router.add_get("/api/news", handle_news)
+    app.router.add_get("/api/hedge", handle_hedge)
+    app.router.add_get("/api/hedge/{uid}", handle_hedge)
+    app.router.add_post("/pulse/hedge/open", pulse_hedge_open)
+    app.router.add_post("/pulse/hedge/redeem", pulse_hedge_redeem)
+    app.router.add_get("/api/magnates", handle_magnates)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

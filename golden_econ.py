@@ -1203,6 +1203,17 @@ def sky_bonus_pct(floors):
         total += (PHI - 1) * (1 / (PHI ** (f / (PHI * 2))))
     return round(total, 2)
 
+def sky_reward_mult(state, corp_id):
+    """Multiplier applied to a member's gold rewards from their corp tower."""
+    sk = _sky(state, corp_id)
+    return 1.0 + sky_bonus_pct(sk["floors"]) / 100.0
+
+def sky_member_mult(state, uid):
+    me = state.chars.get(uid)
+    if not me:
+        return 1.0
+    return sky_reward_mult(state, me["corp_id"])
+
 def sky_status(state, corp_id):
     sk = _sky(state, corp_id)
     nxt = floor_cost(sk["floors"])
@@ -1379,13 +1390,17 @@ def award_gold(state, uid, base_amount, now=None, dividends=True):
     me = state.chars.get(uid)
     if not me:
         return {"gained": 0, "golden": False, "dividends_paid": 0, "gold": 0}
-    mult = golden_multiplier(now)
+    gh = golden_multiplier(now)
+    sky = sky_reward_mult(state, me["corp_id"])
+    mult = gh * sky
     gained = int(round(base_amount * mult))
     me["gold"] = me.get("gold", 0) + gained
     div = _pay_dividends(state, uid, gained) if dividends else 0
     state.mark_dirty(uid)
-    return {"gained": gained, "golden": mult > 1.0,
-            "multiplier": round(mult, 6),
+    return {"gained": gained, "golden": gh > 1.0,
+            "multiplier": round(gh, 6),
+            "sky_mult": round(sky, 4),
+            "sky_bonus_pct": round((sky - 1.0) * 100, 2),
             "dividends_paid": div, "gold": me["gold"]}
 
 
@@ -1446,6 +1461,133 @@ def news_feed(state, since=0, now=None):
             "last_id": news[-1]["id"] if news else 0,
             "next_headline_in": nxt,
             "note": "Insider news moves stocks by phi. Trade early to profit."}
+
+
+# ============================================================
+# HEDGE FUND (auto-invest; phi-yield tied to the market index)
+# ============================================================
+
+HEDGE_LOCK = int(1800 * PHI)       # ~48.5 min per cycle
+HEDGE_MGMT_FEE = (2 - PHI) / 10    # ~0.038 skim on gains (the "2 and 20" but phi)
+
+def market_index(state):
+    """Golden Index: phi-weighted average of stock prices (rebased ~1000)."""
+    stocks = getattr(state, "stocks", [])
+    if not stocks:
+        return 1000.0
+    # phi-weight the sorted prices so leaders dominate like a cap-weighted index
+    sp = sorted((s["price"] for s in stocks), reverse=True)
+    num = 0.0; den = 0.0
+    for i, p in enumerate(sp):
+        w = 1 / (PHI ** (i / PHI))
+        num += p * w; den += w
+    return round(num / den * PHI, 2)
+
+def hedge_open(state, uid, amount, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    amount = int(amount)
+    if amount <= 0:
+        return {"error": "bad amount"}
+    if me.get("gold", 0) < amount:
+        return {"error": "not enough gold"}
+    me["gold"] -= amount
+    fund = {"id": now * 1000 + random.randint(0, 999),
+            "principal": amount, "entry_index": market_index(state),
+            "matures": now + HEDGE_LOCK}
+    me.setdefault("hedge", []).append(fund)
+    state.mark_dirty(uid)
+    return {"ok": True, "fund": fund, "index": fund["entry_index"], "gold": me["gold"]}
+
+def _hedge_value(state, f):
+    """Return payout: principal scaled by index performance, phi-amplified,
+    minus a phi mgmt fee on gains. Never below principal/phi (soft floor)."""
+    cur = market_index(state)
+    perf = cur / f["entry_index"] if f["entry_index"] else 1.0
+    # phi-amplified: gains and losses levered by phi but floored
+    lev = 1.0 + (perf - 1.0) * PHI
+    lev = max(1.0 / PHI, lev)
+    gross = f["principal"] * lev
+    gain = max(0.0, gross - f["principal"])
+    return int(gross - gain * HEDGE_MGMT_FEE)
+
+def hedge_status(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    cur = market_index(state)
+    out = []
+    for f in me.get("hedge", []):
+        val = _hedge_value(state, f)
+        out.append({**f, "current_value": val,
+                    "pnl": val - f["principal"],
+                    "index_now": cur,
+                    "matured": now >= f["matures"],
+                    "seconds_left": max(0, f["matures"] - now)})
+    return {"funds": out, "index": cur, "gold": me.get("gold", 0),
+            "lock_seconds": HEDGE_LOCK,
+            "mgmt_fee_pct": round(HEDGE_MGMT_FEE * 100, 2),
+            "note": "Hedge fund yields are in-game gold only, tied to the Golden Index."}
+
+def hedge_redeem(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    funds = me.get("hedge", [])
+    due = [f for f in funds if now >= f["matures"]]
+    total = sum(_hedge_value(state, f) for f in due)
+    me["hedge"] = [f for f in funds if now < f["matures"]]
+    if total:
+        me["gold"] = me.get("gold", 0) + int(total)
+        state.mark_dirty(uid)
+    return {"redeemed_count": len(due), "payout": int(total),
+            "gold": me.get("gold", 0),
+            "note": "Hedge fund yields are in-game gold only."}
+
+
+# ============================================================
+# MAGNATE LEADERBOARD (live richest players; phi crown tiers)
+# ============================================================
+
+def magnate_score(char):
+    """Wealth score = net_worth + gold, phi-boosted by prestige."""
+    base = char.get("net_worth", 0) + char.get("gold", 0)
+    return int(base * (PHI ** char.get("prestige", 0)))
+
+CROWN_TIERS = ["👑 φ-EMPEROR", "◆ TITAN", "★ MOGUL", "▲ BARON", "· TYCOON"]
+
+def magnates(state, top=20, uid=None):
+    ranked = sorted(state.chars.values(), key=magnate_score, reverse=True)
+    out = []
+    for i, c in enumerate(ranked[:top]):
+        crown = CROWN_TIERS[i] if i < len(CROWN_TIERS) else ""
+        out.append({
+            "rank": i + 1,
+            "uid": c.get("user_id"),
+            "name": c.get("name", f"Player_{c.get('user_id')}"),
+            "corp": CORPS[c.get("corp_id", 0) % len(CORPS)],
+            "score": magnate_score(c),
+            "net_worth": c.get("net_worth", 0),
+            "gold": c.get("gold", 0),
+            "prestige": c.get("prestige", 0),
+            "crown": crown,
+            # phi crown glow intensity (1.0 at top, decays by phi)
+            "glow": round(1 / (PHI ** i), 4),
+        })
+    res = {"magnates": out, "total_players": len(state.chars),
+           "note": "Rankings by in-game wealth only."}
+    if uid is not None:
+        me = state.chars.get(int(uid))
+        if me:
+            ms = magnate_score(me)
+            rank = sum(1 for c in state.chars.values() if magnate_score(c) > ms) + 1
+            res["you"] = {"uid": int(uid), "rank": rank, "score": ms,
+                          "percentile": round(100 * (1 - rank / max(1, len(state.chars))), 1)}
+    return res
 
 
 # ============================================================
