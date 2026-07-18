@@ -2,118 +2,180 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CORP HEIST — Wealth Card</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#080810;display:flex;flex-direction:column;align-items:center;font-family:'Courier New',monospace;color:#ccc;min-height:100vh;padding:16px}
 canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
-.ctrls{margin:10px 0;display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
-.ctrls button{background:#1a1a2e;color:#FFC800;border:1px solid #333;padding:5px 12px;cursor:pointer;font-family:inherit;font-size:10px;border-radius:3px}
-.ctrls button:hover{border-color:#FFC800}
 .info{font-size:9px;color:#444;margin-top:6px}
+
+/* ---- TOP BAR ---- */
+.topbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;margin:4px 0}
+.topbar select,.topbar button{background:#1a1a2e;color:#FFC800;border:1px solid #333;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:10px;border-radius:3px}
+.topbar button:hover{border-color:#FFC800}
+.topbar select{min-width:100px}
+
+/* ---- TAB BAR ---- */
+.tabs{display:flex;gap:2px;justify-content:center;flex-wrap:wrap;margin:6px 0 0}
+.tab{background:#0e0f1a;color:#555;border:1px solid #222;border-bottom:none;padding:5px 12px;cursor:pointer;font-family:inherit;font-size:11px;border-radius:4px 4px 0 0;transition:all .2s ease;position:relative;user-select:none}
+.tab:hover{color:#aaa;border-color:#444}
+.tab.active{color:#FFC800;border-color:#FFC800;border-bottom:1px solid #080810;z-index:2;text-shadow:0 0 8px rgba(255,200,0,.3);background:#12131f}
+.tab .count{font-size:8px;color:#555;margin-left:3px}
+.tab.active .count{color:#FFC80088}
+
+/* ---- PANEL ---- */
+.panel-wrap{width:100%;max-width:840px;overflow:hidden;min-height:36px;margin-bottom:8px}
+.panel{display:flex;gap:4px;flex-wrap:wrap;justify-content:center;padding:6px 0;
+  transform:translateY(-10px);opacity:0;transition:transform .3s cubic-bezier(.2,.9,.3,1.1),opacity .25s ease;
+  pointer-events:none}
+.panel.active{transform:translateY(0);opacity:1;pointer-events:auto;position:relative;z-index:1;
+  border:1px solid #333;border-top:1px solid #FFC80033;border-radius:0 0 6px 6px;padding:8px 6px;background:#0e0f1a}
+.panel button{background:#1a1a2e;border:1px solid #333;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:10px;border-radius:3px;transition:border-color .15s,box-shadow .15s,transform .1s}
+.panel button:hover{transform:translateY(-1px);box-shadow:0 2px 8px rgba(255,200,0,.15)}
+.panel button:active{transform:translateY(0)}
 </style>
 </head>
 <body>
-<div class="ctrls">
-<select id="player-select" onchange="loadPlayer(this.value)" style="background:#1a1a2e;color:#FFC800;border:1px solid #333;padding:5px 8px;font-family:inherit;font-size:10px;border-radius:3px">
-<option value="local">LOCAL DEMO</option>
-</select>
-<button onclick="refreshPlayers()">REFRESH LIST</button>
-<button onclick="newPortfolio()">NEW PLAYER</button>
-<button onclick="dropLoot()">DROP LOOT</button>
+
+<!-- TOP BAR: player + system controls -->
+<div class="topbar">
+<select id="player-select" onchange="loadPlayer(this.value)"><option value="local">LOCAL DEMO</option></select>
+<button onclick="refreshPlayers()">LIST</button>
+<button onclick="newPortfolio()">NEW</button>
+<button onclick="dropLoot()">LOOT</button>
 <button onclick="tradeStock()">TRADE</button>
 <button onclick="togglePause()">PAUSE</button>
-<button onclick="exportPNG()">EXPORT PNG</button>
-<button onclick="exportWelfarePNG()" style="border-color:#00FF8C;color:#00FF8C">WELFARE PNG</button>
-<button onclick="donateLoot()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
-<button onclick="buyGold()" style="border-color:#00AAFF;color:#00AAFF">BUY GOLD</button>
+<button onclick="exportPNG()">📷 PNG</button>
 <button onclick="supportRequest()" style="border-color:#00FF8C;color:#00FF8C">SUPPORT</button>
-<button id="btn-duel" style="border-color:#FFC800;color:#FFC800">⚔ PHI-DUEL</button>
-<button id="btn-guilds" style="border-color:#FFC800;color:#FFC800">CORP GUILDS</button>
-<button id="btn-board" style="border-color:#FFC800;color:#FFC800">LEADERBOARD</button>
-<button id="btn-season" style="border-color:#FFC800;color:#FFC800">SEASON</button>
-<button id="btn-passive" style="border-color:#FFC800;color:#FFC800">PASSIVE TREE</button>
-<button id="btn-rewards" style="border-color:#FFC800;color:#FFC800">SEASON REWARDS</button>
-<button id="btn-ascend" style="border-color:#FF6BD6;color:#FF6BD6">ASCEND</button>
-<button id="btn-raid" style="border-color:#FF4B4B;color:#FF4B4B">GUILD RAID</button>
-<button id="btn-quests" style="border-color:#00FF8C;color:#00FF8C">DAILY QUESTS</button>
-<button id="btn-finale" style="border-color:#FFC800;color:#FFC800">SEASON FINALE</button>
-<button id="btn-tour" style="border-color:#00E5FF;color:#00E5FF">TOWER TOUR</button>
-<button id="btn-sound" style="border-color:#FFE24B;color:#FFE24B">♪ SOUND ON</button>
-<button id="btn-snap" style="border-color:#00FF8C;color:#00FF8C">📷 SNAPSHOT</button>
-<button id="btn-tourney" style="border-color:#FF9B00;color:#FF9B00">🏆 TOURNAMENT</button>
-<button id="btn-customize" style="border-color:#B14BFF;color:#B14BFF">🎨 CUSTOMIZE</button>
-<button id="btn-achieve" style="border-color:#FFC800;color:#FFC800">🏅 BADGES</button>
-<button id="btn-referral" style="border-color:#00E5FF;color:#00E5FF">👥 INVITE</button>
-<button id="btn-chest" style="border-color:#FFC800;color:#FFC800">🎁 DAILY CHEST</button>
-<button id="btn-worldboss" style="border-color:#FF4B4B;color:#FF4B4B">🌍 WORLD BOSS</button>
-<button id="btn-worldmap" style="border-color:#00E5FF;color:#00E5FF">🏙 WORLD MAP</button>
-<button id="btn-chat" style="border-color:#00FF8C;color:#00FF8C">💬 CORP CHAT</button>
-<button id="btn-craft" style="border-color:#B14BFF;color:#B14BFF">⚗ CRAFT</button>
+<button id="refresh-btn" onclick="manualRefresh()" style="border-color:#FFC800;color:#FFC800;text-shadow:0 0 6px #FFC80066">⟳ REFRESH</button>
+</div>
+
+<!-- TAB BAR -->
+<div class="tabs" id="tabBar">
+<div class="tab active" data-cat="portfolio" onclick="showCat('portfolio')">💼 PORTFOLIO<span class="count">15</span></div>
+<div class="tab" data-cat="casino" onclick="showCat('casino')">🎰 CASINO<span class="count">14</span></div>
+<div class="tab" data-cat="combat" onclick="showCat('combat')">⚔ COMBAT<span class="count">11</span></div>
+<div class="tab" data-cat="social" onclick="showCat('social')">🏛 SOCIAL<span class="count">10</span></div>
+<div class="tab" data-cat="adventure" onclick="showCat('adventure')">🗺 ADVENTURE<span class="count">9</span></div>
+<div class="tab" data-cat="exotic" onclick="showCat('exotic')">⚡ EXOTIC<span class="count">11</span></div>
+<div class="tab" data-cat="progress" onclick="showCat('progress')">📈 PROGRESS<span class="count">9</span></div>
+</div>
+
+<!-- PANELS (one per category, animated) -->
+<div class="panel-wrap">
+<div class="panel active" id="p-portfolio">
+<button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
+<button id="btn-chart" style="border-color:#00E5FF;color:#00E5FF">📈 CHARTS</button>
 <button id="btn-orderbook" style="border-color:#FFC800;color:#FFC800">📖 ORDER BOOK</button>
-<button id="btn-auction" style="border-color:#FF9B00;color:#FF9B00">🔨 AUCTION</button>
-<button id="btn-guildwar" style="border-color:#FF4B4B;color:#FF4B4B">⚔ GUILD WAR</button>
+<button id="btn-index" style="border-color:#FFC800;color:#FFC800">📊 GOLDEN-500</button>
+<button id="btn-idxopt" style="border-color:#00E5FF;color:#00E5FF">🎯 500-OPTIONS</button>
+<button id="btn-sectors" style="border-color:#B14BFF;color:#B14BFF">🧭 SECTORS</button>
 <button id="btn-bonds" style="border-color:#00FF8C;color:#00FF8C">💰 φ-BONDS</button>
 <button id="btn-derivs" style="border-color:#00E5FF;color:#00E5FF">📈 DERIVATIVES</button>
-<button id="btn-sky" style="border-color:#FFC800;color:#FFC800">🏗 SKYSCRAPER</button>
-<button id="btn-golden" style="border-color:#FFE24B;color:#FFE24B">⏳ GOLDEN HOUR</button>
-<button id="btn-ma" style="border-color:#B14BFF;color:#B14BFF">🤝 M&amp;A</button>
-<button id="btn-news" style="border-color:#00E5FF;color:#00E5FF">📰 INSIDER NEWS</button>
-<button id="btn-hedge" style="border-color:#00FF8C;color:#00FF8C">🏦 HEDGE FUND</button>
-<button id="btn-magnates" style="border-color:#FFC800;color:#FFC800">👑 MAGNATES</button>
-<button id="btn-moy" style="border-color:#FFE24B;color:#FFE24B">🏆 MAGNATE/YEAR</button>
-<button id="btn-bank" style="border-color:#FF9B00;color:#FF9B00">🏛 BANK</button>
-<button id="btn-cb" style="border-color:#B14BFF;color:#B14BFF">🏦 CENTRAL BANK</button>
 <button id="btn-ipo" style="border-color:#00E5FF;color:#00E5FF">📈 IPO</button>
 <button id="btn-short" style="border-color:#FF3B3B;color:#FF3B3B">📉 SHORT</button>
-<button id="btn-index" style="border-color:#FFC800;color:#FFC800">📊 GOLDEN-500</button>
-<button id="btn-chart" style="border-color:#00E5FF;color:#00E5FF">📈 CHARTS</button>
-<button id="btn-sectors" style="border-color:#B14BFF;color:#B14BFF">🧭 SECTORS</button>
-<button id="btn-badges" style="border-color:#00FF8C;color:#00FF8C">🏅 BADGES</button>
-<button id="btn-press" style="border-color:#FFC800;color:#FFC800">📰 PRESS</button>
-<button id="btn-idxopt" style="border-color:#00E5FF;color:#00E5FF">🎯 500-OPTIONS</button>
-<button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
+<button id="btn-hedge" style="border-color:#00FF8C;color:#00FF8C">🏦 HEDGE FUND</button>
 <button id="btn-mm" style="border-color:#00FF8C;color:#00FF8C">⚖ MARKET MAKE</button>
-<button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
-<button id="btn-lottery" style="border-color:#FF6BD6;color:#FF6BD6">🎰 PHI-LOTTO</button>
-<button id="btn-blackmarket" style="border-color:#888899;color:#888899">🏴 BLACK MARKET</button>
-<button id="btn-heist" style="border-color:#FF3232;color:#FF3232">🔓 HEIST</button>
-<button id="btn-prophet" style="border-color:#00E5FF;color:#00E5FF">🔮 PHI-PROPHET</button>
-<button id="btn-rain" style="border-color:#FFE24B;color:#FFE24B">🌧 GOLDEN RAIN</button>
-<button id="btn-espionage" style="border-color:#AA00FF;color:#AA00FF">🕵 ESPIONAGE</button>
-<button id="btn-weather" style="border-color:#FFE24B;color:#FFE24B">⛅ WEATHER</button>
-<button id="btn-bounty" style="border-color:#FF6BD6;color:#FF6BD6">💀 BOUNTY</button>
-<button id="btn-wheel" style="border-color:#FFC800;color:#FFC800">🎡 PHI-WHEEL</button>
-<button id="btn-frenzy" style="border-color:#FF3232;color:#FF3232">⚡ FRENZY</button>
-<button id="btn-whale" style="border-color:#00E5FF;color:#00E5FF">🐋 WHALE</button>
-<button id="btn-trial" style="border-color:#00FF8C;color:#00FF8C">⚔ CORP TRIAL</button>
+<button id="btn-traders" style="border-color:#FFE24B;color:#FFE24B">🏅 TRADERS</button>
+<button id="btn-bank" style="border-color:#FF9B00;color:#FF9B00">🏛 BANK</button>
+<button id="btn-cb" style="border-color:#B14BFF;color:#B14BFF">🏦 CENTRAL BANK</button>
+</div>
+
+<div class="panel" id="p-casino">
 <button id="btn-casino" style="border-color:#FF00FF;color:#FF00FF">🎰 CASINO</button>
-<button id="btn-oracle" style="border-color:#8B5CF6;color:#8B5CF6">🔮 ORACLE</button>
-<button id="btn-arena" style="border-color:#F97316;color:#F97316">🏆 ARENA</button>
-<button id="btn-insurance" style="border-color:#14B8A6;color:#14B8A6">🛡 INSURE</button>
-<button id="btn-artifacts" style="border-color:#A855F7;color:#A855F7">💎 ARTIFACTS</button>
-<button id="btn-insider" style="border-color:#DC2626;color:#DC2626">🕵 INSIDER</button>
+<button id="btn-lottery" style="border-color:#FF6BD6;color:#FF6BD6">🎰 PHI-LOTTO</button>
+<button id="btn-wheel" style="border-color:#FFC800;color:#FFC800">🎡 PHI-WHEEL</button>
 <button id="btn-candle" style="border-color:#FFD700;color:#FFD700">🕯 CANDLE BET</button>
 <button id="btn-cshop" style="border-color:#00FFD4;color:#00FFD4">🛒 CANDLE SHOP</button>
 <button id="btn-csettle" style="border-color:#FF8C00;color:#FF8C00">📋 SETTLE</button>
-<button id="btn-pvp" style="border-color:#FF1744;color:#FF1744">⚔ DUEL</button>
-<button id="btn-quest" style="border-color:#76FF03;color:#76FF03">📜 QUEST</button>
-<button id="btn-craft" style="border-color:#FF9100;color:#FF9100">🔨 CRAFT</button>
-<button id="btn-trading" style="border-color:#00BCD4;color:#00BCD4">🏪 TRADE</button>
-<button id="btn-map" style="border-color:#8BC34A;color:#8BC34A">🗺 MAP</button>
-<button id="btn-guild" style="border-color:#9C27B0;color:#9C27B0">🏛 GUILD</button>
-<button id="btn-tourney" style="border-color:#FF5722;color:#FF5722">🏆 TOURNEY</button>
-<button id="btn-pets" style="border-color:#E91E63;color:#E91E63">🐾 PETS</button>
-<button id="btn-daily" style="border-color:#009688;color:#009688">📋 DAILY</button>
+<button id="btn-prophet" style="border-color:#00E5FF;color:#00E5FF">🔮 PHI-PROPHET</button>
+<button id="btn-oracle" style="border-color:#8B5CF6;color:#8B5CF6">🔮 ORACLE</button>
+<button id="btn-insider" style="border-color:#DC2626;color:#DC2626">🕵 INSIDER</button>
+<button id="btn-insurance" style="border-color:#14B8A6;color:#14B8A6">🛡 INSURE</button>
+<button id="btn-artifacts" style="border-color:#A855F7;color:#A855F7">💎 ARTIFACTS</button>
 <button id="btn-predict" style="border-color:#673AB7;color:#673AB7">📈 PREDICT</button>
-<button id="btn-rep" style="border-color:#CDDC39;color:#CDDC39">⚖ REP</button>
-<button id="btn-treasure" style="border-color:#FFD54F;color:#FFD54F">🗺 TREASURE</button>
-<button id="btn-training" style="border-color:#FF7043;color:#FF7043">🏋 TRAIN</button>
-<button id="btn-auction" style="border-color:#26C6DA;color:#26C6DA">🏷 AUCTION</button>
-<button id="btn-energy" style="border-color:#66BB6A;color:#66BB6A">⚡ ENERGY</button>
-<button id="btn-raid" style="border-color:#EF5350;color:#EF5350">🐉 RAID</button>
-<button id="refresh-btn" onclick="manualRefresh()" style="background:#1a1a2e;color:#FFC800;border:1px solid #FFC800;padding:5px 12px;cursor:pointer;font-family:inherit;font-size:10px;border-radius:3px;text-shadow:0 0 6px #FFC80066;box-shadow:0 0 8px #FFC80022">⟳ REFRESH</button>
+<button id="btn-blackmarket" style="border-color:#888899;color:#888899">🏴 BLACK MARKET</button>
+<button onclick="donateLoot()" style="border-color:#FF3232;color:#FF3232">DONATE</button>
 </div>
+
+<div class="panel" id="p-combat">
+<button id="btn-duel" style="border-color:#FFC800;color:#FFC800">⚔ PHI-DUEL</button>
+<button id="btn-pvp" style="border-color:#FF1744;color:#FF1744">⚔ SKILL DUEL</button>
+<button id="btn-arena" style="border-color:#F97316;color:#F97316">🏆 ARENA</button>
+<button id="btn-guildwar" style="border-color:#FF4B4B;color:#FF4B4B">⚔ GUILD WAR</button>
+<button id="btn-raid" style="border-color:#FF4B4B;color:#FF4B4B">🐉 RAID</button>
+<button id="btn-worldboss" style="border-color:#FF4B4B;color:#FF4B4B">🌍 WORLD BOSS</button>
+<button id="btn-bounty" style="border-color:#FF6BD6;color:#FF6BD6">💀 BOUNTY</button>
+<button id="btn-espionage" style="border-color:#AA00FF;color:#AA00FF">🕵 ESPIONAGE</button>
+<button id="btn-heist" style="border-color:#FF3232;color:#FF3232">🔓 HEIST</button>
+<button id="btn-trial" style="border-color:#00FF8C;color:#00FF8C">⚔ CORP TRIAL</button>
+<button id="btn-frenzy" style="border-color:#FF3232;color:#FF3232">⚡ FRENZY</button>
+</div>
+
+<div class="panel" id="p-social">
+<button id="btn-guilds" style="border-color:#FFC800;color:#FFC800">CORP GUILDS</button>
+<button id="btn-guild" style="border-color:#9C27B0;color:#9C27B0">🏛 GUILD</button>
+<button id="btn-chat" style="border-color:#00FF8C;color:#00FF8C">💬 CHAT</button>
+<button id="btn-map" style="border-color:#8BC34A;color:#8BC34A">🗺 MAP</button>
+<button id="btn-auction" style="border-color:#26C6DA;color:#26C6DA">🏷 AUCTION</button>
+<button id="btn-trading" style="border-color:#00BCD4;color:#00BCD4">🏪 TRADE</button>
+<button id="btn-tourney" style="border-color:#FF5722;color:#FF5722">🏆 TOURNEY</button>
+<button id="btn-referral" style="border-color:#00E5FF;color:#00E5FF">👥 INVITE</button>
+<button id="btn-rep" style="border-color:#CDDC39;color:#CDDC39">⚖ REP</button>
+<button id="btn-board" style="border-color:#FFC800;color:#FFC800">LEADERBOARD</button>
+</div>
+
+<div class="panel" id="p-adventure">
+<button id="btn-pets" style="border-color:#E91E63;color:#E91E63">🐾 PETS</button>
+<button id="btn-quest" style="border-color:#76FF03;color:#76FF03">📜 QUEST</button>
+<button id="btn-training" style="border-color:#FF7043;color:#FF7043">🏋 TRAIN</button>
+<button id="btn-treasure" style="border-color:#FFD54F;color:#FFD54F">🗺 TREASURE</button>
+<button id="btn-daily" style="border-color:#009688;color:#009688">📋 DAILY</button>
+<button id="btn-quests" style="border-color:#00FF8C;color:#00FF8C">🎯 OBJECTIVES</button>
+<button id="btn-chest" style="border-color:#FFC800;color:#FFC800">🎁 DAILY CHEST</button>
+<button id="btn-energy" style="border-color:#66BB6A;color:#66BB6A">⚡ ENERGY</button>
+<button id="btn-craft" style="border-color:#FF9100;color:#FF9100">🔨 CRAFT</button>
+</div>
+
+<div class="panel" id="p-exotic">
+<button id="btn-weather" style="border-color:#FFE24B;color:#FFE24B">⛅ WEATHER</button>
+<button id="btn-whale" style="border-color:#00E5FF;color:#00E5FF">🐋 WHALE</button>
+<button id="btn-rain" style="border-color:#FFE24B;color:#FFE24B">🌧 GOLDEN RAIN</button>
+<button id="btn-golden" style="border-color:#FFE24B;color:#FFE24B">⏳ GOLDEN HOUR</button>
+<button id="btn-sky" style="border-color:#FFC800;color:#FFC800">🏗 SKYSCRAPER</button>
+<button id="btn-ma" style="border-color:#B14BFF;color:#B14BFF">🤝 M&amp;A</button>
+<button id="btn-news" style="border-color:#00E5FF;color:#00E5FF">📰 INSIDER NEWS</button>
+<button id="btn-press" style="border-color:#FFC800;color:#FFC800">📰 PRESS</button>
+<button id="btn-magnates" style="border-color:#FFC800;color:#FFC800">👑 MAGNATES</button>
+<button id="btn-moy" style="border-color:#FFE24B;color:#FFE24B">🏆 MAGNATE/YEAR</button>
+<button onclick="buyGold()" style="border-color:#00AAFF;color:#00AAFF">BUY GOLD</button>
+</div>
+
+<div class="panel" id="p-progress">
+<button id="btn-season" style="border-color:#FFC800;color:#FFC800">SEASON</button>
+<button id="btn-finale" style="border-color:#FFC800;color:#FFC800">SEASON FINALE</button>
+<button id="btn-rewards" style="border-color:#FFC800;color:#FFC800">SEASON REWARDS</button>
+<button id="btn-ascend" style="border-color:#FF6BD6;color:#FF6BD6">ASCEND</button>
+<button id="btn-passive" style="border-color:#FFC800;color:#FFC800">PASSIVE TREE</button>
+<button id="btn-tour" style="border-color:#00E5FF;color:#00E5FF">TOWER TOUR</button>
+<button id="btn-achieve" style="border-color:#FFC800;color:#FFC800">🏅 BADGES</button>
+<button id="btn-badges" style="border-color:#00FF8C;color:#00FF8C">🏅 BADGES</button>
+<button id="btn-snap" style="border-color:#00FF8C;color:#00FF8C">📷 SNAPSHOT</button>
+</div>
+</div>
+
+<script>
+function showCat(cat){
+    document.querySelectorAll('.tab').forEach(t=>{t.classList.toggle('active',t.dataset.cat===cat)});
+    document.querySelectorAll('.panel').forEach(p=>{p.classList.remove('active')});
+    const p=document.getElementById('p-'+cat);
+    if(p){p.classList.add('active');p.style.transform='translateY(-12px) scale(.97)';p.style.opacity='0';
+        requestAnimationFrame(()=>{p.style.transition='transform .35s cubic-bezier(.2,.9,.3,1.1),opacity .25s ease';
+        p.style.transform='translateY(0) scale(1)';p.style.opacity='1';});}
+}
+window._showCat=showCat;
+</script>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
 <div id="overlay"></div>
 <div id="custom-panel" style="display:none;position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#0a0b16;border:1px solid #B14BFF;border-radius:6px;padding:14px 18px;z-index:50;font-size:11px;color:#ccc;box-shadow:0 0 24px #B14BFF44">
