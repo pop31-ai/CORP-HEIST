@@ -3115,31 +3115,80 @@ async function drawChartNow(){
     drawCandles(cv,d.candles);
 }
 // ---- PRESS: PHI micro-magazines (PDF) ----
+// ===== PHI PRESS — web edition on canvas (no PDF; print + PNG in-browser) =====
+// Each cover is a deterministic vector "hero scene" drawn straight onto a
+// <canvas> (the JS twins of press/hero_scenes.py). Readers Print or save PNG;
+// the print-grade PDF stays an offline/CI artifact only.
+const PressScenes=(function(){
+    const GOLD='#FFC800',GOLD_LT='#FFE24B',AMBER='#FFB020',GREEN='#00FF8C',
+          RED='#FF3B3B',CYAN='#00E5FF',PURPLE='#B14BFF',GREY='#9696A8',
+          WHITE='#E6E8F0',INK='#0A0B16',PANEL2='#16182C';
+    const PHI=1.618033988749,INV=0.6180339887,TAU=Math.PI*2;
+    function rng(seed){let s=(seed*2654435761+1013904223)>>>0;return function(){s=(1103515245*s+12345)&0x7FFFFFFF;return s/0x7FFFFFFF;};}
+    function frame(g,x,y,w,h,border){
+        const grad=g.createLinearGradient(0,y,0,y+h);grad.addColorStop(0,INK);grad.addColorStop(1,PANEL2);
+        g.fillStyle=grad;g.fillRect(x,y,w,h);
+        g.strokeStyle=border||GOLD;g.lineWidth=1.2;g.strokeRect(x+0.5,y+0.5,w-1,h-1);
+    }
+    function stars(g,x,y,w,h,seed,n){const r=rng(seed);g.globalAlpha=0.5;g.fillStyle=WHITE;for(let i=0;i<(n||40);i++){g.beginPath();g.arc(x+r()*w,y+r()*h,0.4+r()*1.0,0,TAU);g.fill();}g.globalAlpha=1;}
+    function cap(g,x,y,kicker,title,sub,col){g.textAlign='left';g.fillStyle=col||GOLD;g.font='bold 8px monospace';g.fillText(kicker,x+8,y+12);g.fillStyle=GOLD_LT;g.font='bold 13px monospace';g.fillText(title,x+8,y+27);if(sub){g.fillStyle=GREY;g.font='8px monospace';g.fillText(sub,x+8,y+40);}}
+    function spiral(g,cx,cy,turns,scale,col,a){g.globalAlpha=a||0.5;g.strokeStyle=col;g.lineWidth=1;g.beginPath();for(let t=0;t<turns*TAU;t+=0.12){const r=scale*Math.pow(PHI,t/(Math.PI/2)*0.5);const px=cx+Math.cos(t)*r,py=cy+Math.sin(t)*r;t===0?g.moveTo(px,py):g.lineTo(px,py);}g.stroke();g.globalAlpha=1;}
+    function crown(g,cx,cy,r,col){col=col||GOLD;g.fillStyle=col;g.beginPath();g.moveTo(cx-r,cy);g.lineTo(cx-r,cy-r*0.5);g.lineTo(cx-r*0.5,cy-r*0.1);g.lineTo(cx,cy-r*0.8);g.lineTo(cx+r*0.5,cy-r*0.1);g.lineTo(cx+r,cy-r*0.5);g.lineTo(cx+r,cy);g.closePath();g.fill();g.fillStyle=RED;g.beginPath();g.arc(cx,cy-r*0.25,r*0.14,0,TAU);g.fill();}
+    function poly(g,pts,stroke,fill,lw){g.beginPath();pts.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.closePath();if(fill){g.fillStyle=fill;g.fill();}if(stroke){g.strokeStyle=stroke;g.lineWidth=lw||1;g.stroke();}}
+    const S={};
+    S.market_galaxy=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h);stars(g,x,y,w,h,seed||1,60);const cx=x+w/2,cy=y+h/2,mr=Math.min(w,h)*0.42;spiral(g,cx,cy,3.2,mr/14,GOLD,0.5);spiral(g,cx,cy,2.8,mr/17,AMBER,0.3);const r=rng(seed||1);let rad=mr;const tk=['ALPHA','BETA','GAMMA','DELTA','OMEGA'];tk.forEach((t,i)=>{g.globalAlpha=0.3;g.strokeStyle=GOLD_LT;g.lineWidth=0.5;g.beginPath();g.arc(cx,cy,rad,0,TAU);g.stroke();g.globalAlpha=1;const a=r()*TAU,px=cx+Math.cos(a)*rad,py=cy+Math.sin(a)*rad,pr=4+(5-i)*0.7;g.fillStyle=AMBER;g.beginPath();g.arc(px,py,pr+1.5,0,TAU);g.fill();g.fillStyle=GOLD_LT;g.beginPath();g.arc(px,py,pr,0,TAU);g.fill();g.fillStyle=WHITE;g.font='6px monospace';g.textAlign='center';g.fillText(t,px,py-pr-4);rad*=INV;});g.fillStyle=WHITE;g.beginPath();g.arc(cx,cy,6,0,TAU);g.fill();g.fillStyle=GOLD;g.beginPath();g.arc(cx,cy,3.5,0,TAU);g.fill();cap(g,x,y,w,'PHI-РЫНОК','ГАЛАКТИКА ТИКЕРОВ','1.618 правит всем',GOLD);};
+    S.sector_prism=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h);const ax=x+w*0.22,ay=y+h*0.5;g.globalAlpha=0.7;g.strokeStyle=WHITE;g.lineWidth=2;g.beginPath();g.moveTo(x+4,ay);g.lineTo(ax,ay);g.stroke();g.globalAlpha=1;poly(g,[[ax,ay+30],[ax,ay-30],[ax+42,ay]],GOLD_LT,PANEL2,1.2);const secs=[['TECH',CYAN],['FINANCE',GOLD],['ENERGY',RED],['LUXURY',PURPLE]];const sx=ax+42,spread=h*0.66;secs.forEach((s,i)=>{const ty=ay+spread*(0.5-(i+0.5)/secs.length),ex=x+w-12;g.globalAlpha=0.85;g.strokeStyle=s[1];g.lineWidth=1.6;g.beginPath();g.moveTo(sx,ay);g.lineTo(ex-70,ty);g.stroke();g.globalAlpha=1;g.fillStyle=s[1];g.fillRect(ex-70,ty-6,60,12);g.fillStyle=INK;g.font='bold 7px monospace';g.textAlign='left';g.fillText(s[0],ex-66,ty+3);});cap(g,x,y,w,'СЕКТОРА','СПЕКТР РЫНКА','четыре грани',GOLD);};
+    S.short_storm=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h,RED);const r=rng(seed||3),n=16,bw=(w-40)/n;let val=y+h*0.82;for(let i=0;i<n;i++){const drop=(0.35+r()*0.9)*(h*0.045),nv=Math.max(y+h*0.22,val-drop),bx=x+20+i*bw+bw*0.5,col=nv<val?RED:GREEN;g.strokeStyle=col;g.lineWidth=1;g.beginPath();g.moveTo(bx,val);g.lineTo(bx,nv);g.stroke();g.fillStyle=col;g.fillRect(bx-bw*0.28,Math.min(val,nv),bw*0.56,Math.max(1.2,Math.abs(val-nv)));val=nv;}g.globalAlpha=0.9;g.strokeStyle=GOLD_LT;g.lineWidth=2.2;poly(g,[[x+w*0.30,y+h*0.90],[x+w*0.46,y+h*0.56],[x+w*0.38,y+h*0.54],[x+w*0.58,y+h*0.18]],null,null);g.beginPath();g.moveTo(x+w*0.30,y+h*0.90);g.lineTo(x+w*0.46,y+h*0.56);g.lineTo(x+w*0.38,y+h*0.54);g.lineTo(x+w*0.58,y+h*0.18);g.stroke();g.globalAlpha=1;g.fillStyle=GOLD;g.font='bold 12px monospace';g.textAlign='center';g.fillText('СКВИЗ',x+w*0.5,y+h*0.5);cap(g,x,y,w,'ШОРТЫ','ШТОРМ МЕДВЕДЕЙ','вход × PHI',RED);};
+    S.cb_temple=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h);const cx=x+w*0.5,by=y+h*0.20,ry=y+h*0.66,span=w*0.62;poly(g,[[cx-span*0.5-10,ry],[cx+span*0.5+10,ry],[cx,ry+h*0.20]],GOLD_LT,PANEL2,1.4);g.fillStyle=AMBER;g.fillRect(cx-span*0.5-14,ry-8,span+28,8);for(let i=0;i<5;i++){const colx=cx-span*0.5+span*i/4;g.fillStyle=PANEL2;g.fillRect(colx-5,by,10,ry-8-by);g.strokeStyle=GOLD;g.lineWidth=0.6;g.strokeRect(colx-5,by,10,ry-8-by);}g.fillStyle=AMBER;g.fillRect(cx-span*0.5-14,by-8,span+28,8);const px=cx,py=ry+h*0.16,ang=Math.PI/180*28,ln=h*0.30,ex=px+Math.sin(ang)*ln,ey=py-Math.cos(ang)*ln;g.strokeStyle=GOLD_LT;g.lineWidth=1.4;g.beginPath();g.moveTo(px,py);g.lineTo(ex,ey);g.stroke();g.fillStyle=GOLD;g.beginPath();g.arc(ex,ey,6,0,TAU);g.fill();g.fillStyle=WHITE;g.beginPath();g.arc(px,py,2.5,0,TAU);g.fill();g.fillStyle=GOLD_LT;g.font='6px monospace';g.textAlign='center';g.fillText('PHI',ex,ey-10);cap(g,x,y,w,'ЦЕНТРОБАНК','ХРАМ СТАВКИ','маятник 1/PHI..PHI',GOLD);};
+    S.magnate_hall=(g,x,y,w,h,seed,names)=>{frame(g,x,y,w,h);names=names||['I','II','III','IV','V'];const n=names.length,slot=(w-24)/n,floor=y+h*0.16;names.forEach((nm,i)=>{const bx=x+12+slot*i+slot*0.5,ph=h*(0.28+0.16*Math.pow(INV,i));g.fillStyle=PANEL2;g.fillRect(bx-slot*0.32,floor,slot*0.64,10);g.strokeStyle=GOLD;g.lineWidth=0.6;g.strokeRect(bx-slot*0.32,floor,slot*0.64,10);const hy=floor+10+ph;g.fillStyle=i===0?GOLD_LT:AMBER;g.beginPath();g.arc(bx,hy,slot*0.14,0,TAU);g.fill();poly(g,[[bx-slot*0.26,floor+10],[bx-slot*0.16,hy-slot*0.05],[bx+slot*0.16,hy-slot*0.05],[bx+slot*0.26,floor+10]],i===0?GOLD:'#3C3E54',PANEL2,0.8);if(i===0)crown(g,bx,hy+slot*0.16,slot*0.1);g.fillStyle=i===0?WHITE:GREY;g.font='7px monospace';g.textAlign='center';g.fillText((''+nm).slice(0,10),bx,floor-4);});cap(g,x,y,w,'МАГНАТЫ','ЗАЛ СЛАВЫ','пять капиталов',GOLD);};
+    S.crown_throne=(g,x,y,w,h,seed,name,worth)=>{frame(g,x,y,w,h);const cx=x+w*0.5,cy=y+h*0.56;g.globalAlpha=0.5;for(let k=0;k<24;k++){const a=TAU*k/24,rr=Math.min(w,h)*(0.30+0.14*(k%2));g.strokeStyle=k%2?GOLD:AMBER;g.lineWidth=0.6;g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+Math.cos(a)*rr,cy+Math.sin(a)*rr);g.stroke();}g.globalAlpha=1;for(const side of[-1,1])for(let k=0;k<7;k++){const t=k/6,a=Math.PI/180*(210+side*(40+t*70)),lr=Math.min(w,h)*0.30,lx=cx+Math.cos(a)*lr,ly=cy+Math.sin(a)*lr-6;g.fillStyle=GREEN;g.beginPath();g.arc(lx,ly,3.4-t*1.2,0,TAU);g.fill();}crown(g,cx,cy,Math.min(w,h)*0.15);g.fillStyle=GOLD;g.font='bold 10px monospace';g.textAlign='center';g.fillText('МАГНАТ ГОДА',cx,y+h*0.30);if(name){g.fillStyle=GOLD_LT;g.font='bold 13px monospace';g.fillText((''+name).slice(0,18),cx,y+h*0.20);}if(worth){g.fillStyle=WHITE;g.font='8px monospace';g.fillText('капитал: '+fmt(worth),cx,y+h*0.11);}cap(g,x,y,w,'МАГНАТ ГОДА','КОРОНА','',GOLD);};
+    S.derivatives_web=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h);const r=rng(seed||7),cx=x+w*0.5,cy=y+h*0.5,rings=[Math.min(w,h)*0.20,Math.min(w,h)*0.34,Math.min(w,h)*0.46],cnts=[5,8,11],cols=[CYAN,GOLD,PURPLE],nodes=[];rings.forEach((rad,ri)=>{for(let k=0;k<cnts[ri];k++){const a=TAU*k/cnts[ri]+r()*0.3;nodes.push([cx+Math.cos(a)*rad,cy+Math.sin(a)*rad,ri]);}});g.globalAlpha=0.28;nodes.forEach(nd=>{g.strokeStyle=cols[nd[2]];g.lineWidth=0.4;g.beginPath();g.moveTo(cx,cy);g.lineTo(nd[0],nd[1]);g.stroke();});g.globalAlpha=1;nodes.forEach(nd=>{g.fillStyle=cols[nd[2]];g.beginPath();g.arc(nd[0],nd[1],2.4,0,TAU);g.fill();});g.fillStyle=GOLD;g.beginPath();g.arc(cx,cy,8,0,TAU);g.fill();g.fillStyle=WHITE;g.beginPath();g.arc(cx,cy,4,0,TAU);g.fill();cap(g,x,y,w,'ДЕРИВАТИВЫ','СЕТЬ КОНТРАКТОВ','call / put / future',CYAN);};
+    S.bot_swarm=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h,GREEN);const r=rng(seed||8),cols=6,rows=3,pts=[];for(let j=0;j<rows;j++)for(let i=0;i<cols;i++){let px=x+24+(w-48)*i/(cols-1),py=y+h*0.28+(h*0.44)*j/(rows-1);px+=(r()-0.5)*10;py+=(r()-0.5)*8;pts.push([px,py]);}g.globalAlpha=0.22;g.strokeStyle=GREEN;g.lineWidth=0.4;for(let j=0;j<rows;j++)for(let i=0;i<cols;i++){const a=pts[j*cols+i];if(i+1<cols){const b=pts[j*cols+i+1];g.beginPath();g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.stroke();}if(j+1<rows){const b=pts[(j+1)*cols+i];g.beginPath();g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.stroke();}}g.globalAlpha=1;pts.forEach(p=>{const on=r()>0.4;g.beginPath();for(let s=0;s<6;s++){const a=Math.PI/6+TAU*s/6,vx=p[0]+Math.cos(a)*5.5,vy=p[1]+Math.sin(a)*5.5;s?g.lineTo(vx,vy):g.moveTo(vx,vy);}g.closePath();g.fillStyle=on?GREEN:PANEL2;g.fill();g.strokeStyle=GREEN;g.lineWidth=0.6;g.stroke();g.fillStyle=on?INK:GREEN;g.beginPath();g.arc(p[0],p[1],1.6,0,TAU);g.fill();});cap(g,x,y,w,'БОТЫ','РОЙ АЛГОРИТМОВ','армия ботов',GREEN);};
+    S.guild_towers=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h);stars(g,x,y+h*0.4,w,h*0.6,seed||9,36);const r=rng(seed||9),base=y+h*0.14,n=7,tw=(w-20)/n;for(let i=0;i<n;i++){const bx=x+10+i*tw;let th=h*(0.30+0.55*Math.abs(Math.sin(i*PHI)));th=Math.min(th,h*0.80);g.fillStyle=PANEL2;g.fillRect(bx+2,base,tw-4,th);g.strokeStyle=GOLD;g.lineWidth=0.6;g.strokeRect(bx+2,base,tw-4,th);g.globalAlpha=0.7;const rowsn=Math.floor(th/9);for(let rr=0;rr<rowsn;rr++)for(let cc=0;cc<2;cc++)if(r()>0.45){g.fillStyle=GOLD_LT;g.fillRect(bx+6+cc*(tw-12)*0.6,base+5+rr*9,2.2,3);}g.globalAlpha=1;if(th>h*0.6){g.strokeStyle=GOLD;g.lineWidth=0.8;g.beginPath();g.moveTo(bx+tw*0.5,base+th);g.lineTo(bx+tw*0.5,base+th+8);g.stroke();g.fillStyle=RED;g.beginPath();g.arc(bx+tw*0.5,base+th+9,2,0,TAU);g.fill();}}g.fillStyle=AMBER;g.fillRect(x,base-4,w,4);cap(g,x,y,w,'ГИЛЬДИИ','БАШНИ КОРПОРАЦИЙ','кто владеет горизонтом',GOLD);};
+    S.market_maker=(g,x,y,w,h,seed)=>{frame(g,x,y,w,h);const r=rng(seed||10),lx=x+16,lw=w*0.34,mid=y+h*0.5,rows=6,rh=(h*0.62)/(rows*2);for(let k=0;k<rows;k++){g.fillStyle=RED;g.fillRect(lx,mid+rh*(k+1),lw*(0.4+r()*0.6),rh-1);g.fillStyle=GREEN;g.fillRect(lx,mid-rh*(k+1),lw*(0.4+r()*0.6),rh-1);}g.strokeStyle=GOLD_LT;g.lineWidth=1;g.beginPath();g.moveTo(lx,mid);g.lineTo(lx+lw,mid);g.stroke();const sx=x+w*0.72,sy=y+h*0.66,beam=w*0.20;g.strokeStyle=GOLD;g.lineWidth=1.4;g.beginPath();g.moveTo(sx,y+h*0.14);g.lineTo(sx,sy);g.stroke();g.strokeStyle=GOLD_LT;g.lineWidth=1.6;g.beginPath();g.moveTo(sx-beam*0.5,sy);g.lineTo(sx+beam*0.5,sy);g.stroke();for(const sd of[[-1,GREEN,'BID'],[1,RED,'ASK']]){const px=sx+sd[0]*beam*0.5;g.strokeStyle=GREY;g.lineWidth=0.5;for(const ch of[-6,6]){g.beginPath();g.moveTo(px,sy);g.lineTo(px+ch,sy-16);g.stroke();}poly(g,[[px-9,sy-16],[px+9,sy-16],[px+5,sy-24],[px-5,sy-24]],sd[1],PANEL2,0.8);}g.fillStyle=GOLD_LT;g.beginPath();g.arc(sx,y+h*0.14,3,0,TAU);g.fill();cap(g,x,y,w,'МАРКЕТ-МЕЙКИНГ','СТАКАН И ВЕСЫ','золотой спред',GOLD);};
+    return {draw(id,g,x,y,w,h,seed,a,b){const fn=S[id]||S.market_galaxy;fn(g,x,y,w,h,seed,a,b);}};
+})();
+
+function pressPrintCanvas(cv,title){
+    const url=cv.toDataURL('image/png');
+    const wnd=window.open('','_blank');
+    if(!wnd){showOverlay('Печать','разрешите всплывающие окна');return;}
+    wnd.document.write('<html><head><title>'+title+'</title><style>@media print{@page{margin:8mm}}body{margin:0;background:#05060d;text-align:center}img{max-width:100%}</style></head><body><img src="'+url+'" onload="setTimeout(function(){window.print();},200)"></body></html>');
+    wnd.document.close();
+}
+function pressDownloadCanvas(cv,name){const a=document.createElement('a');a.download='corp-heist-press-'+name+'.png';a.href=cv.toDataURL('image/png');document.body.appendChild(a);a.click();a.remove();try{SND.click();}catch(e){}}
+
 async function showPress(){
     try{
         const d=await fetch(API+'/api/press').then(r=>r.json());
-        let h='<b>📰 PHI PRESS — срочные выпуски</b>'+
-              '<div style="color:#888;font-size:9px;margin-bottom:4px">Микрожурналы CORP HEIST · золотое сечение</div>';
-        if(d.almanac){
-            const aon=d.almanac.available;
-            h+='<div style="border:1px solid #FFC800;border-radius:4px;padding:5px 6px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,200,0,0.06)">'+
-               '<div><span style="color:#FFE24B;font-weight:bold">★ '+d.almanac.title+'</span>'+
-               '<div style="color:#888;font-size:8px">'+d.almanac.subtitle+' · все 10 выпусков</div></div>'+
-               (aon?'<a href="'+API+d.almanac.url+'" target="_blank" style="color:#FFC800;text-decoration:none;font-size:10px;border:1px solid #FFC800;border-radius:3px;padding:2px 8px">PDF</a>'
-                   :'<span style="color:#555;font-size:9px">—</span>')+
-               '</div>';
-        }
-        for(const it of d.issues){
-            const on=it.available;
-            h+='<div style="border-top:1px solid #1a1a2e;padding:4px 0;display:flex;justify-content:space-between;align-items:center">'+
-               '<div><span style="color:#FFC800;font-family:monospace">#'+it.no+'</span> '+
-               '<span style="color:'+(on?'#FFE24B':'#555')+'">'+it.title+'</span>'+
-               '<div style="color:#666;font-size:8px">'+it.subtitle+'</div></div>'+
-               (on?'<a href="'+API+it.url+'" target="_blank" style="color:#00FF8C;text-decoration:none;font-size:10px;border:1px solid #00FF8C;border-radius:3px;padding:2px 8px">PDF</a>'
-                  :'<span style="color:#555;font-size:9px">—</span>')+
-               '</div>';
-        }
-        openPanel(h,26000);
+        let h='<b>📰 PHI PRESS — веб-издание</b>'+
+              '<div style="color:#888;font-size:9px;margin-bottom:6px">Микрожурналы CORP HEIST · рисуется на canvas · печать и PNG в браузере</div>'+
+              '<div id="press-list"></div>';
+        openPanel(h,60000);
+        const list=document.getElementById('press-list');
+        if(!list)return;
+        const issues=(d.issues||[]).slice();
+        issues.forEach((it,idx)=>{
+            const row=document.createElement('div');
+            row.style.cssText='border-top:1px solid #1a1a2e;padding:6px 0;display:flex;gap:8px;align-items:center';
+            const cv=document.createElement('canvas');cv.width=200;cv.height=124;
+            cv.style.cssText='border-radius:4px;background:#05060d;flex:0 0 auto;width:200px;height:124px';
+            const g=cv.getContext('2d');
+            PressScenes.draw(it.scene,g,0,0,200,124,idx+1);
+            const meta=document.createElement('div');meta.style.cssText='flex:1 1 auto;min-width:0';
+            meta.innerHTML='<div><span style="color:#FFC800;font-family:monospace">#'+it.no+'</span> '+
+                '<span style="color:#FFE24B;font-weight:bold">'+it.title+'</span></div>'+
+                '<div style="color:#888;font-size:8px;margin:2px 0 6px">'+it.subtitle+'</div>';
+            const bPng=document.createElement('button');bPng.textContent='PNG';
+            bPng.style.cssText='background:#0a1a10;color:#00FF8C;border:1px solid #00FF8C;font-size:9px;padding:2px 8px;margin-right:4px;cursor:pointer;font-family:monospace';
+            bPng.onclick=()=>pressDownloadCanvas(cv,it.no);
+            const bPr=document.createElement('button');bPr.textContent='ПЕЧАТЬ';
+            bPr.style.cssText='background:#181400;color:#FFC800;border:1px solid #FFC800;font-size:9px;padding:2px 8px;cursor:pointer;font-family:monospace';
+            bPr.onclick=()=>pressPrintCanvas(cv,'CORP HEIST #'+it.no+' — '+it.title);
+            meta.appendChild(bPng);meta.appendChild(bPr);
+            row.appendChild(cv);row.appendChild(meta);list.appendChild(row);
+        });
+        if(!issues.length)list.innerHTML='<div style="color:#555">нет выпусков</div>';
     }catch(e){showOverlay('Press','offline');}
 }
 // ---- MARKET SECTORS (phi-sectors + rotation) ----

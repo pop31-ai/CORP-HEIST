@@ -377,189 +377,43 @@ def build_card_html():
 async def handle_card_index(request):
     return web.Response(text=build_card_html(), content_type="text/html")
 
-# ---- PRESS: PHI micro-magazines (PDF) ----
-PRESS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "press", "out")
+# ---- PRESS: PHI micro-magazines (canvas-only; NO PDF on the site) ----
+# The web edition is rendered client-side on <canvas> (hero scenes ported to
+# JS), with browser Print + PNG export. No PDF is served or generated on the
+# live server -- the print-grade PDF press is an offline / CI artifact only.
+# This keeps the server light (no subprocess PDF builds, no file streaming),
+# which matters under the ~30-connection ceiling.
 PRESS_META = [
-    ("01", "PHI-РЫНОК", "Запуск Golden-500", "vypusk_01_phi_rynok.pdf"),
-    ("02", "СЕКТОРА", "Ротация TECH → LUXURY", "vypusk_02_sektora.pdf"),
-    ("03", "ШОРТЫ", "Анатомия сквиза", "vypusk_03_shorty.pdf"),
-    ("04", "ЦЕНТРОБАНК", "Цикл ставки PHI", "vypusk_04_centrobank.pdf"),
-    ("05", "МАГНАТЫ", "Рейтинг богатства", "vypusk_05_magnaty.pdf"),
-    ("06", "МАГНАТ ГОДА", "Коронация сезона", "vypusk_06_magnat_goda.pdf"),
-    ("07", "ДЕРИВАТИВЫ", "Опционы на PHI-страйки", "vypusk_07_derivativy.pdf"),
-    ("08", "БОТЫ", "Живая лента рынка", "vypusk_08_boty.pdf"),
-    ("09", "ГИЛЬДИИ", "Небоскрёбы и войны", "vypusk_09_gildii.pdf"),
-    ("10", "МАРКЕТ-МЕЙКИНГ", "Спред на PHI", "vypusk_10_market_meiking.pdf"),
+    ("01", "PHI-РЫНОК", "Запуск Golden-500", "market_galaxy"),
+    ("02", "СЕКТОРА", "Ротация TECH → LUXURY", "sector_prism"),
+    ("03", "ШОРТЫ", "Анатомия сквиза", "short_storm"),
+    ("04", "ЦЕНТРОБАНК", "Цикл ставки PHI", "cb_temple"),
+    ("05", "МАГНАТЫ", "Рейтинг богатства", "magnate_hall"),
+    ("06", "МАГНАТ ГОДА", "Коронация сезона", "crown_throne"),
+    ("07", "ДЕРИВАТИВЫ", "Опционы на PHI-страйки", "derivatives_web"),
+    ("08", "БОТЫ", "Живая лента рынка", "bot_swarm"),
+    ("09", "ГИЛЬДИИ", "Небоскрёбы и войны", "guild_towers"),
+    ("10", "МАРКЕТ-МЕЙКИНГ", "Спред на PHI", "market_maker"),
 ]
 
-PRESS_ALMANAC = "almanac_full.pdf"
-
 async def handle_press_index(request):
-    """JSON list of available issues (for the client PRESS panel)."""
-    items = []
-    for no, title, sub, fname in PRESS_META:
-        path = os.path.join(PRESS_DIR, fname)
-        items.append({"no": no, "title": title, "subtitle": sub,
-                      "url": "/press/%s.pdf" % no,
-                      "available": os.path.exists(path)})
-    alm_path = os.path.join(PRESS_DIR, PRESS_ALMANAC)
+    """JSON list of issues for the client PRESS panel.
+
+    No PDF urls: the client draws each cover on <canvas> using the `scene`
+    key (a hero-scene id), then offers Print / PNG. `available` is always
+    true because rendering happens in the browser, not from a server file.
+    """
+    items = [{"no": no, "title": title, "subtitle": sub, "scene": scene,
+              "available": True}
+             for no, title, sub, scene in PRESS_META]
     body = json.dumps({
         "issues": items,
         "almanac": {"title": "АЛЬМАНАХ", "subtitle": "Полное собрание",
-                    "url": "/press/almanac.pdf",
-                    "available": os.path.exists(alm_path)},
-        "brochure": {"title": "БРОШЮРА УСПЕХА",
-                     "subtitle": "Личный глянцевый экземпляр",
-                     "url": "/press/me/{uid}.pdf", "available": True},
-    }).encode()
+                    "scene": "market_galaxy", "available": True},
+        "note": "Веб-издание рисуется на canvas. Печать и PNG — в браузере.",
+    }, ensure_ascii=False).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
-
-async def handle_press_almanac(request):
-    """Serve the combined almanac (all 10 issues in one PDF)."""
-    path = os.path.join(PRESS_DIR, PRESS_ALMANAC)
-    if not os.path.exists(path):
-        return web.json_response({"error": "not built"}, status=404)
-    STATE.track(sent=os.path.getsize(path))
-    return web.FileResponse(path, headers={
-        "Content-Type": "application/pdf",
-        "Content-Disposition": 'inline; filename="corp-heist-almanac.pdf"',
-    })
-
-async def handle_press_pdf(request):
-    """Serve one issue PDF by its number (01..10 or 1..10)."""
-    n = request.match_info.get("n", "").zfill(2)
-    match = next((m for m in PRESS_META if m[0] == n), None)
-    if not match:
-        return web.json_response({"error": "no such issue"}, status=404)
-    path = os.path.join(PRESS_DIR, match[3])
-    if not os.path.exists(path):
-        return web.json_response({"error": "not built"}, status=404)
-    STATE.track(sent=os.path.getsize(path))
-    return web.FileResponse(path, headers={
-        "Content-Type": "application/pdf",
-        "Content-Disposition": 'inline; filename="corp-heist-%s.pdf"' % n,
-    })
-
-PRESS_BUILD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "press")
-PRESS_REGEN_HOURS = float(os.environ.get("PRESS_REGEN_HOURS", "6"))
-
-# ---- personal "Brochure of Success" (per-player glossy 2-pager) ----
-BROCH_DIR = os.path.join(PRESS_DIR, "me")
-BROCH_TTL = float(os.environ.get("BROCH_TTL", "300"))  # seconds
-
-def _build_brochure_sync(char, badges, rank, out_path):
-    """Runs in an executor: import lives here to keep startup light."""
-    import sys
-    if PRESS_BUILD_DIR not in sys.path:
-        sys.path.insert(0, PRESS_BUILD_DIR)
-    from brochure import build_brochure
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    return build_brochure(char, badges=badges, rank=rank, out_path=out_path)
-
-async def handle_press_me(request):
-    """Serve a player's personal Brochure of Success as a fresh glossy PDF."""
-    try:
-        uid = int(request.match_info.get("uid", 1000))
-    except (TypeError, ValueError):
-        return web.json_response({"error": "bad uid"}, status=400)
-    c = STATE.chars.get(uid)
-    if not c:
-        return web.json_response({"error": "not found"}, status=404)
-    # sync live stock prices into the snapshot (like /api/char)
-    char = dict(c)
-    char["stocks"] = [dict(s) for s in c.get("stocks", [])]
-    for s in char["stocks"]:
-        ms = next((x for x in STATE.stocks if x["name"] == s["name"]), None)
-        if ms:
-            s["price"], s["delta"] = ms["price"], ms["delta"]
-    char.setdefault("name", "Магнат #%d" % uid)
-    try:
-        badges = trader_badges(STATE, uid)
-    except Exception:
-        badges = None
-    # rank among all players by net worth
-    ranked = sorted(STATE.chars.values(), key=lambda x: -x.get("net_worth", 0))
-    rank = next((i + 1 for i, x in enumerate(ranked)
-                 if x.get("user_id") == uid), None)
-
-    out_path = os.path.join(BROCH_DIR, "%d.pdf" % uid)
-    fresh = (os.path.exists(out_path)
-             and (time.time() - os.path.getmtime(out_path)) < BROCH_TTL)
-    if not fresh:
-        loop = asyncio.get_event_loop()
-        try:
-            await loop.run_in_executor(
-                None, _build_brochure_sync, char, badges, rank, out_path)
-        except Exception as e:
-            log.warning("brochure build failed for %d: %s", uid, e)
-            if not os.path.exists(out_path):
-                return web.json_response(
-                    {"error": "build failed", "detail": str(e)}, status=500)
-    STATE.track(sent=os.path.getsize(out_path))
-    return web.FileResponse(out_path, headers={
-        "Content-Type": "application/pdf",
-        "Content-Disposition": 'inline; filename="brochure-%d.pdf"' % uid,
-    })
-
-def _press_pdfs_present():
-    if not os.path.isdir(PRESS_DIR):
-        return False
-    return all(os.path.exists(os.path.join(PRESS_DIR, m[3])) for m in PRESS_META)
-
-async def press_bootstrap():
-    """If no PDFs exist yet (fresh checkout), build a synthetic set immediately
-    so /press works from second one; the live regen loop refines them later."""
-    if _press_pdfs_present():
-        return
-    log.info("press: no PDFs found, building initial synthetic set")
-    try:
-        env = dict(os.environ)
-        env["PRESS_SYNTH"] = "1"  # deterministic, no server needed
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "build_issues.py",
-            cwd=PRESS_BUILD_DIR, env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        out, _ = await proc.communicate()
-        if proc.returncode == 0:
-            log.info("press: initial synthetic set built")
-        else:
-            log.warning("press: bootstrap build failed rc=%s: %s",
-                        proc.returncode, (out or b"")[-300:])
-    except Exception as e:
-        log.warning("press: bootstrap error: %s", e)
-
-async def press_regen_loop():
-    """Rebuild PHI PRESS PDFs periodically from live server data.
-
-    Runs build_issues.py as a subprocess with CORP_HEIST_API pointing at this
-    server; on any failure the previously built PDFs are kept untouched.
-    """
-    await press_bootstrap()
-    await asyncio.sleep(30)  # let the server bind first (live data available)
-    interval = max(PRESS_REGEN_HOURS, 0.05) * 3600.0
-    while True:
-        try:
-            env = dict(os.environ)
-            env["CORP_HEIST_API"] = "http://127.0.0.1:%d" % CMD_PORT
-            env.pop("PRESS_SYNTH", None)  # prefer live data
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "build_issues.py",
-                cwd=PRESS_BUILD_DIR, env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            out, _ = await proc.communicate()
-            if proc.returncode == 0:
-                log.info("press: regenerated PDFs (live data)")
-            else:
-                log.warning("press: regen failed rc=%s (kept last good): %s",
-                            proc.returncode, (out or b"")[-300:])
-        except Exception as e:
-            log.warning("press: regen error (kept last good): %s", e)
-        await asyncio.sleep(interval)
 
 async def handle_char(request):
     uid = int(request.match_info.get("uid", 1000))
@@ -1885,12 +1739,9 @@ def make_unified_app():
     # wealth card (selected player)
     app.router.add_get("/card", handle_card_route)
     app.router.add_get("/card/{n}", handle_card_route)
-    # PRESS: PHI micro-magazines
+    # PRESS: PHI micro-magazines (canvas-only; no PDF served)
     app.router.add_get("/api/press", handle_press_index)
     app.router.add_get("/press", handle_press_index)
-    app.router.add_get("/press/almanac.pdf", handle_press_almanac)
-    app.router.add_get("/press/me/{uid}.pdf", handle_press_me)
-    app.router.add_get("/press/{n}.pdf", handle_press_pdf)
     # char API + pulse (shared)
     app.router.add_get("/api/char/{uid}", handle_char)
     app.router.add_get("/api/welfare/{uid}", handle_welfare)
@@ -1997,7 +1848,6 @@ async def main():
     loop.create_task(market_loop())
     loop.create_task(health_loop())
     loop.create_task(autosave_loop())
-    loop.create_task(press_regen_loop())
 
     # single port: dashboard + 30 cards + API all on CMD_PORT (9000)
     await run_port(make_unified_app(), CMD_PORT)
