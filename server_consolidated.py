@@ -515,7 +515,10 @@ def _boost_reward(uid, result, field="reward_gold"):
 # ============================================================
 
 async def handle_dashboard(request):
-    return web.Response(text=DASHBOARD_HTML, content_type="text/html")
+    uid = request.query.get("uid", None)
+    if uid:
+        raise web.HTTPFound("/card/" + uid)
+    return web.Response(text=build_card_html(), content_type="text/html")
 
 _CARD_CACHE = {"mtime": 0, "html": None}
 
@@ -2872,6 +2875,12 @@ async def handle_card_route(request):
     """Serve wealth card HTML, selecting a player via ?uid= or /card/<n>."""
     uid = request.match_info.get("n", request.query.get("uid", "local"))
     # inject selected uid into HTML via query param passthrough
+    return web.Response(text=build_card_html(), content_type="text/html")
+
+async def handle_dashboard(request):
+    uid = request.query.get("uid", None)
+    if uid:
+        raise web.HTTPFound("/card/" + uid)
     return web.Response(text=build_card_html(), content_type="text/html")
 
 def make_dashboard_app():
