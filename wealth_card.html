@@ -93,6 +93,9 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-insurance" style="border-color:#14B8A6;color:#14B8A6">🛡 INSURE</button>
 <button id="btn-artifacts" style="border-color:#A855F7;color:#A855F7">💎 ARTIFACTS</button>
 <button id="btn-insider" style="border-color:#DC2626;color:#DC2626">🕵 INSIDER</button>
+<button id="btn-candle" style="border-color:#FFD700;color:#FFD700">🕯 CANDLE BET</button>
+<button id="btn-cshop" style="border-color:#00FFD4;color:#00FFD4">🛒 CANDLE SHOP</button>
+<button id="btn-csettle" style="border-color:#FF8C00;color:#FF8C00">📋 SETTLE</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 5:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -4275,6 +4278,88 @@ document.getElementById('btn-insider').onclick=async()=>{
             loadPlayer(uid);
         }else{showOverlay('INSIDER',s);}
     }catch(e){showOverlay('INSIDER','offline');}
+};
+
+// ====== PHI CANDLE BET ======
+document.getElementById('btn-candle').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('CANDLE','select player first');return;}
+        const [r0]=await Promise.all([fetch(API+'/api/candle/'+uid)]);
+        const d=await r0.json();
+        let s='🕯 CANDLE BET — Велосипед\n\n';
+        s+='Your sector: '+d.sector+'\n';
+        s+='Candle: '+d.candle_direction.toUpperCase()+' ('+d.candle_delta_pct+'%)\n';
+        s+='Min bet: '+d.min_bet+'g\n';
+        if(d.active){
+            s+='\nActive bet: '+d.bet+'g on '+d.direction.toUpperCase()+'\n';
+            if(confirm(s+'\nReturn bet? (10% fee)')){
+                const r2=await fetch(API+'/pulse/candle/return',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
+                const d2=await r2.json();
+                if(d2.error){showOverlay('CANDLE',d2.error);}else{SND.promo();showOverlay('CANDLE RETURNED','Refund: '+d2.refund+'g\nFee: '+d2.fee+'g');loadPlayer(uid);}
+            }else{showOverlay('CANDLE',s);}
+        }else{
+            const bet=prompt('bet amount ('+d.min_bet+'-100000):','500');if(!bet)return;
+            const dir=confirm('GREEN? (OK=green, Cancel=red)');
+            const r2=await fetch(API+'/pulse/candle/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,bet:parseInt(bet),direction:dir?'green':'red'})});
+            const d2=await r2.json();
+            if(d2.error){showOverlay('CANDLE',d2.error);}else{SND.promo();showOverlay('CANDLE BET','Bet: '+d2.bet+'g on '+d2.direction.toUpperCase()+'\nReturn anytime!');loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('CANDLE','offline');}
+};
+
+// ====== CANDLE SHOP ======
+document.getElementById('btn-cshop').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('SHOP','select player first');return;}
+        const r=await fetch(API+'/api/candleshop/'+uid);const d=await r.json();
+        let s='🛒 CANDLE SHOP — '+d.sector+'\n\n';
+        d.items.forEach((it,i)=>{s+=(i+1)+'. '+it.emoji+' '+it.name+' — '+it.price+'g\n';});
+        if(d.purchased_today.length){
+            s+='\nYour purchases today:\n';
+            d.purchased_today.forEach((p,i)=>{s+='  '+(i+1)+'. '+p.item.name+' ('+p.item.price+'g)\n';});
+        }
+        const choice=prompt(s+'\n\nBuy item # (1-'+d.items.length+', or 0 to exchange):','1');
+        if(!choice||choice==='0')return;
+        const idx=parseInt(choice)-1;
+        if(d.purchased_today.length>0&&confirm('Exchange wrong-sector item instead?')){
+            const ex_idx=prompt('Exchange item # (1-'+d.purchased_today.length+')','1');
+            if(ex_idx){
+                const r2=await fetch(API+'/pulse/candleshop/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_idx:parseInt(ex_idx)-1})});
+                const d2=await r2.json();
+                if(d2.error){showOverlay('EXCHANGE',d2.error);}else{SND.promo();showOverlay('EXCHANGE','Refund: '+d2.refund+'g');loadPlayer(uid);}
+            }
+        }else{
+            const r2=await fetch(API+'/pulse/candleshop/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_idx:idx})});
+            const d2=await r2.json();
+            if(d2.error){showOverlay('SHOP',d2.error);}else{SND.promo();showOverlay('PURCHASED',d2.item.emoji+' '+d2.item.name+'\nPrice: '+d2.item.price+'g');loadPlayer(uid);}
+        }
+    }catch(e){showOverlay('SHOP','offline');}
+};
+
+// ====== CANDLE SETTLEMENT ======
+document.getElementById('btn-csettle').onclick=async()=>{
+    try{
+        const uid=S.uid;if(!uid){showOverlay('SETTLE','select player first');return;}
+        const r=await fetch(API+'/api/candlesettle/'+uid);const d=await r.json();
+        let s='📋 САЛЬДОВАЯ ВЕДОМОСТЬ\n\n';
+        s+='Candle: '+d.candle.direction.toUpperCase()+' ('+d.candle.delta_pct+'%)\n';
+        s+='Actions today: '+d.n_actions+'\n';
+        s+='Happiness bonus: '+d.happiness_bonus+'g\n';
+        s+='Gift: '+d.gift.name+' (free!)\n';
+        if(d.claimed){s+='\nAlready claimed today!';}
+        else if(confirm(s+'\n\nClaim settlement + gift?')){
+            const r2=await fetch(API+'/pulse/candlesettle/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
+            const d2=await r2.json();
+            if(d2.error){showOverlay('SETTLE',d2.error);}else{SND.promo();showOverlay('SETTLEMENT CLAIMED','Bonus: '+d2.happiness_bonus+'g\nGift: '+d2.gift.name_en+'\nValue: '+d2.gift.value+'g');loadPlayer(uid);}
+        }else{
+            if(confirm('Auto-exchange wrong-sector items?')){
+                const r2=await fetch(API+'/pulse/candlesettle/autoex',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
+                const d2=await r2.json();
+                showOverlay('AUTO EXCHANGE','Kept: '+d2.kept.length+' items\nExchanged: '+d2.exchanged.length+' items');
+            }
+            showOverlay('SETTLE',s);
+        }
+    }catch(e){showOverlay('SETTLE','offline');}
 };
 
 render();

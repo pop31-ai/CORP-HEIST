@@ -72,6 +72,7 @@ from golden_econ import (
     WhaleChase, CorpTrial,
     PhiCasino, MarketOracle, PhiArenaRankings,
     CrashInsurance, PhiArtifacts, MarketInsider,
+    PhiCandleBet, CandleShop, CandleSettlement,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -2137,6 +2138,92 @@ async def pulse_insider_settle(request):
     return web.Response(body=body, content_type="application/json")
 
 
+# ---- CANDLE SYSTEM: CandleBet, CandleShop, CandleSettlement ----
+
+async def handle_candle_day(request):
+    body = json.dumps(PhiCandleBet.day_info(STATE)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_candle_status(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(PhiCandleBet.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_candle_buy(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    bet = int(d.get("bet", 100))
+    direction = d.get("direction", "green")
+    result = PhiCandleBet.buy(STATE, uid, bet, direction)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_candle_return(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = PhiCandleBet.return_bet(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_candle_settle(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = PhiCandleBet.settle(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_candle_shop(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(CandleShop.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_candle_shop_buy(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    item_idx = int(d.get("item_idx", 0))
+    result = CandleShop.buy_item(STATE, uid, item_idx)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_candle_exchange(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    item_idx = int(d.get("item_idx", 0))
+    result = CandleShop.exchange_item(STATE, uid, item_idx)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def handle_candle_settlement(request):
+    uid = int(request.match_info.get("uid", 1000))
+    body = json.dumps(CandleSettlement.status(STATE, uid)).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_candle_claim(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = CandleSettlement.claim_settlement(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_candle_auto_exchange(request):
+    d = await request.json()
+    uid = int(d.get("uid", 1000))
+    result = CandleSettlement.auto_exchange_wrong_sector(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 def make_card_app():
     app = web.Application()
     app.router.add_get("/", handle_card_index)
@@ -2324,6 +2411,18 @@ def make_unified_app():
     app.router.add_get("/api/insider/{uid}", handle_insider)
     app.router.add_post("/pulse/insider/bet", pulse_insider_bet)
     app.router.add_post("/pulse/insider/settle", pulse_insider_settle)
+    # ---- CANDLE SYSTEM ----
+    app.router.add_get("/api/candle/day", handle_candle_day)
+    app.router.add_get("/api/candle/{uid}", handle_candle_status)
+    app.router.add_post("/pulse/candle/buy", pulse_candle_buy)
+    app.router.add_post("/pulse/candle/return", pulse_candle_return)
+    app.router.add_post("/pulse/candle/settle", pulse_candle_settle)
+    app.router.add_get("/api/candleshop/{uid}", handle_candle_shop)
+    app.router.add_post("/pulse/candleshop/buy", pulse_candle_shop_buy)
+    app.router.add_post("/pulse/candleshop/exchange", pulse_candle_exchange)
+    app.router.add_get("/api/candlesettle/{uid}", handle_candle_settlement)
+    app.router.add_post("/pulse/candlesettle/claim", pulse_candle_claim)
+    app.router.add_post("/pulse/candlesettle/autoex", pulse_candle_auto_exchange)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")

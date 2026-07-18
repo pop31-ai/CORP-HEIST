@@ -4476,6 +4476,429 @@ class MarketInsider:
         state.mark_dirty(uid)
         return {"results": results, "gold_left": c.get("gold", 0)}
 
+
+# ============================================================
+# PHI CANDLE BET — buy position under candle close, always return
+# ============================================================
+
+class PhiCandleBet:
+    """Свечковая ставка. Игрок ставит на закрытие дневной свечи.
+    Можно вернуть ставку в любой момент (велосипед — едешь и возвращаешься).
+    Минимальный выигрыш guaranteed: вернёшь至少 ставку + phi-бонус.
+    Определение свечи детерминировано по seed дня.
+
+    Direction: 'green' (close > open) or 'red' (close < open).
+    Sector stock chosen from player's home sector (uid % 4)."""
+
+    MIN_BET = 50
+    MAX_BET = 100000
+    RETURN_FEE_PCT = 0.10  # 10% fee on early return (自行车 tax)
+
+    @staticmethod
+    def _day_seed(now=None):
+        t = now or int(time.time())
+        DAY = 86400
+        return t // DAY
+
+    @staticmethod
+    def _candle_result(seed, stock_idx):
+        """Deterministic candle result for given day+stock."""
+        rng = random.Random(seed * 1000 + stock_idx)
+        open_p = rng.randint(100, 5000)
+        # candle delta: up or down by phi-weighted amount
+        delta_pct = rng.uniform(-0.15 * PHI, 0.12 * PHI)
+        close_p = int(open_p * (1 + delta_pct))
+        direction = "green" if close_p >= open_p else "red"
+        return {"open": open_p, "close": close_p, "direction": direction,
+                "delta_pct": round(delta_pct * 100, 2)}
+
+    @staticmethod
+    def day_info(state, now=None):
+        """Get today's candle preview (open known, close predicted)."""
+        seed = PhiCandleBet._day_seed(now)
+        result = PhiCandleBet._candle_result(seed, 0)
+        sectors_info = []
+        for sec_idx in range(4):
+            cr = PhiCandleBet._candle_result(seed, sec_idx)
+            sectors_info.append({
+                "sector": SECTORS[sec_idx]["name"],
+                "emoji": SECTORS[sec_idx]["emoji"],
+                "open": cr["open"], "direction": cr["direction"],
+                "delta_pct": cr["delta_pct"],
+            })
+        return {"day_seed": seed, "main_candle": result, "sectors": sectors_info}
+
+    @staticmethod
+    def status(state, uid, now=None):
+        c = state.chars.get(uid, {})
+        seed = PhiCandleBet._day_seed(now)
+        sector_idx = uid % 4
+        cr = PhiCandleBet._candle_result(seed, sector_idx)
+        bet_data = c.get("_candle_bet", {})
+        active = bet_data.get("day_seed") == seed
+        bet = bet_data.get("bet", 0) if active else 0
+        direction = bet_data.get("direction", "") if active else ""
+        returned = bet_data.get("returned", False)
+        return {
+            "active": active and not returned,
+            "bet": bet,
+            "direction": direction,
+            "sector": SECTORS[sector_idx]["name"],
+            "candle_direction": cr["direction"],
+            "candle_delta_pct": cr["delta_pct"],
+            "day_seed": seed,
+            "returned": returned,
+            "min_bet": PhiCandleBet.MIN_BET,
+            "max_bet": PhiCandleBet.MAX_BET,
+        }
+
+    @staticmethod
+    def buy(state, uid, bet, direction, now=None):
+        """Buy a candle bet. direction='green' or 'red'."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = PhiCandleBet._day_seed(now)
+        # check if already active today
+        existing = c.get("_candle_bet", {})
+        if existing.get("day_seed") == seed and not existing.get("returned", True):
+            return {"error": "already bet today"}
+        bet = max(PhiCandleBet.MIN_BET, min(bet, PhiCandleBet.MAX_BET))
+        if direction not in ("green", "red"):
+            return {"error": "direction must be green or red"}
+        gold = int(c.get("gold", 0))
+        if gold < bet:
+            return {"error": "not enough gold", "have": gold, "need": bet}
+        c["gold"] = gold - bet
+        c["_candle_bet"] = {
+            "day_seed": seed, "bet": bet, "direction": direction,
+            "bought_at": now or int(time.time()),
+            "returned": False, "settled": False,
+        }
+        state.mark_dirty(uid)
+        return {"ok": True, "bet": bet, "direction": direction,
+                "gold_left": c["gold"]}
+
+    @staticmethod
+    def return_bet(state, uid, now=None):
+        """Return (cancel) a candle bet before settlement. You lose RETURN_FEE_PCT."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = PhiCandleBet._day_seed(now)
+        bet_data = c.get("_candle_bet", {})
+        if bet_data.get("day_seed") != seed:
+            return {"error": "no active bet today"}
+        if bet_data.get("returned") or bet_data.get("settled"):
+            return {"error": "already returned/settled"}
+        bet = bet_data["bet"]
+        fee = int(bet * PhiCandleBet.RETURN_FEE_PCT)
+        refund = bet - fee
+        c["gold"] = c.get("gold", 0) + refund
+        c["_candle_bet"]["returned"] = True
+        state.mark_dirty(uid)
+        return {"ok": True, "bet": bet, "fee": fee, "refund": refund,
+                "gold_left": c["gold"]}
+
+    @staticmethod
+    def settle(state, uid, now=None):
+        """Settle at end of day. If player guessed correctly → big win.
+        If wrong → still get minimum return (bicycle principle: always win something)."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = PhiCandleBet._day_seed(now)
+        bet_data = c.get("_candle_bet", {})
+        if bet_data.get("day_seed") != seed:
+            return {"error": "no bet today"}
+        if bet_data.get("settled"):
+            return {"error": "already settled"}
+        bet = bet_data["bet"]
+        direction = bet_data["direction"]
+        sector_idx = uid % 4
+        cr = PhiCandleBet._candle_result(seed, sector_idx)
+        correct = direction == cr["direction"]
+
+        if correct:
+            # correct guess: win PHI * bet * delta
+            prize = int(bet * PHI * (1 + abs(cr["delta_pct"]) / 100))
+        else:
+            # wrong guess: guaranteed minimum return (bicycle principle)
+            prize = int(bet * (1 + 1 / PHI))  # always get back bet + ~61.8%
+
+        c["gold"] = c.get("gold", 0) + prize
+        c["_candle_bet"]["settled"] = True
+        state.mark_dirty(uid)
+        return {"ok": True, "correct": correct, "direction": direction,
+                "candle": cr["direction"], "delta_pct": cr["delta_pct"],
+                "bet": bet, "prize": prize,
+                "won": prize >= bet,
+                "gold_left": c["gold"]}
+
+
+# ============================================================
+# CANDLE SHOP — daily pre-selected items aligned with candle
+# ============================================================
+
+class CandleShop:
+    """Daily магазин под свечку. На старте дня генерируются предметы
+    под сектор свечки. Предметы продаются по спец-ценам.
+    Если купил предмет не из своего сектора — можно обменять.
+    Всё детерминировано по seed дня."""
+
+    ITEMS_PER_DAY = 6
+
+    # item templates per sector
+    TEMPLATES = {
+        "TECH": [
+            {"name": "Нейро-процессор", "name_en": "Neuro CPU", "base": 2000, "emoji": "🧠"},
+            {"name": "Квантовый чип", "name_en": "Quantum Chip", "base": 5000, "emoji": "💎"},
+            {"name": "Фрактальный код", "name_en": "Fractal Code", "base": 1200, "emoji": "🔮"},
+            {"name": "ФИ-сервер", "name_en": "PHI Server", "base": 8000, "emoji": "🖥"},
+            {"name": "Кибер-имплант", "name_en": "Cyber Implant", "base": 3500, "emoji": "⚡"},
+            {"name": "Дрон-разведчик", "name_en": "Scout Drone", "base": 1500, "emoji": "🛸"},
+        ],
+        "FINANCE": [
+            {"name": "Золотой слиток", "name_en": "Gold Bar", "base": 3000, "emoji": "🏅"},
+            {"name": "Облигация PHI", "name_en": "PHI Bond", "base": 1500, "emoji": "📜"},
+            {"name": "Акция кита", "name_en": "Whale Share", "base": 6000, "emoji": "🐋"},
+            {"name": "Дериватив-щит", "name_en": "Derivative Shield", "base": 4000, "emoji": "🛡"},
+            {"name": "Фонд ФИ", "name_en": "PHI Fund", "base": 10000, "emoji": "💰"},
+            {"name": "Биржевой терминал", "name_en": "Trading Terminal", "base": 2000, "emoji": "📊"},
+        ],
+        "ENERGY": [
+            {"name": "ФИ-батарея", "name_en": "PHI Battery", "base": 2500, "emoji": "🔋"},
+            {"name": "Плазменный генератор", "name_en": "Plasma Gen", "base": 7000, "emoji": "⚡"},
+            {"name": "Энерго-щит", "name_en": "Energy Shield", "base": 3000, "emoji": "🛡"},
+            {"name": "Реактор", "name_en": "Reactor", "base": 9000, "emoji": "☢"},
+            {"name": "Солнечный панель", "name_en": "Solar Panel", "base": 1800, "emoji": "☀"},
+            {"name": "ФИ-конденсатор", "name_en": "PHI Capacitor", "base": 4500, "emoji": "🔌"},
+        ],
+        "LUXURY": [
+            {"name": "Диадема ФИ", "name_en": "PHI Crown", "base": 5000, "emoji": "👑"},
+            {"name": "Бриллиантовый ключ", "name_en": "Diamond Key", "base": 8000, "emoji": "💎"},
+            {"name": "Элитный костюм", "name_en": "Elite Suit", "base": 3000, "emoji": "👔"},
+            {"name": "Золотые часы", "name_en": "Golden Watch", "base": 4000, "emoji": "⌚"},
+            {"name": "ФИ-кулон", "name_en": "PHI Pendant", "base": 2000, "emoji": "📿"},
+            {"name": "Фрактальная ваза", "name_en": "Fractal Vase", "base": 6000, "emoji": "🏺"},
+        ],
+    }
+
+    @staticmethod
+    def _day_items(seed, sector_name, now=None):
+        """Generate 6 items for today's shop aligned with sector."""
+        rng = random.Random(seed * 31 + hash(sector_name) % 10000)
+        templates = CandleShop.TEMPLATES.get(sector_name, CandleShop.TEMPLATES["TECH"])
+        chosen = rng.sample(templates, min(CandleShop.ITEMS_PER_DAY, len(templates)))
+        items = []
+        for i, t in enumerate(chosen):
+            # price variance: +/- PHI^0.5 around base
+            variance = 1 + rng.uniform(-1 / PHI, 1 / PHI) * 0.3
+            price = int(t["base"] * variance)
+            # discount for wrong-sector items: 30% off if not player's home sector
+            items.append({
+                "idx": i,
+                "name": t["name"],
+                "name_en": t["name_en"],
+                "price": price,
+                "emoji": t["emoji"],
+                "sector": sector_name,
+            })
+        return items
+
+    @staticmethod
+    def status(state, uid, now=None):
+        seed = PhiCandleBet._day_seed(now)
+        sector_idx = uid % 4
+        sector_name = SECTORS[sector_idx]["name"]
+        items = CandleShop._day_items(seed, sector_name, now)
+        c = state.chars.get(uid, {})
+        purchased = c.get("_candle_shop_bought", [])
+        purchased_today = [p for p in purchased if p.get("day_seed") == seed]
+        return {
+            "sector": sector_name,
+            "items": items,
+            "purchased_today": purchased_today,
+            "day_seed": seed,
+        }
+
+    @staticmethod
+    def buy_item(state, uid, item_idx, now=None):
+        """Buy an item from today's candle shop."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = PhiCandleBet._day_seed(now)
+        sector_idx = uid % 4
+        sector_name = SECTORS[sector_idx]["name"]
+        items = CandleShop._day_items(seed, sector_name, now)
+        if item_idx < 0 or item_idx >= len(items):
+            return {"error": "invalid item index"}
+        item = items[item_idx]
+        gold = int(c.get("gold", 0))
+        if gold < item["price"]:
+            return {"error": "not enough gold", "have": gold, "need": item["price"]}
+        c["gold"] = gold - item["price"]
+        c.setdefault("_candle_shop_bought", []).append({
+            "day_seed": seed, "item": item, "bought_at": now or int(time.time()),
+        })
+        state.mark_dirty(uid)
+        return {"ok": True, "item": item, "gold_left": c["gold"]}
+
+    @staticmethod
+    def exchange_item(state, uid, item_idx, now=None):
+        """Exchange a previously purchased item if it's wrong sector.
+        Player always gets back a percentage (bicycle principle)."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = PhiCandleBet._day_seed(now)
+        purchased = c.get("_candle_shop_bought", [])
+        # find today's purchase at this index
+        today_bought = [p for p in purchased if p.get("day_seed") == seed]
+        if item_idx < 0 or item_idx >= len(today_bought):
+            return {"error": "invalid item index"}
+        bought = today_bought[item_idx]
+        item = bought["item"]
+        # exchange: return item and get back PHI-adjusted price
+        refund = int(item["price"] * (1 + 1 / PHI))
+        c["gold"] = c.get("gold", 0) + refund
+        # remove the item
+        purchased.remove(bought)
+        c["_candle_shop_bought"] = purchased
+        state.mark_dirty(uid)
+        return {"ok": True, "item": item, "refund": refund,
+                "gold_left": c["gold"]}
+
+
+# ============================================================
+# CANDLE SETTLEMENT — end-of-day ledger + gifts
+# ============================================================
+
+class CandleSettlement:
+    """Сальдовая ведомость на конец дня. Подсчитывает:
+    - все сделки игрока за день,
+    - выигрыш/проигрыш относительно свечки,
+    - бонусы/подарки (всегда падают на счета по спец-ценам),
+    - карточка счастья (итоговый бонус)."""
+
+    @staticmethod
+    def _day_actions(state, uid, now=None):
+        """Gather all day actions for player."""
+        seed = PhiCandleBet._day_seed(now)
+        c = state.chars.get(uid, {})
+        actions = []
+        # candle bet
+        cb = c.get("_candle_bet", {})
+        if cb.get("day_seed") == seed:
+            actions.append({
+                "type": "candle_bet", "direction": cb.get("direction"),
+                "bet": cb.get("bet", 0), "settled": cb.get("settled", False),
+            })
+        # shop purchases
+        for p in c.get("_candle_shop_bought", []):
+            if p.get("day_seed") == seed:
+                actions.append({
+                    "type": "shop_buy", "item": p.get("item", {}).get("name"),
+                    "price": p.get("item", {}).get("price", 0),
+                })
+        # trades
+        for t in c.get("_trades_today", []):
+            actions.append({"type": "trade", **t})
+        return actions
+
+    @staticmethod
+    def status(state, uid, now=None):
+        seed = PhiCandleBet._day_seed(now)
+        sector_idx = uid % 4
+        cr = PhiCandleBet._candle_result(seed, sector_idx)
+        actions = CandleSettlement._day_actions(state, uid, now)
+        c = state.chars.get(uid, {})
+        settlement_claimed = c.get(f"_settlement_{seed}", False)
+        # happiness card: bonus = phi * total_actions
+        n_actions = len(actions)
+        happiness_bonus = int(PHI * n_actions * 100)
+        # gift: always lands at special price
+        gift_price = int(happiness_bonus / PHI)
+        return {
+            "candle": cr,
+            "actions": actions,
+            "n_actions": n_actions,
+            "happiness_bonus": happiness_bonus,
+            "gift_price": gift_price,
+            "claimed": settlement_claimed,
+            "day_seed": seed,
+        }
+
+    @staticmethod
+    def claim_settlement(state, uid, now=None):
+        """Claim end-of-day settlement: bonus + guaranteed gift."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = PhiCandleBet._day_seed(now)
+        claim_key = f"_settlement_{seed}"
+        if c.get(claim_key):
+            return {"error": "already claimed"}
+        sector_idx = uid % 4
+        cr = PhiCandleBet._candle_result(seed, sector_idx)
+        actions = CandleSettlement._day_actions(state, uid, now)
+        n_actions = len(actions)
+        # base bonus: phi-scaled by number of actions
+        base_bonus = int(PHI * n_actions * 100)
+        # candle multiplier: if candle was green and player had trades, bonus up
+        if cr["direction"] == "green":
+            base_bonus = int(base_bonus * (1 + abs(cr["delta_pct"]) / 100))
+        # happiness card bonus: always positive (bicycle principle)
+        happiness_bonus = max(base_bonus, int(100 * PHI))
+        # gift: always drops at special price (free or near-free)
+        gift = {
+            "name": "Свечковый подарок",
+            "name_en": "Candle Gift",
+            "special_price": 0,
+            "always_lands": True,
+            "value": int(happiness_bonus * PHI),
+        }
+        c["gold"] = c.get("gold", 0) + happiness_bonus
+        c[claim_key] = True
+        c.setdefault("_candle_gifts", []).append(gift)
+        state.mark_dirty(uid)
+        return {"ok": True, "happiness_bonus": happiness_bonus,
+                "gift": gift, "n_actions": n_actions,
+                "candle": cr["direction"],
+                "gold_left": c["gold"]}
+
+    @staticmethod
+    def auto_exchange_wrong_sector(state, uid, now=None):
+        """Auto-exchange all wrong-sector items at end of day.
+        Items from wrong sector → exchanged for phi-adjusted gold.
+        Items from correct sector → kept as permanent inventory."""
+        c = state.chars.get(uid)
+        if not c:
+            return {"error": "no char"}
+        seed = PhiCandleBet._day_seed(now)
+        sector_idx = uid % 4
+        correct_sector = SECTORS[sector_idx]["name"]
+        purchased = c.get("_candle_shop_bought", [])
+        exchanged = []
+        kept = []
+        remaining = []
+        for p in purchased:
+            if p.get("day_seed") == seed:
+                item = p.get("item", {})
+                if item.get("sector") == correct_sector:
+                    kept.append(item)
+                else:
+                    refund = int(item.get("price", 0) * (1 + 1 / PHI))
+                    c["gold"] = c.get("gold", 0) + refund
+                    exchanged.append({"item": item, "refund": refund})
+            else:
+                remaining.append(p)
+        c["_candle_shop_bought"] = remaining
+        state.mark_dirty(uid)
+        return {"exchanged": exchanged, "kept": kept,
+                "gold_left": c.get("gold", 0)}
+
 if __name__ == "__main__":
     class FakeState:
         def __init__(self):
