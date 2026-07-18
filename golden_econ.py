@@ -1873,6 +1873,172 @@ def cb_status(now=None):
 
 
 # ============================================================
+# IPO (list your own micro-corp; players buy your shares)
+# ============================================================
+
+IPO_TOTAL_SHARES = 500
+IPO_LISTING_FEE = 50_000          # gold to go public
+IPO_DIVIDEND_RATE = (PHI - 1) / (PHI ** 2)   # founder shares earnings w/ holders
+
+def _ipos(state):
+    if not hasattr(state, "ipos"):
+        # ipos[founder_uid] = {"name","price","held":{uid:qty},"raised"}
+        state.ipos = {}
+    return state.ipos
+
+def ipo_price(state, founder_uid):
+    ipo = _ipos(state).get(founder_uid)
+    if not ipo:
+        return 0
+    sold = sum(ipo["held"].values())
+    return int(ipo["base_price"] * (PHI ** (sold / IPO_TOTAL_SHARES * 3)))
+
+def ipo_launch(state, uid, name, base_price, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    ipos = _ipos(state)
+    if str(uid) in ipos:
+        return {"error": "you already went public"}
+    if me.get("gold", 0) < IPO_LISTING_FEE:
+        return {"error": f"listing fee is {IPO_LISTING_FEE} gold"}
+    me["gold"] -= IPO_LISTING_FEE
+    name = (str(name).strip()[:16] or f"{me.get('name','P')}-CO").upper()
+    ipos[str(uid)] = {"founder": uid, "name": name,
+                      "base_price": max(10, int(base_price or 100)),
+                      "held": {}, "raised": 0, "opened": now}
+    state.mark_dirty(uid)
+    return {"ok": True, "ticker": name, "listing_fee": IPO_LISTING_FEE,
+            "total_shares": IPO_TOTAL_SHARES, "gold": me["gold"]}
+
+def ipo_list(state, uid=None):
+    ipos = _ipos(state)
+    out = []
+    for fu, ipo in ipos.items():
+        sold = sum(ipo["held"].values())
+        founder = state.chars.get(int(fu), {})
+        e = {"founder": int(fu),
+             "founder_name": founder.get("name", f"Player_{fu}"),
+             "ticker": ipo["name"], "price": ipo_price(state, int(fu)),
+             "shares_sold": sold, "total_shares": IPO_TOTAL_SHARES,
+             "raised": ipo["raised"]}
+        if uid is not None:
+            e["your_shares"] = ipo["held"].get(str(uid), 0)
+        out.append(e)
+    out.sort(key=lambda x: -x["raised"])
+    return {"ipos": out, "listing_fee": IPO_LISTING_FEE,
+            "note": "IPO shares pay founder-linked dividends in in-game gold only."}
+
+def ipo_buy(state, uid, founder_uid, qty, now=None):
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    ipo = _ipos(state).get(str(founder_uid))
+    if not ipo:
+        return {"error": "no such IPO"}
+    if int(founder_uid) == uid:
+        return {"error": "cannot buy your own shares"}
+    qty = max(1, int(qty))
+    sold = sum(ipo["held"].values())
+    if sold + qty > IPO_TOTAL_SHARES:
+        return {"error": f"only {IPO_TOTAL_SHARES - sold} shares left"}
+    total = 0
+    for _ in range(qty):
+        total += ipo_price(state, int(founder_uid))
+        ipo["held"][str(uid)] = ipo["held"].get(str(uid), 0) + 1
+    if me.get("gold", 0) < total:
+        ipo["held"][str(uid)] -= qty
+        if ipo["held"][str(uid)] <= 0:
+            ipo["held"].pop(str(uid), None)
+        return {"error": "not enough gold", "cost": total}
+    me["gold"] -= total
+    ipo["raised"] += total
+    # founder receives the proceeds
+    founder = state.chars.get(int(founder_uid))
+    if founder is not None:
+        founder["gold"] = founder.get("gold", 0) + total
+        state.mark_dirty(int(founder_uid))
+    state.mark_dirty(uid)
+    return {"ok": True, "bought": qty, "cost": total, "ticker": ipo["name"],
+            "your_shares": ipo["held"][str(uid)], "gold": me["gold"]}
+
+
+# ============================================================
+# PORTFOLIO (unified view of all assets; phi net-worth breakdown)
+# ============================================================
+
+def portfolio(state, uid, now=None):
+    now = now or int(time.time())
+    me = state.chars.get(uid)
+    if not me:
+        return {"error": "no char"}
+    gold = me.get("gold", 0)
+    # loot value
+    loot_val = sum(l.get("value", 0) * l.get("qty", 1) for l in me.get("loot", []))
+    # stocks held (player buys via trade -> me["stocks"])
+    stock_val = 0
+    for h in me.get("stocks", []):
+        s = _stock_by_name(state, h.get("name", ""))
+        px = s["price"] if s else h.get("price", 0)
+        stock_val += px * h.get("qty", 1) if "qty" in h else px
+    # bonds (future payout)
+    bond_val = sum(b.get("payout", 0) for b in me.get("bonds", []))
+    # hedge funds (current value)
+    hedge_val = sum(_hedge_value(state, f) for f in me.get("hedge", []))
+    # derivatives (settle value)
+    deriv_val = 0
+    for p in me.get("derivs", []):
+        s = _stock_by_name(state, p["symbol"])
+        spot = s["price"] if s else p["entry_spot"]
+        deriv_val += max(0, _settle_value(p, spot))
+    # M&A corp shares owned
+    ma_val = 0
+    for cid in range(len(CORPS)):
+        book = _corp_book(state, cid)
+        q = book["held"].get(str(uid), 0)
+        if q:
+            ma_val += q * share_price(state, cid)
+    # IPO shares owned (in others' companies)
+    ipo_val = 0
+    for fu, ipo in _ipos(state).items():
+        q = ipo["held"].get(str(uid), 0)
+        if q:
+            ipo_val += q * ipo_price(state, int(fu))
+    # own IPO equity (unsold founder stake value)
+    own_ipo = _ipos(state).get(str(uid))
+    own_ipo_val = 0
+    if own_ipo:
+        unsold = IPO_TOTAL_SHARES - sum(own_ipo["held"].values())
+        own_ipo_val = unsold * ipo_price(state, uid)
+    # loan debt (liability)
+    debt = 0
+    loan = me.get("loan")
+    if loan:
+        _accrue(loan, now)
+        debt = loan["debt"]
+
+    assets = {
+        "gold": int(gold), "loot": int(loot_val), "stocks": int(stock_val),
+        "bonds": int(bond_val), "hedge": int(hedge_val), "derivatives": int(deriv_val),
+        "ma_stakes": int(ma_val), "ipo_shares": int(ipo_val), "own_equity": int(own_ipo_val),
+    }
+    gross = sum(assets.values())
+    net = gross - int(debt)
+    # phi-weighted breakdown (share of gross)
+    breakdown = []
+    for k, v in sorted(assets.items(), key=lambda x: -x[1]):
+        if v <= 0:
+            continue
+        breakdown.append({"asset": k, "value": v,
+                          "pct": round(100 * v / gross, 2) if gross else 0})
+    return {"assets": assets, "breakdown": breakdown,
+            "gross": int(gross), "debt": int(debt), "net_worth": int(net),
+            "magnate_score": magnate_score(me),
+            "note": "All values are in-game gold."}
+
+
+# ============================================================
 # SELF-TEST (run: python golden_econ.py)
 # ============================================================
 

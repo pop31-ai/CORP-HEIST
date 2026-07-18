@@ -63,6 +63,8 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button id="btn-moy" style="border-color:#FFE24B;color:#FFE24B">🏆 MAGNATE/YEAR</button>
 <button id="btn-bank" style="border-color:#FF9B00;color:#FF9B00">🏛 BANK</button>
 <button id="btn-cb" style="border-color:#B14BFF;color:#B14BFF">🏦 CENTRAL BANK</button>
+<button id="btn-ipo" style="border-color:#00E5FF;color:#00E5FF">📈 IPO</button>
+<button id="btn-portfolio" style="border-color:#FFD700;color:#FFD700">💼 PORTFOLIO</button>
 <span id="refresh-timer" style="color:#555;font-size:9px;line-height:28px;margin-left:8px">refresh in 60:00</span>
 </div>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
@@ -2820,6 +2822,83 @@ async function showCB(){
         paint();if(_cbTimer)clearInterval(_cbTimer);_cbTimer=setInterval(paint,3000);
     }catch(e){showOverlay('Central Bank','offline');}
 }
+// ---- IPO (list your own micro-corp; buy others' shares) ----
+async function showIPO(){
+    try{
+        openPanel('<b>📈 GOLDEN IPO EXCHANGE</b><div id="ipo-body" style="color:#555">loading...</div>',26000);
+        const paint=async()=>{
+            const p=document.getElementById('ipo-body');if(!p)return;
+            const r=await fetch(API+'/api/ipo?uid='+_uid());const d=await r.json();
+            const mine=d.ipos.find(x=>String(x.founder)===String(_uid()));
+            let h='';
+            if(!mine){
+                h+='<div style="border:1px dashed #00E5FF;border-radius:5px;padding:6px;margin:6px 0">'+
+                   '<div style="color:#00E5FF;font-size:10px">GO PUBLIC — fee '+fmt(d.listing_fee)+'g</div>'+
+                   '<input id="ipo-name" maxlength="16" placeholder="TICKER" style="width:70px;background:#111;border:1px solid #333;color:#FFE24B;font-size:10px;padding:2px">'+
+                   '<input id="ipo-price" type="number" value="100" style="width:50px;background:#111;border:1px solid #333;color:#FFE24B;font-size:10px;padding:2px" title="base share price">'+
+                   '<button onclick="launchIPO()" style="border:1px solid #00E5FF;color:#00E5FF;background:#0a1a1e;font-size:10px;padding:2px 6px;cursor:pointer">LAUNCH</button></div>';
+            }
+            h+='<table style="width:100%;font-size:9px;font-family:monospace;border-collapse:collapse">';
+            for(const x of d.ipos){
+                const you=String(x.founder)===String(_uid());
+                const left=x.total_shares-x.shares_sold;
+                h+='<tr style="border-top:1px solid #1a1a2e">'+
+                   '<td style="color:'+(you?'#FFE24B':'#00E5FF')+'">'+x.ticker+(you?' (YOU)':'')+'<div style="color:#555;font-size:7px">'+x.founder_name+'</div></td>'+
+                   '<td style="color:#FFC800;text-align:right">'+fmt(x.price)+'g</td>'+
+                   '<td style="color:#555;text-align:right">'+left+' left'+(x.your_shares?'<div style="color:#00FF8C;font-size:7px">you: '+x.your_shares+'</div>':'')+'</td>'+
+                   '<td style="text-align:right">'+(you||left<=0?'':'<button onclick="buyIPO('+x.founder+')" style="border:1px solid #00FF8C;color:#00FF8C;background:#0a1a10;font-size:9px;padding:1px 5px;cursor:pointer">BUY</button>')+'</td></tr>';
+            }
+            h+='</table><div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
+            p.innerHTML=h;
+        };
+        paint();
+    }catch(e){showOverlay('IPO','offline');}
+}
+async function launchIPO(){
+    const nm=(document.getElementById('ipo-name')||{}).value||'';
+    const px=parseInt((document.getElementById('ipo-price')||{}).value||'100',10);
+    try{
+        const r=await fetch(API+'/pulse/ipo/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),name:nm,base_price:px})});
+        const d=await r.json();
+        if(d.error){showOverlay('📈 IPO',d.error);return;}
+        SND.promo();showOverlay('📈 PUBLIC!',d.ticker+' listed\n'+d.total_shares+' shares\nfee '+fmt(d.listing_fee)+'g');
+        showIPO();loadPlayer(_uid());
+    }catch(e){}
+}
+async function buyIPO(founder){
+    try{
+        const r=await fetch(API+'/pulse/ipo/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),founder:founder,qty:1})});
+        const d=await r.json();
+        if(d.error){showOverlay('📈 BUY',d.error+(d.cost?(' (need '+fmt(d.cost)+'g)'):''));return;}
+        SND.click();showOverlay('📈 BOUGHT',d.ticker+' ×'+d.bought+'\ncost '+fmt(d.cost)+'g\nyou hold '+d.your_shares);
+        showIPO();loadPlayer(_uid());
+    }catch(e){}
+}
+// ---- PORTFOLIO (unified phi net-worth breakdown) ----
+const PF_COL={gold:'#FFE24B',loot:'#B14BFF',stocks:'#00E5FF',bonds:'#00FF8C',hedge:'#FF9B00',derivatives:'#FF3B3B',ma_stakes:'#FFC800',ipo_shares:'#4BC0FF',own_equity:'#FFD700'};
+async function showPortfolio(){
+    try{
+        openPanel('<b>💼 PORTFOLIO</b><div id="pf-body" style="color:#555">loading...</div>',24000);
+        const r=await fetch(API+'/api/portfolio/'+_uid());const d=await r.json();
+        const p=document.getElementById('pf-body');if(!p)return;
+        let h='<div style="text-align:center;margin:4px 0"><span style="color:#FFD700;font-size:22px;text-shadow:0 0 12px #FFD700">'+fmt(d.net_worth)+'g</span><div style="color:#555;font-size:8px">NET WORTH</div></div>';
+        h+='<div style="display:flex;height:14px;border-radius:3px;overflow:hidden;margin:6px 0;border:1px solid #222">';
+        for(const b of d.breakdown){h+='<div title="'+b.asset+' '+b.pct+'%" style="width:'+b.pct+'%;background:'+(PF_COL[b.asset]||'#888')+'"></div>';}
+        h+='</div><table style="width:100%;font-size:9px;font-family:monospace">';
+        for(const b of d.breakdown){
+            h+='<tr><td><span style="display:inline-block;width:8px;height:8px;background:'+(PF_COL[b.asset]||'#888')+';margin-right:4px"></span><span style="color:#ccc">'+b.asset.replace(/_/g,' ')+'</span></td>'+
+               '<td style="color:'+(PF_COL[b.asset]||'#888')+';text-align:right">'+fmt(b.value)+'g</td>'+
+               '<td style="color:#555;text-align:right;width:38px">'+b.pct+'%</td></tr>';
+        }
+        h+='</table>';
+        h+='<table style="width:100%;font-size:9px;font-family:monospace;margin-top:4px;border-top:1px solid #222">'+
+           '<tr><td style="color:#555">gross assets</td><td style="color:#00FF8C;text-align:right">'+fmt(d.gross)+'g</td></tr>'+
+           (d.debt?('<tr><td style="color:#555">loan debt</td><td style="color:#FF3B3B;text-align:right">-'+fmt(d.debt)+'g</td></tr>'):'')+
+           '<tr><td style="color:#555">magnate score</td><td style="color:#FFC800;text-align:right">'+fmt(d.magnate_score)+'</td></tr></table>'+
+           '<div style="color:#555;font-size:8px;margin-top:4px">'+d.note+'</div>';
+        p.innerHTML=h;
+    }catch(e){showOverlay('Portfolio','offline');}
+}
 // ---- LIQUIDATION overlay + notifications (global poll) ----
 let _liqSeen=0,_liqInit=false;
 async function pollLiquidations(){
@@ -2915,6 +2994,8 @@ document.getElementById('btn-tour').onclick=openTour;
 {const bmy=document.getElementById('btn-moy');if(bmy)bmy.onclick=showMoY;}
 {const bbk=document.getElementById('btn-bank');if(bbk)bbk.onclick=showBank;}
 {const bcb=document.getElementById('btn-cb');if(bcb)bcb.onclick=showCB;}
+{const bip=document.getElementById('btn-ipo');if(bip)bip.onclick=showIPO;}
+{const bpf=document.getElementById('btn-portfolio');if(bpf)bpf.onclick=showPortfolio;}
 {const cc=document.getElementById('chat-close');if(cc)cc.onclick=closeChat;}
 {const cs=document.getElementById('chat-send');if(cs)cs.onclick=sendChat;}
 {const ci=document.getElementById('chat-in');if(ci)ci.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();});}

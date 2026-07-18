@@ -55,6 +55,7 @@ from golden_econ import (
     magnates, moy_status,
     loan_status, take_loan, repay_loan, check_liquidations,
     central_rate, cb_status, buy_insurance, liq_feed,
+    ipo_launch, ipo_list, ipo_buy, portfolio,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -115,8 +116,15 @@ class SharedState:
                  "volume":random.randint(10000,500000)} for i,n in enumerate(names)]
 
     def tick_market(self):
+        # Central Bank drift: dovish (rate<1) lifts prices, hawkish (rate>1) sinks them.
+        try:
+            rate = central_rate()
+        except Exception:
+            rate = 1.0
+        cb_drift = (1.0 - rate) * PHI      # +0.618*phi at max easing, -0.618*phi at max tightening
         for s in self.stocks:
-            change = random.gauss(0, 1.5) + s["delta"] * 0.1
+            drift = cb_drift * (s["price"] * 0.002)
+            change = random.gauss(0, 1.5) + s["delta"] * 0.1 + drift
             s["delta"] = round(change, 2)
             s["price"] = round(max(0.01, s["price"] + change), 2)
             s["volume"] = max(100, s["volume"] + random.randint(-5000, 5000))
@@ -1206,6 +1214,52 @@ async def pulse_loan_repay(request):
     return web.json_response(result)
 
 
+# ---- IPO (list your own micro-corp; players buy your shares) ----
+async def handle_ipo(request):
+    """GET the IPO board (?uid= to include your holdings)."""
+    uid = request.query.get("uid")
+    result = ipo_list(STATE, int(uid) if uid else None)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+async def pulse_ipo_launch(request):
+    """Pulse: go public with your own company (phi listing fee)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = ipo_launch(STATE, uid, d.get("name", ""), d.get("base_price", 100))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+async def pulse_ipo_buy(request):
+    """Pulse: buy shares of another player's IPO (phi price curve)."""
+    d = await request.json()
+    uid = d.get("uid", 1000)
+    result = ipo_buy(STATE, uid, d.get("founder"), d.get("qty", 1))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    STATE.save_char(uid)
+    fu = d.get("founder")
+    if fu is not None:
+        STATE.save_char(int(fu))
+    STATE.track(sent=len(json.dumps(result).encode()))
+    return web.json_response(result)
+
+
+# ---- PORTFOLIO (unified phi net-worth breakdown) ----
+async def handle_portfolio(request):
+    """GET a unified breakdown of all a player's assets and net worth."""
+    _sweep_liquidations()
+    uid = int(request.match_info.get("uid", request.query.get("uid", 1000)))
+    result = portfolio(STATE, uid)
+    body = json.dumps(result).encode()
+    STATE.track(sent=len(body))
+    return web.Response(body=body, content_type="application/json")
+
+
 # ============================================================
 # DASHBOARD HTML
 # ============================================================
@@ -1442,6 +1496,11 @@ def make_unified_app():
     app.router.add_get("/api/cb", handle_cb)
     app.router.add_post("/pulse/loan/insure", pulse_insure)
     app.router.add_get("/api/liqfeed", handle_liqfeed)
+    app.router.add_get("/api/ipo", handle_ipo)
+    app.router.add_post("/pulse/ipo/launch", pulse_ipo_launch)
+    app.router.add_post("/pulse/ipo/buy", pulse_ipo_buy)
+    app.router.add_get("/api/portfolio", handle_portfolio)
+    app.router.add_get("/api/portfolio/{uid}", handle_portfolio)
     return app
 
 CARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wealth_card.html")
