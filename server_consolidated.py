@@ -836,6 +836,8 @@ async def pulse_gacha(request):
     c = STATE.chars.get(uid)
     if not c:
         return web.json_response({"error": "no char"})
+    if not EnergySystem.use_energy(STATE, uid, 5, "gacha"):
+        return web.json_response({"error": "not enough energy", "need": 5})
     # gacha logic
     c["gacha_pity"] += 1
     roll = random.random() * 10000
@@ -855,6 +857,8 @@ async def pulse_gacha(request):
     else:
         rarity = 0  # Common 33%
     hero_id = random.randint(0, 9)
+    if rarity >= 3:
+        EnergySystem.grant_potions(STATE, uid, 1)
     STATE.track(sent=20)
     STATE.mark_dirty(uid)
     STATE.save_char(uid)
@@ -2068,6 +2072,8 @@ async def handle_espionage(request):
 async def pulse_espionage_sabotage(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 8, "espionage"):
+        return web.json_response({"error": "not enough energy", "need": 8})
     target = int(d.get("target_corp_id", 0))
     result = CorpEspionage.sabotage(STATE, uid, target)
     body = json.dumps(result).encode()
@@ -2077,6 +2083,8 @@ async def pulse_espionage_sabotage(request):
 async def pulse_espionage_boost(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 5, "espionage"):
+        return web.json_response({"error": "not enough energy", "need": 5})
     result = CorpEspionage.boost(STATE, uid)
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
@@ -2227,6 +2235,7 @@ async def pulse_arena_match(request):
     PhiArenaRankings.record_match(STATE, uid, won)
     if won:
         DailyChallenges.increment(STATE, uid, "pvp_win")
+        EnergySystem.grant_potions(STATE, uid, 1)
     body = json.dumps({"ok": True, "won": won}).encode()
     STATE.track(sent=len(body))
     return web.Response(body=body, content_type="application/json")
@@ -2515,6 +2524,8 @@ async def handle_map(request):
 async def pulse_map_move(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 2, "map"):
+        return web.json_response({"error": "not enough energy", "need": 2})
     x = int(d.get("x", 0))
     y = int(d.get("y", 0))
     result = StrategyMap.move_army(STATE, uid, x, y)
@@ -2525,7 +2536,11 @@ async def pulse_map_move(request):
 async def pulse_map_capture(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 5, "capture"):
+        return web.json_response({"error": "not enough energy", "need": 5})
     result = StrategyMap.capture(STATE, uid)
+    if result.get("captured"):
+        DailyChallenges.increment(STATE, uid, "capture")
     _hb(uid, f"map_capture", STATE.chars.get(uid, {}).get("gold", 0))
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))
@@ -2631,7 +2646,12 @@ async def handle_pets(request):
 async def pulse_pet_hatch(request):
     d = await request.json()
     uid = int(d.get("uid", 1000))
+    if not EnergySystem.use_energy(STATE, uid, 10, "hatch"):
+        return web.json_response({"error": "not enough energy", "need": 10})
     result = PetSystem.hatch(STATE, uid)
+    if result.get("pet"):
+        DailyChallenges.increment(STATE, uid, "hatch")
+        EnergySystem.grant_potions(STATE, uid, 1)
     _hb(uid, "pet_hatch", STATE.chars.get(uid, {}).get("gold", 0))
     body = json.dumps(result).encode()
     STATE.track(sent=len(body))

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -49,6 +49,13 @@ canvas{border:1px solid #1a1a2e;border-radius:4px;max-width:100%}
 <button onclick="exportPNG()">📷 PNG</button>
 <button onclick="supportRequest()" style="border-color:#00FF8C;color:#00FF8C">SUPPORT</button>
 <button id="refresh-btn" onclick="manualRefresh()" style="border-color:#FFC800;color:#FFC800;text-shadow:0 0 6px #FFC80066">⟳ REFRESH</button>
+<span id="energy-bar" style="display:inline-flex;align-items:center;gap:4px;background:#0a0b16;border:1px solid #333;border-radius:4px;padding:2px 8px;font-size:10px;color:#66BB6A;cursor:pointer" onclick="usePotionFromBar()" title="Click to use potion">
+⚡ <span id="energy-cur">--</span>/<span id="energy-max">--</span>
+<span id="energy-potions" style="color:#FFD54F;font-size:9px">🧪0</span>
+<span id="energy-fill" style="display:inline-block;width:60px;height:6px;background:#1a1a2e;border-radius:3px;overflow:hidden;vertical-align:middle">
+<span id="energy-inner" style="display:block;height:100%;width:100%;background:linear-gradient(90deg,#1B5E20,#66BB6A);border-radius:3px;transition:width .8s ease"></span>
+</span>
+</span>
 </div>
 
 <!-- TAB BAR -->
@@ -178,6 +185,17 @@ window._showCat=showCat;
 </script>
 <div id="stage" style="perspective:1100px;display:inline-block"><canvas id="c" width="800" height="500"></canvas></div>
 <div id="overlay"></div>
+<div id="modal-overlay">
+<div id="modal-box">
+<div id="modal-title"></div>
+<div id="modal-text"></div>
+<input id="modal-input" type="text" style="display:none">
+<div id="modal-btns">
+<button id="modal-ok">OK</button>
+<button id="modal-cancel">CANCEL</button>
+</div>
+</div>
+</div>
 <div id="custom-panel" style="display:none;position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#0a0b16;border:1px solid #B14BFF;border-radius:6px;padding:14px 18px;z-index:50;font-size:11px;color:#ccc;box-shadow:0 0 24px #B14BFF44">
   <div style="color:#B14BFF;font-weight:bold;margin-bottom:10px">🎨 CUSTOMIZE CARD</div>
   <label style="display:block;margin:6px 0">Accent <input type="color" id="cu-accent" value="#FFC800"></label>
@@ -224,6 +242,30 @@ window._showCat=showCat;
     box-shadow:0 0 28px rgba(255,200,0,.25);
 }
 #overlay pre{white-space:pre;margin:6px 0 0}
+#modal-overlay{
+    display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+    background:rgba(0,0,0,.65);z-index:200;
+    justify-content:center;align-items:center;
+}
+#modal-overlay.show{display:flex}
+#modal-box{
+    background:#0a0b16;border:1px solid #FFC800;border-radius:8px;
+    padding:18px 22px;min-width:300px;max-width:420px;
+    box-shadow:0 0 40px rgba(255,200,0,.2);
+    animation:modalIn .25s cubic-bezier(.2,.9,.3,1.1);
+}
+@keyframes modalIn{0%{transform:scale(.85);opacity:0}100%{transform:scale(1);opacity:1}}
+#modal-title{color:#FFC800;font-weight:bold;font-size:12px;margin-bottom:8px;white-space:pre-wrap}
+#modal-text{color:#aaa;font-size:11px;white-space:pre-wrap;margin-bottom:10px;line-height:1.4;max-height:50vh;overflow-y:auto}
+#modal-input{width:100%;background:#12131f;color:#FFC800;border:1px solid #444;padding:6px 8px;font-family:monospace;font-size:12px;border-radius:3px;margin-bottom:10px;outline:none}
+#modal-input:focus{border-color:#FFC800}
+#modal-btns{display:flex;gap:6px;justify-content:flex-end}
+#modal-btns button{padding:5px 16px;border-radius:3px;font-family:monospace;font-size:11px;cursor:pointer;border:none;transition:transform .1s,box-shadow .1s}
+#modal-btns button:active{transform:scale(.96)}
+#modal-ok{background:#FFC800;color:#05060c}
+#modal-ok:hover{box-shadow:0 0 12px rgba(255,200,0,.4)}
+#modal-cancel{background:#1a1a2e;color:#888;border:1px solid #444}
+#modal-cancel:hover{color:#ccc;border-color:#666}
 @keyframes tapescroll{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
 #tape-scroll{animation:tapescroll 40s linear infinite}
 </style>
@@ -2640,7 +2682,7 @@ async function showAuction(){
             '<table style="width:100%;font-size:9px;font-family:monospace">'+
             '<tr style="color:#555"><td>ITEM</td><td style="text-align:right">BID</td><td style="text-align:right">LEFT</td><td></td></tr>'+
             rows+'</table>'+
-            '<div style="margin-top:6px"><button onclick="listAuctionPrompt()" style="background:#1a1a2e;color:#FF9B00;border:1px solid #FF9B00;font-size:9px;padding:3px 8px;cursor:pointer;font-family:monospace">+ LIST YOUR ITEM</button></div>',
+            '<div style="margin-top:6px"><button onclick="listAuction()" style="background:#1a1a2e;color:#FF9B00;border:1px solid #FF9B00;font-size:9px;padding:3px 8px;cursor:pointer;font-family:monospace">+ LIST YOUR ITEM</button></div>',
             15000);
     }catch(e){showOverlay('Auction','offline');}
 }
@@ -2652,14 +2694,14 @@ async function bidAuction(id,amount){
         SND.click();showAuction();loadPlayer(_uid());
     }catch(e){}
 }
-async function listAuctionPrompt(){
+async function listAuction(){
     try{
         const pr=await fetch(API+'/api/char/'+_uid());const pd=await pr.json();
         const loot=(pd.loot||[]);
         if(!loot.length){showOverlay('🔨 LIST','no loot to sell');return;}
-        const code=prompt('Item code to auction:\n'+loot.map(l=>l.code).join(', '),loot[0].code);
+        const code=await modalPrompt('Item code to auction:\n'+loot.map(l=>l.code).join(', '),loot[0].code);
         if(!code)return;
-        const sp=parseInt(prompt('Starting price (gold):','100')||'0',10);
+        const sp=parseInt(await modalPrompt('Starting price (gold):','100')||'0',10);
         const r=await fetch(API+'/pulse/auction/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),code:code,start_price:sp})});
         const d=await r.json();
         if(d.error){showOverlay('🔨 LIST',d.error);return;}
@@ -2733,7 +2775,7 @@ async function showBonds(){
     }catch(e){showOverlay('Bonds','offline');}
 }
 async function buyBond(tier,minp){
-    const amt=parseInt(prompt('Principal to invest (gold, min '+minp+'):',String(minp))||'0',10);
+    const amt=parseInt(await modalPrompt('Principal to invest (gold, min '+minp+'):',String(minp))||'0',10);
     if(!amt)return;
     try{
         const r=await fetch(API+'/pulse/bond/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),tier:tier,principal:amt})});
@@ -2779,7 +2821,7 @@ async function showDerivs(sym){
     }catch(e){showOverlay('Derivatives','offline');}
 }
 async function openDeriv(sym,kind,strike){
-    const qty=parseInt(prompt(kind.toUpperCase()+' '+sym+' — quantity:','1')||'0',10);
+    const qty=parseInt(await modalPrompt(kind.toUpperCase()+' '+sym+' — quantity:','1')||'0',10);
     if(!qty)return;
     try{
         const r=await fetch(API+'/pulse/deriv/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),sym:sym,kind:kind,strike:strike,qty:qty})});
@@ -2920,7 +2962,7 @@ async function showMA(){
     }catch(e){showOverlay('M&A','offline');}
 }
 async function buyStake(corp,price){
-    const qty=parseInt(prompt('Shares to buy (~'+fmt(price)+'g each, price rises by φ):','1')||'0',10);
+    const qty=parseInt(await modalPrompt('Shares to buy (~'+fmt(price)+'g each, price rises by φ):','1')||'0',10);
     if(!qty)return;
     try{
         const r=await fetch(API+'/pulse/ma/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),corp:corp,qty:qty})});
@@ -3069,15 +3111,15 @@ async function showBank(){
                 p.innerHTML='<div style="color:#888;font-size:9px">post gold collateral, borrow up to (φ−1)×collateral×leverage. interest '+d.interest_pct_per_hour+'%/h. liquidation if debt ≥ collateral×φ.</div>'+
                     '<div style="margin-top:8px;text-align:center">'+
                     '<div style="color:#555;font-size:8px">LEVERAGE</div>'+
-                    [1,1.3,1.618].map(l=>'<button onclick="takeLoanPrompt('+l+')" style="background:#1a1a2e;color:#FF9B00;border:1px solid #FF9B00;font-size:9px;padding:2px 8px;margin:1px;cursor:pointer;font-family:monospace">'+l+'×</button>').join('')+
+                    [1,1.3,1.618].map(l=>'<button onclick="takeLoan('+l+')" style="background:#1a1a2e;color:#FF9B00;border:1px solid #FF9B00;font-size:9px;padding:2px 8px;margin:1px;cursor:pointer;font-family:monospace">'+l+'×</button>').join('')+
                     '</div><div style="color:#555;font-size:8px;margin-top:4px">gold '+fmt(d.gold)+'g · max '+d.max_leverage+'×</div>';
             }
         };
         paint();if(_bankTimer)clearInterval(_bankTimer);_bankTimer=setInterval(paint,4000);
     }catch(e){showOverlay('Bank','offline');}
 }
-async function takeLoanPrompt(lev){
-    const col=parseInt(prompt('Gold collateral to post (borrow '+((PHI-1)*lev).toFixed(2)+'× of it):','10000')||'0',10);
+async function takeLoan(lev){
+    const col=parseInt(await modalPrompt('Gold collateral to post (borrow '+((PHI-1)*lev).toFixed(2)+'× of it):','10000')||'0',10);
     if(!col)return;
     try{
         const r=await fetch(API+'/pulse/loan/take',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_uid(),collateral:col,leverage:lev})});
@@ -4048,7 +4090,7 @@ document.getElementById('btn-lottery').onclick=async()=>{
         s+='Ticket cost: '+d.cost+'g\n';
         s+='Draws in: '+Math.floor(d.remaining/3600)+'h '+Math.floor((d.remaining%3600)/60)+'m\n\n';
         s+='Buy a ticket? Cost rises with demand.';
-        if(confirm(s)){await fetch(API+'/pulse/lottery/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})}).then(r=>r.json()).then(d=>{if(d.error){showOverlay('LOTTO',d.error);}else{SND.promo();showOverlay('TICKET BOUGHT','Pool: '+d.pool_gold+'g\nYour tickets: '+d.my_tickets);loadPlayer(uid);}});}
+        if(await modalConfirm(s)){await fetch(API+'/pulse/lottery/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})}).then(r=>r.json()).then(d=>{if(d.error){showOverlay('LOTTO',d.error);}else{SND.promo();showOverlay('TICKET BOUGHT','Pool: '+d.pool_gold+'g\nYour tickets: '+d.my_tickets);loadPlayer(uid);}});}
     }catch(e){showOverlay('LOTTERY','offline');}
 };
 
@@ -4059,7 +4101,7 @@ document.getElementById('btn-blackmarket').onclick=async()=>{
         let s='BLACK MARKET — next refresh in '+Math.floor(d.remaining/3600)+'h\n\n';
         d.items.forEach(it=>{s+='['+it.id+'] '+it.name+' (R'+it.rarity+') — '+it.price+'g\n';});
         s+'\nBuy an item by number?';
-        const choice=prompt(s);
+        const choice=await modalPrompt(s);
         if(choice!==null){
             const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
             const r2=await fetch(API+'/pulse/blackmarket/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_id:parseInt(choice)})});
@@ -4081,9 +4123,9 @@ document.getElementById('btn-heist').onclick=async()=>{
         if(d.in_progress){s+='Time left: '+Math.floor(d.remaining/60)+'m\n\n1) Fund (contribute gold)\n2) Claim reward';}
         else if(d.completed){s+='COMPLETE — claim your reward!';}
         else{s+='Starting soon...';}
-        const choice=prompt(s);
+        const choice=await modalPrompt(s);
         if(choice==='1'){
-            const amt=parseInt(prompt('How much gold to fund?','1000'));
+            const amt=parseInt(await modalPrompt('How much gold to fund?','1000'));
             if(amt>0){const r2=await fetch(API+'/pulse/heist/fund',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,amount:amt})});const d2=await r2.json();if(d2.error){showOverlay('HEIST',d2.error);}else{SND.trade();showOverlay('HEIST FUNDED','Contributed! Pool growing...');loadPlayer(uid);}}
         }else if(choice==='2'){
             const r2=await fetch(API+'/pulse/heist/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();if(d2.error){showOverlay('HEIST',d2.error);}else{SND.promo();showOverlay('HEIST COMPLETE','Prize: '+d2.prize+'g\nShare: '+d2.share_pct+'%');loadPlayer(uid);}
@@ -4101,7 +4143,7 @@ document.getElementById('btn-prophet').onclick=async()=>{
         s+='Active: '+d.active_count+'/'+d.max_active+'\n';
         d.active.forEach(a=>{s+='  '+a.symbol+' '+a.direction.toUpperCase()+' (stake '+a.stake+'g)\n';});
         s+='\nPredict: (symbol) (up/down)\nOr type "settle" to check';
-        const choice=prompt(s);
+        const choice=await modalPrompt(s);
         if(!choice)return;
         if(choice==='settle'){
             const r2=await fetch(API+'/pulse/prophet/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();let msg='';d2.settled.forEach(p=>{msg+=p.symbol+': '+(p.won?'WIN +'+p.prize+'g':'LOSS')+'\n';});showOverlay('PROPHET RESULTS',msg||'Nothing to settle');loadPlayer(uid);
@@ -4122,7 +4164,7 @@ document.getElementById('btn-rain').onclick=async()=>{
             s+='Pot: '+d.pot+'g | Catchers: '+d.total_catchers+'/8\n';
             if(d.my_caught>0){s+='You caught: '+d.my_caught+'g\n';}
             s+='Catch the gold?';
-            if(confirm(s)){
+            if(await modalConfirm(s)){
                 const r2=await fetch(API+'/pulse/rain/catch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
                 if(d2.error){showOverlay('GOLDEN RAIN',d2.error);}else{SND.firework();showOverlay('GOLDEN RAIN','CAUGHT '+d2.prize+'g!\nRank #'+d2.rank);loadPlayer(uid);}
             }
@@ -4145,9 +4187,9 @@ document.getElementById('btn-espionage').onclick=async()=>{
         else{s+='Ready!\n';}
         if(d.active.type){s+='Active: '+d.active.type.toUpperCase()+' on corp #'+d.active.target+'\n';}
         s+='\n1) SABOTAGE rival corp ('+d.sabotage_cost+'g)\n2) BOOST your corp ('+d.boost_cost+'g)';
-        const choice=prompt(s);
+        const choice=await modalPrompt(s);
         if(choice==='1'){
-            const target=parseInt(prompt('Target corp ID (0-6):\n0=MERIDIAN 1=APEX 2=NOVA 3=VERTEX 4=PULSAR 5=AUREATE 6=SOLARIS','0'));
+            const target=parseInt(await modalPrompt('Target corp ID (0-6):\n0=MERIDIAN 1=APEX 2=NOVA 3=VERTEX 4=PULSAR 5=AUREATE 6=SOLARIS','0'));
             const r2=await fetch(API+'/pulse/espionage/sabotage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,target_corp_id:target})});const d2=await r2.json();if(d2.error){showOverlay('ESPIONAGE',d2.error);}else{SND.duelHit();showOverlay('SABOTAGE','Sabotaged '+d2.target+'!\nCost: '+d2.cost+'g\nDuration: '+Math.floor(d2.duration/60)+'m');loadPlayer(uid);}
         }else if(choice==='2'){
             const r2=await fetch(API+'/pulse/espionage/boost',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();if(d2.error){showOverlay('ESPIONAGE',d2.error);}else{SND.promo();showOverlay('BOOST','Boosted '+d2.target+'!\nCost: '+d2.cost+'g\nDuration: '+Math.floor(d2.duration/60)+'m');loadPlayer(uid);}
@@ -4179,7 +4221,7 @@ document.getElementById('btn-bounty').onclick=async()=>{
             s+='    Reward: '+b.reward+'g '+(b.completed?'DONE':'pending')+'\n\n';
         });
         s+='Claim completed bounties? (0/1/2)';
-        const choice=prompt(s);
+        const choice=await modalPrompt(s);
         if(choice!==null&&(choice==='0'||choice==='1'||choice==='2')){
             const r2=await fetch(API+'/pulse/bounty/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,slot:parseInt(choice)})});
             const d2=await r2.json();
@@ -4192,7 +4234,7 @@ document.getElementById('btn-bounty').onclick=async()=>{
 document.getElementById('btn-wheel').onclick=async()=>{
     const uid=_urlUid&&_urlUid!=='local'?_urlUid:1000;
     try{
-        if(!confirm('Spin the PHI-WHEEL for 200g?\nPrizes: xPHI, xPHI^2... xPHI^5 JACKPOT!\nAlso: MISS, EVEN, FREE SPIN'))return;
+        if(!await modalConfirm('Spin the PHI-WHEEL for 200g?\nPrizes: xPHI, xPHI^2... xPHI^5 JACKPOT!\nAlso: MISS, EVEN, FREE SPIN'))return;
         const r=await fetch(API+'/pulse/wheel/spin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
         const d=await r.json();
         if(d.error){showOverlay('PHI-WHEEL',d.error);return;}
@@ -4235,7 +4277,7 @@ document.getElementById('btn-whale').onclick=async()=>{
         });
         s+='\nPredict: (whale 0-4) (stock)';
         s+='\nType "settle" to check last round';
-        const choice=prompt(s);
+        const choice=await modalPrompt(s);
         if(!choice)return;
         if(choice==='settle'){
             const r2=await fetch(API+'/pulse/whale/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
@@ -4262,7 +4304,7 @@ document.getElementById('btn-trial').onclick=async()=>{
         else if(d.completed){s+='COMPLETED — claim your share!';}
         else{s+='In progress...';}
         if(d.completed&&!d.my_claimed){
-            if(confirm(s+'\n\nClaim your reward?')){
+            if(await modalConfirm(s+'\n\nClaim your reward?')){
                 const r2=await fetch(API+'/pulse/trial/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
                 if(d2.error){showOverlay('TRIAL',d2.error);}else{SND.promo();showOverlay('TRIAL COMPLETE',d2.trial+'\nShare: '+d2.share+'g\nMembers: '+d2.members);loadPlayer(uid);}
             }
@@ -4274,7 +4316,7 @@ document.getElementById('btn-trial').onclick=async()=>{
 document.getElementById('btn-casino').onclick=async()=>{
     try{
         const uid=S.uid;if(!uid){showOverlay('CASINO','select player first');return;}
-        const bet=prompt('bet (100-50000):','500');if(!bet)return;
+        const bet=await modalPrompt('bet (100-50000):','500');if(!bet)return;
         const r=await fetch(API+'/pulse/casino/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,action:'deal',bet:parseInt(bet)})});const d=await r.json();
         if(d.error){showOverlay('CASINO',d.error);return;}
         let s='PHI CASINO — BLACKJACK\n\n';
@@ -4282,7 +4324,7 @@ document.getElementById('btn-casino').onclick=async()=>{
         s+='Dealer shows: '+d.dealer_val+'\n';
         if(d.result==='blackjack'){SND.promo();s+='★ BLACKJACK! Won '+d.prize+'g!';showOverlay('CASINO',s);loadPlayer(uid);return;}
         if(d.result==='bust'){s+='BUST! Lost '+bet+'g';showOverlay('CASINO',s);loadPlayer(uid);return;}
-        const action=confirm(s+'\nHit?');
+        const action=await modalConfirm(s+'\nHit?');
         if(action){
             const r2=await fetch(API+'/pulse/casino/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,action:'hit',bet:parseInt(bet),player_hand:d.player,dealer_hand:d.dealer})});const d2=await r2.json();
             if(d2.result==='bust'){showOverlay('CASINO','BUST! Lost '+bet+'g');loadPlayer(uid);return;}
@@ -4308,7 +4350,7 @@ document.getElementById('btn-oracle').onclick=async()=>{
         s+='Call: '+d.call.toUpperCase()+' on '+d.stock+'\n';
         s+='Accuracy: '+d.accuracy+'% ('+d.history_len+' predictions)\n';
         s+='Cost: '+d.cost+'g';
-        if(confirm(s+'\n\nFollow the Oracle?')){
+        if(await modalConfirm(s+'\n\nFollow the Oracle?')){
             const r2=await fetch(API+'/pulse/oracle/follow',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
             if(d2.error){showOverlay('ORACLE',d2.error);}else{SND.promo();showOverlay('ORACLE','Following: '+d2.call.toUpperCase()+' on '+d2.stock+'\nCost: '+d2.cost+'g');loadPlayer(uid);}
         }else{showOverlay('ORACLE',s);}
@@ -4326,7 +4368,7 @@ document.getElementById('btn-arena').onclick=async()=>{
         s+='Rank: #'+d.rank;
         if(d.next_tier)s+='\nNext tier: '+d.next_tier;
         s+='\n\nTop 5:\n'+d.leaderboard.slice(0,5).map((e,i)=>(i+1)+'. UID '+e.uid+' — '+e.elo+' ELO').join('\n');
-        const action=confirm(s+'\n\nWon last duel? (OK=win, Cancel=loss)');
+        const action=await modalConfirm(s+'\n\nWon last duel? (OK=win, Cancel=loss)');
         await fetch(API+'/pulse/arena/match',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,won:action})});
         showOverlay('ARENA','Result: '+(action?'WIN':'LOSS')+' recorded!');
         loadPlayer(uid);
@@ -4342,7 +4384,7 @@ document.getElementById('btn-insurance').onclick=async()=>{
         s+='Status: '+(d.insured?'ACTIVE ('+d.remaining+'s remaining)':'NOT INSURED')+'\n';
         s+='Cost: '+d.cost+'g\n';
         s+='Payout if crash: '+d.payout_if_crash+'g';
-        if(!d.insured && confirm(s+'\n\nBuy insurance?')){
+        if(!d.insured && await modalConfirm(s+'\n\nBuy insurance?')){
             const r2=await fetch(API+'/pulse/insurance/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
             if(d2.error){showOverlay('INSURE',d2.error);}else{SND.promo();showOverlay('INSURE','INSURED for 24h!\nCost: '+d2.cost+'g\nPayout on crash: '+d2.payout_if_crash+'g');loadPlayer(uid);}
         }else{showOverlay('INSURANCE',s);}
@@ -4375,7 +4417,7 @@ document.getElementById('btn-insider').onclick=async()=>{
         s+='Accuracy: '+d.accuracy+'% ('+d.history_len+' tips)\n';
         if(d.my_bet)s+='Your bet: '+d.my_bet.side.toUpperCase();
         if(!d.my_bet){
-            const side=confirm(s+'\n\nFollow the tip? (OK=follow, Cancel=fade)');
+            const side=await modalConfirm(s+'\n\nFollow the tip? (OK=follow, Cancel=fade)');
             await fetch(API+'/pulse/insider/bet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,side:side?'follow':'fade'})});
             showOverlay('INSIDER','Bet placed: '+(side?'FOLLOW':'FADE'));
             loadPlayer(uid);
@@ -4395,14 +4437,14 @@ document.getElementById('btn-candle').onclick=async()=>{
         s+='Min bet: '+d.min_bet+'g\n';
         if(d.active){
             s+='\nActive bet: '+d.bet+'g on '+d.direction.toUpperCase()+'\n';
-            if(confirm(s+'\nReturn bet? (10% fee)')){
+            if(await modalConfirm(s+'\nReturn bet? (10% fee)')){
                 const r2=await fetch(API+'/pulse/candle/return',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
                 const d2=await r2.json();
                 if(d2.error){showOverlay('CANDLE',d2.error);}else{SND.promo();showOverlay('CANDLE RETURNED','Refund: '+d2.refund+'g\nFee: '+d2.fee+'g');loadPlayer(uid);}
             }else{showOverlay('CANDLE',s);}
         }else{
-            const bet=prompt('bet amount ('+d.min_bet+'-100000):','500');if(!bet)return;
-            const dir=confirm('GREEN? (OK=green, Cancel=red)');
+            const bet=await modalPrompt('bet amount ('+d.min_bet+'-100000):','500');if(!bet)return;
+            const dir=await modalConfirm('GREEN? (OK=green, Cancel=red)');
             const r2=await fetch(API+'/pulse/candle/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,bet:parseInt(bet),direction:dir?'green':'red'})});
             const d2=await r2.json();
             if(d2.error){showOverlay('CANDLE',d2.error);}else{SND.promo();showOverlay('CANDLE BET','Bet: '+d2.bet+'g on '+d2.direction.toUpperCase()+'\nReturn anytime!');loadPlayer(uid);}
@@ -4421,11 +4463,11 @@ document.getElementById('btn-cshop').onclick=async()=>{
             s+='\nYour purchases today:\n';
             d.purchased_today.forEach((p,i)=>{s+='  '+(i+1)+'. '+p.item.name+' ('+p.item.price+'g)\n';});
         }
-        const choice=prompt(s+'\n\nBuy item # (1-'+d.items.length+', or 0 to exchange):','1');
+        const choice=await modalPrompt(s+'\n\nBuy item # (1-'+d.items.length+', or 0 to exchange):','1');
         if(!choice||choice==='0')return;
         const idx=parseInt(choice)-1;
-        if(d.purchased_today.length>0&&confirm('Exchange wrong-sector item instead?')){
-            const ex_idx=prompt('Exchange item # (1-'+d.purchased_today.length+')','1');
+        if(d.purchased_today.length>0&&await modalConfirm('Exchange wrong-sector item instead?')){
+            const ex_idx=await modalPrompt('Exchange item # (1-'+d.purchased_today.length+')','1');
             if(ex_idx){
                 const r2=await fetch(API+'/pulse/candleshop/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_idx:parseInt(ex_idx)-1})});
                 const d2=await r2.json();
@@ -4450,12 +4492,12 @@ document.getElementById('btn-csettle').onclick=async()=>{
         s+='Happiness bonus: '+d.happiness_bonus+'g\n';
         s+='Gift: '+d.gift.name+' (free!)\n';
         if(d.claimed){s+='\nAlready claimed today!';}
-        else if(confirm(s+'\n\nClaim settlement + gift?')){
+        else if(await modalConfirm(s+'\n\nClaim settlement + gift?')){
             const r2=await fetch(API+'/pulse/candlesettle/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
             const d2=await r2.json();
             if(d2.error){showOverlay('SETTLE',d2.error);}else{SND.promo();showOverlay('SETTLEMENT CLAIMED','Bonus: '+d2.happiness_bonus+'g\nGift: '+d2.gift.name_en+'\nValue: '+d2.gift.value+'g');loadPlayer(uid);}
         }else{
-            if(confirm('Auto-exchange wrong-sector items?')){
+            if(await modalConfirm('Auto-exchange wrong-sector items?')){
                 const r2=await fetch(API+'/pulse/candlesettle/autoex',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});
                 const d2=await r2.json();
                 showOverlay('AUTO EXCHANGE','Kept: '+d2.kept.length+' items\nExchanged: '+d2.exchanged.length+' items');
@@ -4469,18 +4511,18 @@ document.getElementById('btn-csettle').onclick=async()=>{
 document.getElementById('btn-pvp').onclick=async()=>{
     try{
         const uid=S.uid;if(!uid){showOverlay('DUEL','select player first');return;}
-        const stake=prompt('stake (100-50000):','1000');if(!stake)return;
+        const stake=await modalPrompt('stake (100-50000):','1000');if(!stake)return;
         const r=await fetch(API+'/pulse/skill/duel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,stake:parseInt(stake)})});const d=await r.json();
         if(d.error){showOverlay('DUEL',d.error);return;}
         let ans={};
         if(d.type==='timing'){
-            const pos=prompt('DUEL: '+d.challenge.desc+'\n\nClick position (0-100):','50');
+            const pos=await modalPrompt('DUEL: '+d.challenge.desc+'\n\nClick position (0-100):','50');
             ans={position:parseInt(pos||'50')};
         }else if(d.type==='pattern'){
-            const seq=prompt('DUEL: '+d.challenge.desc+'\n\nPattern: '+d.challenge.seq.join('-')+'\nYour answer (comma-sep):',d.challenge.seq.join(','));
+            const seq=await modalPrompt('DUEL: '+d.challenge.desc+'\n\nPattern: '+d.challenge.seq.join('-')+'\nYour answer (comma-sep):',d.challenge.seq.join(','));
             ans={seq:(seq||'').split(',').map(Number)};
         }else{
-            const clicks=prompt('DUEL: '+d.challenge.desc+'\n\nClicks in '+d.challenge.duration+'s:','15');
+            const clicks=await modalPrompt('DUEL: '+d.challenge.desc+'\n\nClicks in '+d.challenge.duration+'s:','15');
             ans={clicks:parseInt(clicks||'15')};
         }
         const r2=await fetch(API+'/pulse/skill/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,answer:ans})});const d2=await r2.json();
@@ -4503,7 +4545,7 @@ document.getElementById('btn-quest').onclick=async()=>{
             const q=d.active.quest;
             let s='📜 '+q.name+'\n\n'+q.text+'\n\n';
             q.choices.forEach((ch,i)=>{s+=(i+1)+'. '+ch.text+'\n';});
-            const choice=prompt(s+'\nChoice # (1-'+q.choices.length+')','1');
+            const choice=await modalPrompt(s+'\nChoice # (1-'+q.choices.length+')','1');
             if(!choice)return;
             const ch=q.choices[parseInt(choice)-1];
             if(!ch)return;
@@ -4517,7 +4559,7 @@ document.getElementById('btn-quest').onclick=async()=>{
         }else if(d.available.length){
             let s='📜 AVAILABLE QUESTS\n\n';
             d.available.forEach((ch,i)=>{s+=(i+1)+'. '+ch.chain_name+' ('+ch.chain_name_en+')\n';});
-            const choice=prompt(s+'\nStart # (1-'+d.available.length+')','1');
+            const choice=await modalPrompt(s+'\nStart # (1-'+d.available.length+')','1');
             if(!choice)return;
             const chain=d.available[parseInt(choice)-1];
             const r2=await fetch(API+'/pulse/quest/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,chain_id:chain.chain_id})});
@@ -4538,8 +4580,8 @@ document.getElementById('btn-craft').onclick=async()=>{
         recipes.forEach((r,i)=>{s+=(i+1)+'. '+r.output_name+' (rarity '+r.output_rarity+', chance '+(r.chance*100)+'%)\n';});
         s+='\nYour loot ('+loot.length+'):\n';
         loot.slice(0,10).forEach((l,i)=>{s+='  '+(i+1)+'. ['+l.rarity+'] '+l.name+' ('+l.value+'g)\n';});
-        const recipe_idx=prompt(s+'\nRecipe # (1-'+recipes.length+')','1');if(!recipe_idx)return;
-        const items_str=prompt('Item indices (comma-sep, from your loot):','1,2');
+        const recipe_idx=await modalPrompt(s+'\nRecipe # (1-'+recipes.length+')','1');if(!recipe_idx)return;
+        const items_str=await modalPrompt('Item indices (comma-sep, from your loot):','1,2');
         if(!items_str)return;
         const items=items_str.split(',').map(x=>parseInt(x)-1);
         const r2=await fetch(API+'/pulse/craft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,items:items,recipe:parseInt(recipe_idx)-1})});const d2=await r2.json();
@@ -4556,7 +4598,7 @@ document.getElementById('btn-craft').onclick=async()=>{
 document.getElementById('btn-trading').onclick=async()=>{
     try{
         const uid=S.uid;if(!uid){showOverlay('TRADE','select player first');return;}
-        const action=prompt('TRADE: 1=Browse, 2=Sell, 3=Cancel','1');
+        const action=await modalPrompt('TRADE: 1=Browse, 2=Sell, 3=Cancel','1');
         if(!action)return;
         if(action==='1'){
             const r=await fetch(API+'/api/market?sort=price');const listings=await r.json();
@@ -4565,7 +4607,7 @@ document.getElementById('btn-trading').onclick=async()=>{
                 s+=(i+1)+'. '+l.item.name+' ['+l.item.rarity+'] — '+l.price+'g (seller:'+l.seller+')\n';
             });
             if(!listings.length)s+='Empty market!';
-            const buy=prompt(s+'\nBuy # (0=cancel):','0');
+            const buy=await modalPrompt(s+'\nBuy # (0=cancel):','0');
             if(buy&&buy!=='0'){
                 const listing=listings[parseInt(buy)-1];
                 const r2=await fetch(API+'/pulse/trade/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,listing_id:listing.id})});const d2=await r2.json();
@@ -4576,12 +4618,12 @@ document.getElementById('btn-trading').onclick=async()=>{
             const loot=ch.loot||[];
             let s='Your loot:\n';
             loot.slice(0,15).forEach((l,i)=>{s+=(i+1)+'. '+l.name+' ('+l.value+'g)\n';});
-            const idx=prompt(s+'\nSell item #:','1');if(!idx)return;
-            const price=prompt('Price (gold):','500');if(!price)return;
+            const idx=await modalPrompt(s+'\nSell item #:','1');if(!idx)return;
+            const price=await modalPrompt('Price (gold):','500');if(!price)return;
             const r2=await fetch(API+'/pulse/trade/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_idx:parseInt(idx)-1,price:parseInt(price)})});const d2=await r2.json();
             if(d2.error){showOverlay('TRADE',d2.error);}else{showOverlay('LISTED',d2.item.name+' for '+d.price+'g');loadPlayer(uid);}
         }else{
-            const idx=prompt('Cancel listing ID:','1');if(!idx)return;
+            const idx=await modalPrompt('Cancel listing ID:','1');if(!idx)return;
             await fetch(API+'/pulse/trade/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,listing_id:parseInt(idx)})});
             showOverlay('CANCELLED','Listing removed');loadPlayer(uid);
         }
@@ -4605,10 +4647,10 @@ document.getElementById('btn-map').onclick=async()=>{
             });
             s+='\n';
         });
-        const action=prompt(s+'\nAction: 1=Move, 2=Capture, 3=Collect income','3');
+        const action=await modalPrompt(s+'\nAction: 1=Move, 2=Capture, 3=Collect income','3');
         if(!action)return;
         if(action==='1'){
-            const x=prompt('X (0-7):','0');const y=prompt('Y (0-7):','0');
+            const x=await modalPrompt('X (0-7):','0');const y=await modalPrompt('Y (0-7):','0');
             const r2=await fetch(API+'/pulse/map/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,x:parseInt(x||'0'),y:parseInt(y||'0')})});const d2=await r2.json();
             showOverlay('MAP','Army moved to ('+d2.x+','+d2.y+') power:'+d2.power);
         }else if(action==='2'){
@@ -4628,10 +4670,10 @@ document.getElementById('btn-guild').onclick=async()=>{
         const uid=S.uid;if(!uid){showOverlay('GUILD','select player first');return;}
         const r=await fetch(API+'/api/guild/'+uid);const d=await r.json();
         if(d.error){
-            const action=prompt('🏛 GUILD\n\nNo guild. 1=Create (5000g), 2=Join, 3=List guilds','3');
+            const action=await modalPrompt('🏛 GUILD\n\nNo guild. 1=Create (5000g), 2=Join, 3=List guilds','3');
             if(!action)return;
             if(action==='1'){
-                const name=prompt('Guild name:','My Guild');const tag=prompt('Tag (3 chars):','MGD');
+                const name=await modalPrompt('Guild name:','My Guild');const tag=await modalPrompt('Tag (3 chars):','MGD');
                 if(!name||!tag)return;
                 const r2=await fetch(API+'/pulse/guild/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,name:name,tag:tag})});const d2=await r2.json();
                 if(d2.error){showOverlay('GUILD',d2.error);}else{SND.promo();showOverlay('GUILD CREATED',d2.name+' ['+d2.tag+']');loadPlayer(uid);}
@@ -4639,7 +4681,7 @@ document.getElementById('btn-guild').onclick=async()=>{
                 const r2=await fetch(API+'/api/guilds');const guilds=await r2.json();
                 let s='Available guilds:\n';
                 guilds.forEach((g,i)=>{s+=(i+1)+'. '+g.name+' ['+g.tag+'] ('+g.members+'/15)\n';});
-                const gid=prompt(s+'\nGuild #:','1');if(!gid)return;
+                const gid=await modalPrompt(s+'\nGuild #:','1');if(!gid)return;
                 const r3=await fetch(API+'/pulse/guild/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,guild_id:guilds[parseInt(gid)-1].id})});const d3=await r3.json();
                 if(d3.error){showOverlay('GUILD',d3.error);}else{SND.promo();showOverlay('JOINED',d3.guild+' ['+d3.tag+']');loadPlayer(uid);}
             }else{
@@ -4653,23 +4695,23 @@ document.getElementById('btn-guild').onclick=async()=>{
             s+='Leader: UID '+d.leader+' | Members: '+d.members+'/15\n';
             s+='Treasury: '+d.treasury+'g\nPerks: '+d.perks.join(', ')+'\n\n';
             s+='Chat:\n'+d.chat.map(c=>c.uid+': '+c.msg).join('\n');
-            const action=prompt(s+'\nAction: 1=Deposit, 2=Perk, 3=Chat, 4=Leave','0');
+            const action=await modalPrompt(s+'\nAction: 1=Deposit, 2=Perk, 3=Chat, 4=Leave','0');
             if(action==='1'){
-                const amt=prompt('Deposit amount:','1000');if(!amt)return;
+                const amt=await modalPrompt('Deposit amount:','1000');if(!amt)return;
                 const r2=await fetch(API+'/pulse/guild/deposit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,amount:parseInt(amt)})});const d2=await r2.json();
                 showOverlay('GUILD','Deposited! Treasury: '+d2.treasury);loadPlayer(uid);
             }else if(action==='2'){
                 const perks=[{id:'gold_boost',n:'Gold Boost (10000g)'},{id:'xp_boost',n:'XP Boost (8000g)'},{id:'craft_bonus',n:'Craft Bonus (12000g)'},{id:'trade_fee',n:'Trade Discount (6000g)'},{id:'defense',n:'Guild Shield (15000g)'}];
                 let s2='Perks:\n';perks.forEach((p,i)=>{s2+=(i+1)+'. '+p.n+(d.perks.includes(p.id)?' ✓':'')+'\n';});
-                const pi=prompt(s2+'\nBuy #:','0');if(!pi||pi==='0')return;
+                const pi=await modalPrompt(s2+'\nBuy #:','0');if(!pi||pi==='0')return;
                 const r2=await fetch(API+'/pulse/guild/perk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,perk_id:perks[parseInt(pi)-1].id})});const d2=await r2.json();
                 if(d2.error){showOverlay('GUILD',d2.error);}else{SND.promo();showOverlay('PERK',d2.perk+' unlocked!');}
             }else if(action==='3'){
-                const msg=prompt('Message:');if(!msg)return;
+                const msg=await modalPrompt('Message:');if(!msg)return;
                 await fetch(API+'/pulse/guild/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,msg:msg})});
                 showOverlay('GUILD','Sent!');loadPlayer(uid);
             }else if(action==='4'){
-                if(confirm('Leave guild?')){await fetch(API+'/pulse/guild/leave',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});showOverlay('GUILD','Left!');loadPlayer(uid);}
+                if(await modalConfirm('Leave guild?')){await fetch(API+'/pulse/guild/leave',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});showOverlay('GUILD','Left!');loadPlayer(uid);}
             }
         }
     }catch(e){showOverlay('GUILD','offline');}
@@ -4679,7 +4721,7 @@ document.getElementById('btn-guild').onclick=async()=>{
 document.getElementById('btn-tourney').onclick=async()=>{
     try{
         const types=['pvp','trading','craft','prediction'];
-        const choice=prompt('🏆 TOURNAMENT\n\n1=PvP, 2=Trading, 3=Craft, 4=Prediction','1');
+        const choice=await modalPrompt('🏆 TOURNAMENT\n\n1=PvP, 2=Trading, 3=Craft, 4=Prediction','1');
         if(!choice)return;
         const t=types[parseInt(choice)-1];
         const r=await fetch(API+'/api/tournament/'+t);const d=await r.json();
@@ -4706,20 +4748,20 @@ document.getElementById('btn-pets').onclick=async()=>{
                 s+=(i+1)+'. '+p.emoji+' '+p.name+' Lv.'+p.level+' ['+p.rarity+'] '+active+'\n';
             });
         }
-        const action=prompt(s+'\n1=Hatch, 2=Equip, 3=Feed, 0=Cancel','0');
+        const action=await modalPrompt(s+'\n1=Hatch, 2=Equip, 3=Feed, 0=Cancel','0');
         if(!action||action==='0')return;
         if(action==='1'){
             const r2=await fetch(API+'/pulse/pet/hatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
             if(d2.error){showOverlay('HATCH',d2.error);}else{SND.promo();showOverlay('HATCHED',d2.pet.emoji+' '+d2.pet.name+' ['+d2.pet.rarity+']');loadPlayer(uid);}
         }else if(action==='2'){
-            const idx=prompt('Equip pet # (1-'+d.pets.length+')','1');if(!idx)return;
+            const idx=await modalPrompt('Equip pet # (1-'+d.pets.length+')','1');if(!idx)return;
             const pet=d.pets[parseInt(idx)-1];
             const r2=await fetch(API+'/pulse/pet/equip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,pet_id:pet.id})});
             showOverlay('EQUIPPED',pet.emoji+' '+pet.name);loadPlayer(uid);
         }else{
-            const idx=prompt('Feed pet # (1-'+d.pets.length+')','1');if(!idx)return;
+            const idx=await modalPrompt('Feed pet # (1-'+d.pets.length+')','1');if(!idx)return;
             const pet=d.pets[parseInt(idx)-1];
-            const amt=prompt('Feed amount (gold):','100');if(!amt)return;
+            const amt=await modalPrompt('Feed amount (gold):','100');if(!amt)return;
             const r2=await fetch(API+'/pulse/pet/feed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,pet_id:pet.id,amount:parseInt(amt)})});const d2=await r2.json();
             if(d2.error){showOverlay('FEED',d2.error);}else{showOverlay('FED',pet.emoji+' Level: '+d2.level+' XP: '+d2.xp);loadPlayer(uid);}
         }
@@ -4738,7 +4780,7 @@ document.getElementById('btn-daily').onclick=async()=>{
         });
         if(d.claimed){s+='\nAlready claimed today!';}
         else if(d.all_done){s+='\nAll complete! Claim reward?';
-            if(confirm(s)){
+            if(await modalConfirm(s)){
                 const r2=await fetch(API+'/pulse/daily/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
                 if(d2.error){showOverlay('DAILY',d2.error);}else{SND.promo();showOverlay('DAILY COMPLETE','Gold: +'+d2.gold+'\nXP: +'+d2.xp+(d2.bonus?'\nBonus: '+d2.bonus.name:''));loadPlayer(uid);}
             }
@@ -4754,11 +4796,11 @@ document.getElementById('btn-predict').onclick=async()=>{
         let s='📈 STOCK PREDICTION\n\n';
         s+='Predictions today: '+d.today_count+'/'+d.max_per_day+'\n';
         s+='Pending: '+d.pending+'\nCost: '+d.cost+'g\n';
-        const action=prompt(s+'1=Predict, 2=Settle, 3=Leaderboard','1');
+        const action=await modalPrompt(s+'1=Predict, 2=Settle, 3=Leaderboard','1');
         if(!action)return;
         if(action==='1'){
-            const stock=prompt('Stock (ALPHA/DELTA/OMEGA/...):','ALPHA');
-            const dir=prompt('Direction: up or down?','up');
+            const stock=await modalPrompt('Stock (ALPHA/DELTA/OMEGA/...):','ALPHA');
+            const dir=await modalPrompt('Direction: up or down?','up');
             if(!stock||!dir)return;
             const r2=await fetch(API+'/pulse/predict/make',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,stock:stock,direction:dir})});const d2=await r2.json();
             if(d2.error){showOverlay('PREDICT',d2.error);}else{SND.promo();showOverlay('PREDICTED',d2.stock+' '+d2.direction.toUpperCase()+' @ '+d2.price);loadPlayer(uid);}
@@ -4804,12 +4846,12 @@ document.getElementById('btn-treasure').onclick=async()=>{
         let s='🗺 TREASURE HUNT\n\n';
         s+='Free searches today: '+d.remaining+'\n';
         s+='Search cost: '+d.cost+'g (if no free)';
-        const action=prompt(s+'\n\n1=Search, 0=Cancel','1');
+        const action=await modalPrompt(s+'\n\n1=Search, 0=Cancel','1');
         if(!action||action==='0')return;
         const r2=await fetch(API+'/pulse/treasure/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
         if(d2.error){showOverlay('TREASURE',d2.error);return;}
         if(d2.type==='riddle'){
-            const ans=prompt('🧩 '+d2.question+'\nAnswer:','');
+            const ans=await modalPrompt('🧩 '+d2.question+'\nAnswer:','');
             if(ans){
                 const r3=await fetch(API+'/pulse/treasure/solve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,riddle_id:d2.riddle_id,answer:parseInt(ans)})});const d3=await r3.json();
                 if(d3.correct){SND.promo();showOverlay('CORRECT','★ +'+d3.prize+'g');}else{showOverlay('WRONG','Answer was: '+d3.answer);}
@@ -4835,7 +4877,7 @@ document.getElementById('btn-training').onclick=async()=>{
         if(d.ready.length){
             s+='Ready to collect:\n';
             d.ready.forEach((m,i)=>{s+='  ★ '+m.name+'\n';});
-            if(confirm(s+'\nCollect ready missions?')){
+            if(await modalConfirm(s+'\nCollect ready missions?')){
                 for(let i=0;i<d.ready.length;i++){
                     await fetch(API+'/pulse/training/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,mission_idx:i})});
                 }
@@ -4845,7 +4887,7 @@ document.getElementById('btn-training').onclick=async()=>{
         }
         s+='\nAvailable missions:\n';
         d.available_missions.forEach((m,i)=>{s+=(i+1)+'. '+m.name+' ('+Math.floor(m.duration/60)+'min, '+m.xp+'xp)\n';});
-        const choice=prompt(s+'\nStart mission #: (0=cancel)','0');
+        const choice=await modalPrompt(s+'\nStart mission #: (0=cancel)','0');
         if(!choice||choice==='0')return;
         const m=d.available_missions[parseInt(choice)-1];
         const r2=await fetch(API+'/pulse/training/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,mission_id:m.id})});const d2=await r2.json();
@@ -4857,7 +4899,7 @@ document.getElementById('btn-training').onclick=async()=>{
 document.getElementById('btn-auction').onclick=async()=>{
     try{
         const uid=S.uid;if(!uid){showOverlay('AUCTION','select player first');return;}
-        const action=prompt('🏷 AUCTION\n\n1=Browse, 2=Sell, 3=Bid','1');
+        const action=await modalPrompt('🏷 AUCTION\n\n1=Browse, 2=Sell, 3=Bid','1');
         if(!action)return;
         if(action==='1'){
             const r=await fetch(API+'/api/auction');const auctions=await r.json();
@@ -4866,10 +4908,10 @@ document.getElementById('btn-auction').onclick=async()=>{
                 s+=(i+1)+'. '+a.item.name+' ['+a.item.rarity+'] — '+a.current_bid+'g ('+a.bids+' bids, '+Math.floor(a.ends_in/60)+'min left)\n';
             });
             if(!auctions.length)s+='Empty!';
-            const bid=prompt(s+'\nBid on # (0=cancel):','0');
+            const bid=await modalPrompt(s+'\nBid on # (0=cancel):','0');
             if(bid&&bid!=='0'){
                 const a=auctions[parseInt(bid)-1];
-                const amt=prompt('Your bid (current: '+a.current_bid+'g):',a.current_bid+100);
+                const amt=await modalPrompt('Your bid (current: '+a.current_bid+'g):',a.current_bid+100);
                 if(!amt)return;
                 const r2=await fetch(API+'/pulse/auction/bid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,auction_id:a.id,amount:parseInt(amt)})});const d2=await r2.json();
                 if(d2.error){showOverlay('BID',d2.error);}else{SND.promo();showOverlay('BID PLACED','Bid: '+d2.bid+'g');loadPlayer(uid);}
@@ -4878,9 +4920,9 @@ document.getElementById('btn-auction').onclick=async()=>{
             const r=await fetch(API+'/api/char/'+uid);const ch=await r.json();
             let s='Your loot:\n';
             (ch.loot||[]).slice(0,10).forEach((l,i)=>{s+=(i+1)+'. '+l.name+' ('+l.value+'g)\n';});
-            const idx=prompt(s+'\nSell item #:','1');if(!idx)return;
-            const price=prompt('Start price:','500');if(!price)return;
-            const dur=prompt('Duration (1800/3600/7200 sec):','3600');if(!dur)return;
+            const idx=await modalPrompt(s+'\nSell item #:','1');if(!idx)return;
+            const price=await modalPrompt('Start price:','500');if(!price)return;
+            const dur=await modalPrompt('Duration (1800/3600/7200 sec):','3600');if(!dur)return;
             const r2=await fetch(API+'/pulse/auction/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,item_idx:parseInt(idx)-1,price:parseInt(price),duration:parseInt(dur)})});const d2=await r2.json();
             if(d2.error){showOverlay('AUCTION',d2.error);}else{showOverlay('LISTED','Item on auction for '+Math.floor(d2.ends_in/60)+'min');loadPlayer(uid);}
         }else{
@@ -4903,7 +4945,7 @@ document.getElementById('btn-energy').onclick=async()=>{
         s+='Energy: '+d.current+'/'+d.max+'\n';
         s+='Potions: '+d.potions+'\n';
         s+='Regen: '+d.regen_rate;
-        if(d.potions>0&&confirm(s+'\n\nUse potion? (+50 energy)')){
+        if(d.potions>0&&await modalConfirm(s+'\n\nUse potion? (+50 energy)')){
             const r2=await fetch(API+'/pulse/energy/potion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
             if(d2.error){showOverlay('ENERGY',d2.error);}else{SND.promo();showOverlay('ENERGY RESTORED','+'+d2.restored+' energy\nCurrent: '+d2.current);loadPlayer(uid);}
         }else{showOverlay('ENERGY',s);}
@@ -4923,7 +4965,7 @@ document.getElementById('btn-raid').onclick=async()=>{
             s+='\nTop damage:\n';
             d.top_dealers.slice(0,5).forEach((e,i)=>{s+=(i+1)+'. UID '+e.uid+' — '+e.damage+'\n';});
         }
-        if(d.hp>0&&confirm(s+'\nAttack boss?')){
+        if(d.hp>0&&await modalConfirm(s+'\nAttack boss?')){
             const r2=await fetch(API+'/pulse/raid/attack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})});const d2=await r2.json();
             if(d2.error){showOverlay('RAID',d2.error);return;}
             let msg='⚔ '+d2.damage+' damage dealt!\nBoss HP: '+d2.boss_hp;
@@ -4932,6 +4974,80 @@ document.getElementById('btn-raid').onclick=async()=>{
         }else{showOverlay('RAID',s);}
     }catch(e){showOverlay('RAID','offline');}
 };
+
+// ====== ENERGY BAR (topbar, live-regenerating) ======
+let _energy={current:0,max:100,potions:0};
+async function refreshEnergyBar(){
+    const uid=(_currentUid&&_currentUid!=='local')?_currentUid:null;
+    if(!uid)return;
+    try{
+        const r=await fetch(API+'/api/energy/'+uid);const d=await r.json();
+        _energy=d;
+        document.getElementById('energy-cur').textContent=d.current;
+        document.getElementById('energy-max').textContent=d.max;
+        document.getElementById('energy-potions').textContent='🧪'+d.potions;
+        const pct=Math.min(100,Math.round(d.current/d.max*100));
+        document.getElementById('energy-inner').style.width=pct+'%';
+        const bar=document.getElementById('energy-bar');
+        if(pct<20){bar.style.borderColor='#FF3B3B';bar.style.color='#FF3B3B';}
+        else if(pct<50){bar.style.borderColor='#FF9800';bar.style.color='#FF9800';}
+        else{bar.style.borderColor='#66BB6A';bar.style.color='#66BB6A';}
+    }catch(e){}
+}
+setInterval(refreshEnergyBar,5000);
+if(_currentUid&&_currentUid!=='local')refreshEnergyBar();
+async function usePotionFromBar(){
+    if(!_energy.potions||!_currentUid||_currentUid==='local')return;
+    try{
+        const r=await fetch(API+'/pulse/energy/potion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_currentUid})});const d=await r.json();
+        if(d.error){showOverlay('ENERGY',d.error);}else{SND.promo();showOverlay('POTION USED','+'+d.restored+' energy\nCurrent: '+d.current);refreshEnergyBar();}
+    }catch(e){}
+}
+// patch loadPlayer to also refresh energy bar
+const _origLoad=loadPlayer;
+loadPlayer=async function(uid){await _origLoad(uid);if(uid&&uid!=='local')refreshEnergyBar();};
+
+// ====== IN-GAME MODAL: async prompt/confirm with fallback ======
+(function(){
+    const ov=document.getElementById('modal-overlay');
+    const title=document.getElementById('modal-title');
+    const text=document.getElementById('modal-text');
+    const inp=document.getElementById('modal-input');
+    const okBtn=document.getElementById('modal-ok');
+    const cancelBtn=document.getElementById('modal-cancel');
+
+    function _prompt(t, msg, defVal){
+        return new Promise(resolve=>{
+            title.textContent=t||'';
+            text.textContent=msg||'';
+            inp.style.display='block';inp.value=defVal||'';inp.style.color='#FFC800';
+            okBtn.textContent='OK';
+            ov.classList.add('show');
+            setTimeout(()=>inp.focus(),60);
+            function close(val){ov.classList.remove('show');okBtn.onclick=null;cancelBtn.onclick=null;inp.onkeydown=null;ov.onclick=null;resolve(val);}
+            okBtn.onclick=()=>close(inp.value);
+            cancelBtn.onclick=()=>close(null);
+            inp.onkeydown=(e)=>{if(e.key==='Enter')close(inp.value);if(e.key==='Escape')close(null);};
+            ov.onclick=(e)=>{if(e.target===ov)close(null);};
+        });
+    }
+    function _confirm(t, msg){
+        return new Promise(resolve=>{
+            title.textContent=t||'CONFIRM';
+            text.textContent=msg||'';
+            inp.style.display='none';
+            okBtn.textContent='YES';
+            ov.classList.add('show');
+            function close(val){ov.classList.remove('show');okBtn.onclick=null;cancelBtn.onclick=null;inp.onkeydown=null;ov.onclick=null;resolve(val);}
+            okBtn.onclick=()=>close(true);
+            cancelBtn.onclick=()=>close(false);
+            inp.onkeydown=(e)=>{if(e.key==='Enter')close(true);if(e.key==='Escape')close(false);};
+            ov.onclick=(e)=>{if(e.target===ov)close(false);};
+        });
+    }
+    window.modalPrompt=_prompt;
+    window.modalConfirm=_confirm;
+})();
 
 render();
 </script>
